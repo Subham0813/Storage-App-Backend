@@ -1,0 +1,28 @@
+[
+    {
+        "fieldname": "file",
+        "originalname": "red-dead-redemption-2-4k-character-intro-dvv82uy681qslljq.jpg",
+        "encoding": "7bit",
+        "mimetype": "image/jpeg",
+        "id": "5820bd9b-302e-4a04-b1d3-228fd90152dd",
+        "destination": "./RootDirectory",
+        "filename": "5820bd9b-302e-4a04-b1d3-228fd90152dd.jpeg",
+        "path": "RootDirectory\\5820bd9b-302e-4a04-b1d3-228fd90152dd.jpeg",
+        "size": 73395,
+        "parent_id": null,
+        "user_id": "ca7548c1-eab7-4c4f-b214-59b65d3c4648"
+    },
+    {
+        "fieldname": "file",
+        "originalname": "futomostan.png",
+        "encoding": "7bit",
+        "mimetype": "image/png",
+        "id": "198688f7-f4fc-49a8-9068-ed678957aa87",
+        "destination": "./RootDirectory",
+        "filename": "198688f7-f4fc-49a8-9068-ed678957aa87.png",
+        "path": "RootDirectory\\198688f7-f4fc-49a8-9068-ed678957aa87.png",
+        "size": 1791458,
+        "parent_id": "08f68cfa-3d57-4fe5-af3f-411f65383519",
+        "user_id": "ca7548c1-eab7-4c4f-b214-59b65d3c4648"
+    }
+]

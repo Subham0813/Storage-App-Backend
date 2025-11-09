@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    ${style}
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Storage</h1>
+        <span>
+          <form method="post" enctype="multipart/form-data">
+            <input type="file" id="hiddenInput" style="display: none" multiple/>
+            <button id="upload">Upload</button>
+            <button id="cancel" style="display: none">Cancel</button>
+          </form>
+        </span>
+      </header>
+      <div id="popmodel" style="display: none">
+        <p>Are You sure want to ${action}?</p>
+        <button id="Confirm">Confirm</button>
+        <button id="cancel">Cancel</button>
+      </div>
+      <div id="currDir">
+        ${currDir}
+        <input type="text" id="rename" disabled />
+        <div id="files">${dynamicList}</div>
+      </div>
+    </main>
+    ${script}
+  </body>
+</html>
