@@ -174,22 +174,37 @@ const handleUpdateDirectory = async (req, res) => {
     return res.status(400).json({
       message: "bad request! oldname & newname should pass on with body.",
     });
+    
 
-  const root = directoriesDb.find((item) => item.id === req.user.id);
-  const directory = root.content.find((item) => item.id === req.params.id);
-  if (!fileInfo)
+  const userContent = directoriesDb.find(
+    (item) => item.id === req.user.id
+  ).content;
+
+  const directory = userContent.find((item) => item.id === req.params.id);
+
+  if (!directory)
     return res.status(400).json({
       message:
-        "file with same name not found on Db! Request with a valid name.",
+        "directory with same name not found on Db! Request with a valid name.",
     });
-  fileInfo.originalname = newname;
 
-  const destination = parent_id
-    ? root.content.find((item) => item.id === parent_id).files
-    : root.content[0].files;
-  const rootfileInfo = destination.find((item) => item.id === fileInfo.id);
+  directory.name = newname;
 
-  rootfileInfo.filename = newname;
+  const rootIndex = userContent.findIndex(
+    (item) => item.id === directory.parent_id
+  );
+
+  const rootDirectory = userContent[rootIndex].directories.find(
+    (item) => item.id === req.params.id
+  );
+  rootDirectory.name = newname;
+
+  try {
+    await writeFile("./models/directoriesDb.model.json",JSON.stringify(directoriesDb));
+    res.status(200).json({message: "Folder renamed successfully."});
+  } catch (error) {
+    res.status(500).json({ message: "Internal server issue." });
+  }
 };
 
 export {
