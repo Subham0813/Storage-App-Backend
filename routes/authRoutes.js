@@ -26,7 +26,7 @@ router.post("/login", async (req, res) => {
   if (!email || !password)
     return res.status(400).json({ message: "All the fields are required!" });
 
-  const user = userDb.find((item) => item.email === email);
+  const user = userDb.find((item) => item.email === email.toLowerCase());
   if (!user || user.password !== password)
     return res.status(400).json({ message: "Invalid Cradentials!!" });
 
@@ -81,7 +81,7 @@ router.post("/signup", async (req, res) => {
     id: crypto.randomUUID(),
     firstname,
     lastname,
-    email,
+    email: email.toLowerCase(),
     password,
   };
 

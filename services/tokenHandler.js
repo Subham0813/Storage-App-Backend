@@ -20,10 +20,8 @@ const createToken = async (userId) => {
       exp_time: new Date(expiry).toLocaleTimeString()
     };
     tokens.push(token);
-  }
-
-  
     await writeFile("./models/tokens.model.json", JSON.stringify(tokens));
+  }
     return token;
   } catch (error) {
     console.log("create token error", error);
