@@ -23,19 +23,19 @@ router.get("/", (req, res) => {
 });
 
 //Create
-router.post("/files", upload.single("file"), handleCreateFile);
-router.post("/directories/:dirId/files",upload.single("file"),handleCreateFile);
+router.post("/file", upload.single("file"), handleCreateFile);
+router.post("/:dirId/file",upload.single("file"),handleCreateFile);
 
-router.post("/directories", handleCreateDirectory);
-router.post("/directories/:dirId/directories", handleCreateDirectory);
+router.post("/directory", handleCreateDirectory);
+router.post("/:dirId/directory", handleCreateDirectory);
 
 //Read
-router.get("/files/:id", handleGetFiles);
-router.get("/directories/:id", handleGetDirectories);
+router.get("/file/:id", handleGetFiles);
+router.get("/directory/:id", handleGetDirectories);
 
 //Update
-router.patch("/files/:id", handleUpdateFile);
-router.patch("/directories/:id", handleUpdateDirectory);
+router.patch("/file/:id", handleUpdateFile);
+router.patch("/directory/:id", handleUpdateDirectory);
 
 
 export default router;
