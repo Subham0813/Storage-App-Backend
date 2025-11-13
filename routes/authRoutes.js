@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { writeFile } from "fs/promises";
-import { createToken } from "../services/tokenHandler.js";
+import { createToken } from "../services/auth.js";
 
 const { default: userDb } = await import("../models/userDb.model.json", {
   with: { type: "json" },
@@ -39,7 +39,7 @@ router.post("/login", async (req, res) => {
         {
           id: null,
           parent: null,
-          name:"root",
+          name: "root",
           directories: [],
           files: [],
         },
@@ -59,7 +59,11 @@ router.post("/login", async (req, res) => {
       );
 
     return res
-      .setHeader("Set-Cookie", [`uid=${token.id}; HttpOnly; Expires=${new Date(token.expiry).toUTCString()}`])
+      .setHeader("Set-Cookie", [
+        `uid=${token.id}; HttpOnly; Expires=${new Date(
+          token.expiry
+        ).toUTCString()}`,
+      ])
       .status(302)
       .json("User logged in Successfully.");
   } catch (error) {
@@ -91,18 +95,20 @@ router.post("/signup", async (req, res) => {
     await writeFile("./models/userDb.model.json", JSON.stringify(userDb));
     return res.status(302).json("Sign up successfull.");
     // return res.status(302).redirect("/login"); // .redirect(...)  === .setHeader('Location', 'http://localhost:4000/login').end()
-
   } catch (error) {
     console.log(error.message);
     return res.status(500).json("Somthing went wrong!");
   }
 });
 
-router.post("/logout", (req, res)=>{
+router.post("/logout", (req, res) => {
   return res
-  .setHeader("Set-Cookie", `uid=; expires=${new Date(new Date() - 3600*1000).toUTCString()}`)
-  .status(200)
-  .json("User logged out Successfully.");
-})
+    .setHeader(
+      "Set-Cookie",
+      `uid=; expires=${new Date(new Date() - 3600 * 1000).toUTCString()}`
+    )
+    .status(200)
+    .json("User logged out Successfully.");
+});
 
 export default router;
