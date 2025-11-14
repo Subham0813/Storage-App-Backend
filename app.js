@@ -2,7 +2,8 @@ import express from "express";
 import serveFavicon from "serve-favicon";
 import cors from "cors";
 
-import apiRoutes from "./routes/apiRoutes.js";
+import fileRoutes from "./routes/fileRoutes.js";
+import directoryRoutes from "./routes/directoryRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import { validateToken } from "./services/auth.js";
 
@@ -29,7 +30,8 @@ app.use((req, res, next) => {
   req.cookies = cookies;
   next();
 });
-app.use("/api", validateToken("uid"), apiRoutes);
+app.use("/files", validateToken("uid"), fileRoutes);
+app.use("/dirs", validateToken("uid"), directoryRoutes);
 
 app.listen(port, () => {
   console.log("server started at port :", port);

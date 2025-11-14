@@ -11,10 +11,9 @@ let { default: filesDb } = await import("../models/filesDb.model.json", {
 });
 
 const handleGetDirectories = async (req, res) => {
-  const { id } = req.params;
   const directory = directoriesDb
     .find((item) => item.id === req.user.id)
-    .content.find((item) => item.id === id);
+    .content.find((item) => item.id === req.params.id);
 
   try {
     if (!directory) throw new Error();
@@ -27,13 +26,18 @@ const handleGetDirectories = async (req, res) => {
       .json({ res: false, message: "directory not found!", content: null });
   }
 };
+
 const handleGetFiles = async (req, res) => {
-  const { id } = req.params;
-  const file = filesDb.find((file) => file.user_id === req.user.id);
+  const file = filesDb.find(
+    (file) =>
+      file.user_id === req.user.id &&
+      file.id === req.params.id &&
+      file.destination === "./RootDirectory"
+  );
 
   try {
     if (!file) throw new Error();
-    // res.status(200).json({ res: true, message: "file found.", content: file });
+
     res.sendFile(
       `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`,
       (error) => {
@@ -174,7 +178,6 @@ const handleUpdateDirectory = async (req, res) => {
     return res.status(400).json({
       message: "bad request! oldname & newname should pass on with body.",
     });
-    
 
   const userContent = directoriesDb.find(
     (item) => item.id === req.user.id
@@ -200,8 +203,11 @@ const handleUpdateDirectory = async (req, res) => {
   rootDirectory.name = newname;
 
   try {
-    await writeFile("./models/directoriesDb.model.json",JSON.stringify(directoriesDb));
-    res.status(200).json({message: "Folder renamed successfully."});
+    await writeFile(
+      "./models/directoriesDb.model.json",
+      JSON.stringify(directoriesDb)
+    );
+    res.status(200).json({ message: "Folder renamed successfully." });
   } catch (error) {
     res.status(500).json({ message: "Internal server issue." });
   }
