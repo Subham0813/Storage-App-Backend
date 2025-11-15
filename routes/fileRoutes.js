@@ -5,6 +5,7 @@ import {
   handleGetFiles,
   handleCreateFile,
   handleUpdateFile,
+  handleDeleteFile
 } from "../controllers/apiControllers.js";
 
 const router = Router();
@@ -20,5 +21,6 @@ router.get("/:id", handleGetFiles);
 router.patch("/:id", handleUpdateFile);
 
 //delete
+router.delete("/:id", handleDeleteFile);
 
 export default router;
