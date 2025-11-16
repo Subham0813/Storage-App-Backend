@@ -4,6 +4,7 @@ import {
   handleGetDirectories,
   handleCreateDirectory,
   handleUpdateDirectory,
+  handleDeleteDirectory
 } from "../controllers/apiControllers.js";
 
 const { default: directoriesDb } = await import(
@@ -32,5 +33,6 @@ router.post("/:dirId", handleCreateDirectory);
 router.patch("/:id", handleUpdateDirectory);
 
 //delete
+router.delete("/:id", handleDeleteDirectory);
 
 export default router;

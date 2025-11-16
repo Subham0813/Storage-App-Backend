@@ -1,4 +1,5 @@
 import { rm, writeFile } from "fs/promises";
+import deletion from "../services/delete.js";
 
 let { default: directoriesDb } = await import(
   "../models/directoriesDb.model.json",
@@ -93,8 +94,9 @@ const handleCreateDirectory = async (req, res) => {
   const { dirId } = req.params;
   // console.log(req.headers, req.body, req.user);
 
-  const userData = directoriesDb.find((item) => item.id === req.user.id);
-  const userContent = userData.content;
+  const userContent = directoriesDb.find(
+    (item) => item.id === req.user.id
+  ).content;
 
   const parentDirectory = dirId
     ? userContent.find((item) => item.id === dirId)
@@ -248,8 +250,8 @@ const handleDeleteFile = async (req, res) => {
       JSON.stringify(directoriesDb)
     );
 
-    if (deleted)
-      {await rm(
+    if (deleted) {
+      await rm(
         `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`
       );
       return res.status(200).json({ message: "File deleted permanently." });
@@ -261,7 +263,25 @@ const handleDeleteFile = async (req, res) => {
   }
 };
 
-const handleDeleteDirectory = async (req, res) => {};
+const handleDeleteDirectory = async (req, res) => {
+  const userContent = directoriesDb.find(
+    (item) => item.id === req.user.id
+  ).content;
+
+  const directory = userContent.find((item) => item.id === req.params.id);
+  if (!directory)
+    return res
+      .status(404)
+      .json({ message: "Folder not found !! try with a valid id." });
+  try {
+    await deletion(req.user.id,directory)
+    // console.log('deleted..')
+    return res.status(200).json({ message: "Folder moved to bin." });
+  } catch (error) {
+    console.log(error)
+    return res.status(500).json({ message: "Internal server issue." });
+  }
+};
 
 export {
   handleGetDirectories,
@@ -271,4 +291,5 @@ export {
   handleUpdateFile,
   handleUpdateDirectory,
   handleDeleteFile,
+  handleDeleteDirectory
 };
