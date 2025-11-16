@@ -1,4 +1,5 @@
 node_modules
 RootDirectory
 script.js
-*.model.js
+*.model.json
+index.html
