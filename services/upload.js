@@ -1,4 +1,6 @@
 import multer from "multer";
+import path from "path";
+
 const diskStorage = multer.diskStorage({
     destination: (req, file, cb) => {
       cb(
@@ -8,7 +10,7 @@ const diskStorage = multer.diskStorage({
     },
     filename: (req, file, cb) => {
       const id = crypto.randomUUID();
-      const name = `${id}.${file.mimetype.split("/").pop()}`;
+      const name = `${id}.${path.extname(file.originalname)}`;
       file.id = id
       cb(null, name);
     },

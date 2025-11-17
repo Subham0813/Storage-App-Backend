@@ -17,7 +17,7 @@ const createToken = async (userId) => {
         id: crypto.randomUUID(),
         userId,
         expiry,
-        exp_time: new Date(expiry).toLocaleISOString(),
+        exp_time: new Date(expiry).toLocaleString(),
       };
       tokens.push(token);
       await writeFile("./models/tokens.model.json", JSON.stringify(tokens));
