@@ -7,6 +7,15 @@ import directoryRoutes from "./routes/directoryRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import { validateToken } from "./services/auth.js";
 
+const { default: directoriesDb } = await import(
+  "./models/directoriesDb.model.json",
+  { with: { type: "json" } }
+);
+const { default: bin } = await import(
+  "./models/bin.model.json",
+  { with: { type: "json" } }
+);
+
 const app = express();
 const port = 4000;
 
@@ -29,6 +38,22 @@ app.use((req, res, next) => {
 
   req.cookies = cookies;
   next();
+});
+app.use("/storage",validateToken("uid"),
+ (req, res) => {
+  res.status(200).json({
+    res: true,
+    message: "directory found!",
+    content: directoriesDb.find((item) => item.id === req.user.id).content[0], //serving root directory
+  });
+});
+app.use("/bin",validateToken("uid"),
+ (req, res) => {
+  res.status(200).json({
+    res: true,
+    message: "bin found!",
+    content: bin.find((item) => item.id === req.user.id).content[0], //serving bin directory
+  });
 });
 app.use("/files", validateToken("uid"), fileRoutes);
 app.use("/dirs", validateToken("uid"), directoryRoutes);
