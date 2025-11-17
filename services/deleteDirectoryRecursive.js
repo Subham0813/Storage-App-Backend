@@ -13,6 +13,22 @@ let { default: bin } = await import("../models/bin.model.json", {
 
 let userContent, binContent;
 
+const findItemById = (arr, id) => arr.find((a) => a.id === id);
+const removeItemById = (arr, id) => arr.filter((a) => a.id !== id);
+
+const rmDirFromParentDir = (dir) => {
+  if (!dir) return;
+  
+  const parentId = userContent.findIndex((item) => item.id === dir.parent_id);
+  if(parentId === -1) return;
+
+  userContent[parentId].directories = removeItemById(
+    userContent[parentId].directories,
+    dir.id
+  );
+  userContent = removeItemById(userContent, dir.id);
+};
+
 const recursiveDeletion = async (directory, deleted, visited = new Set()) => {
   try {
     if (!directory || visited.has(directory.id)) return;
@@ -26,33 +42,23 @@ const recursiveDeletion = async (directory, deleted, visited = new Set()) => {
         await rm(
           `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`
         );
-        filesDb = filesDb.filter((item) => item.id !== file.id);
+        filesDb = removeItemById(filesDb, file.id);
       } else {
-        const fileInfo = filesDb.find((item) => item.id === file.id);
+        const fileInfo = findItemById(filesDb, file.id);
         fileInfo.destination = "./bin";
       }
     }
-
-    binContent.push(directory);
-
-    await writeFile("./models/bin.model.json", JSON.stringify(bin));
     await writeFile("./models/filesDb.model.json", JSON.stringify(filesDb));
 
+    if (!deleted) {
+      binContent.push(directory);
+      await writeFile("./models/bin.model.json", JSON.stringify(bin));
+    }
+
     for (const directory of directories) {
-      const childDirectory = userContent.find(
-        (item) => item.id === directory.id
-      );
-
+      const childDirectory = findItemById(userContent, directory.id);
       await recursiveDeletion(childDirectory, deleted, visited);
-
-      const parentId = userContent.findIndex(
-        (item) => item.id === childDirectory.parent_id
-      );
-      const modifiedDirectories = userContent[parentId].directories.filter(
-        (item) => item.id !== childDirectory.id
-      );
-      userContent[parentId].directories = modifiedDirectories;
-      userContent = userContent.filter((item) => item.id !== childDirectory.id);
+      rmDirFromParentDir(childDirectory);
     }
   } catch (error) {
     // console.log(error);
@@ -60,21 +66,14 @@ const recursiveDeletion = async (directory, deleted, visited = new Set()) => {
   }
 };
 
-const deletion = async (userId, directory, deleted = false) => {
+const deleteDirectory = async (userId, directory, deleted = false) => {
   try {
     const dbIndex = directoriesDb.findIndex((item) => item.id === userId);
     userContent = directoriesDb[dbIndex].content;
     binContent = bin.find((item) => item.id === userId).content;
 
     await recursiveDeletion(directory, deleted);
-    const parentId = userContent.findIndex(
-      (item) => item.id === directory.parent_id
-    );
-    const modifiedDirectories = userContent[parentId].directories.filter(
-      (item) => item.id !== directory.id
-    );
-    userContent[parentId].directories = modifiedDirectories;
-    userContent = userContent.filter((item) => item.id !== directory.id);
+    rmDirFromParentDir(directory);
 
     directoriesDb[dbIndex].content = userContent;
     await writeFile(
@@ -87,4 +86,4 @@ const deletion = async (userId, directory, deleted = false) => {
   }
 };
 
-export default deletion;
+export default deleteDirectory;
