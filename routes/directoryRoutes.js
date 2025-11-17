@@ -4,25 +4,12 @@ import {
   handleGetDirectories,
   handleCreateDirectory,
   handleUpdateDirectory,
-  handleDeleteDirectory
+  handleMoveToBinDirectory
 } from "../controllers/apiControllers.js";
-
-const { default: directoriesDb } = await import(
-  "../models/directoriesDb.model.json",
-  { with: { type: "json" } }
-);
 
 const router = Router();
 
 //read
-router.get("/", (req, res) => {
-  res.status(200).json({
-    res: true,
-    message: "directory found!",
-    content: directoriesDb.find((item) => item.id === req.user.id), //serving root directory
-  });
-});
-
 router.get("/:id", handleGetDirectories);
 
 //create
@@ -33,6 +20,6 @@ router.post("/:dirId", handleCreateDirectory);
 router.patch("/:id", handleUpdateDirectory);
 
 //delete
-router.delete("/:id", handleDeleteDirectory);
+router.post("/:id/trash", handleMoveToBinDirectory);
 
 export default router;
