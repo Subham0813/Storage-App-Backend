@@ -5,7 +5,7 @@ import { createToken } from "../services/auth.js";
 const { default: userDb } = await import("../models/userDb.model.json", {
   with: { type: "json" },
 });
-const { default: tokens } = await import("../models/tokens.model.json", {
+const { default: bin } = await import("../models/bin.model.json", {
   with: { type: "json" },
 });
 const { default: directoriesDb } = await import(
@@ -31,6 +31,7 @@ router.post("/login", async (req, res) => {
     return res.status(400).json({ message: "Invalid Cradentials!!" });
 
   const existingDb = directoriesDb.find((item) => item.id === user.id);
+  const existingBin = bin.find((item) => item.id === user.id);
 
   if (!existingDb) {
     const newUserDb = {
@@ -48,6 +49,22 @@ router.post("/login", async (req, res) => {
 
     directoriesDb.push(newUserDb);
   }
+  if (!existingBin) {
+    const newUserBin = {
+      id: user.id,
+      content: [
+        {
+          id: null,
+          parent: null,
+          name: "bin",
+          directories: [],
+          files: [],
+        },
+      ],
+    };
+
+    bin.push(newUserBin);
+  }
 
   try {
     const token = await createToken(user.id);
@@ -56,6 +73,10 @@ router.post("/login", async (req, res) => {
       await writeFile(
         "./models/directoriesDb.model.json",
         JSON.stringify(directoriesDb)
+      );
+      await writeFile(
+        "./models/bin.model.json",
+        JSON.stringify(bin)
       );
 
     return res

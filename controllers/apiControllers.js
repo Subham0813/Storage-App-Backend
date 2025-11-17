@@ -1,5 +1,5 @@
 import { rm, writeFile } from "fs/promises";
-import deletion from "../services/delete.js";
+import deleteDirectory from "../services/deleteDirectoryRecursive.js";
 
 let { default: directoriesDb } = await import(
   "../models/directoriesDb.model.json",
@@ -10,14 +10,18 @@ let { default: directoriesDb } = await import(
 let { default: filesDb } = await import("../models/filesDb.model.json", {
   with: { type: "json" },
 });
+let { default: bin } = await import("../models/bin.model.json", {
+  with: { type: "json" },
+});
 
 const handleGetDirectories = async (req, res) => {
-  const directory = directoriesDb
-    .find((item) => item.id === req.user.id)
-    .content.find((item) => item.id === req.params.id);
+  const userContent = directoriesDb.find(
+    (item) => item.id === req.user.id
+  ).content;
+  const directory = userContent.find((item) => item.id === req.params.id);
 
   try {
-    if (!directory) throw new Error();
+    if (!userContent || !directory) throw new Error();
     res
       .status(200)
       .json({ res: true, message: "directory found.", content: directory });
@@ -78,11 +82,13 @@ const handleCreateFile = async (req, res) => {
 
   // console.log(filesDb);
   try {
-    await writeFile("./models/filesDb.model.json", JSON.stringify(filesDb));
-    await writeFile(
-      "./models/directoriesDb.model.json",
-      JSON.stringify(directoriesDb)
-    );
+    await Promise.all([
+      writeFile("./models/filesDb.model.json", JSON.stringify(filesDb)),
+      writeFile(
+        "./models/directoriesDb.model.json",
+        JSON.stringify(directoriesDb)
+      ),
+    ]);
     res.status(201).json({ message: "file/s created." });
   } catch (error) {
     console.log(error.message);
@@ -161,11 +167,13 @@ const handleUpdateFile = async (req, res) => {
   fileInDirectoryDb.filename = newname;
 
   try {
-    await writeFile("./models/filesDb.model.json", JSON.stringify(filesDb));
-    await writeFile(
-      "./models/directoriesDb.model.json",
-      JSON.stringify(directoriesDb)
-    );
+    await Promise.all([
+      writeFile("./models/filesDb.model.json", JSON.stringify(filesDb)),
+      writeFile(
+        "./models/directoriesDb.model.json",
+        JSON.stringify(directoriesDb)
+      ),
+    ]);
     res.status(200).json({ message: "File renamed successfully." });
   } catch (error) {
     res.status(500).json({ message: "Internal server issue." });
@@ -213,57 +221,64 @@ const handleUpdateDirectory = async (req, res) => {
 };
 
 //permanent delete & move to bin  logic
-const handleDeleteFile = async (req, res) => {
-  const { deleted } = req.body;
+const handleMoveToBinFile = async (req, res) => {
 
+  const binContent = bin.find((item) => item.id === req.user.id).content[0];
+  const userContent = directoriesDb.find(
+    (item) => item.id === req.user.id
+  ).content;
   const file = filesDb.find(
-    (item) => item.user_id === req.user.id && item.id === req.params.id
+    (item) => item.user_id === req.user.id && item.id === req.params.id 
   );
+  
   if (!file)
     return res
       .status(404)
       .json({ message: "file not found !! try with a valid id." });
 
-  if (!deleted) {
-    //changing file destinaton in filesDb
-    file.destination = "./bin";
-  } else {
-    filesDb = filesDb.filter((item) => item.id !== file.id);
-  }
-
   //removing file from directoriesDb
-  const userContent = directoriesDb.find(
-    (item) => item.id === req.user.id
-  ).content;
-  const parentId = userContent.findIndex((item) => item.id === file.parent_id);
-  const modifiedFiles = userContent[parentId].files.filter(
+  const parentDirIdx = userContent.findIndex(
+    (item) => item.id === file.parent_id
+  );
+  userContent[parentDirIdx].files = userContent[parentDirIdx].files.filter(
     (item) => item.id !== file.id
   );
 
-  // console.log(modifiedFiles);
-  userContent[parentId].files = modifiedFiles;
+  // if (!deleted) {
+    //changing file destinaton in filesDb
+    file.destination = "./bin";
+    binContent.files.push({
+      id: file.id,
+      name: file.originalname,
+      parentId: file.parent_id,
+      parentDirName: userContent[parentDirIdx].name,
+    });
+  // } else {
+  //   filesDb = filesDb.filter((item) => item.id !== file.id);
+  //   binContent.files = binContent.files.filter((item) => item.id !== file.id);
+  // }
 
   try {
     await writeFile("./models/filesDb.model.json", JSON.stringify(filesDb));
+    await writeFile("./models/bin.model.json", JSON.stringify(bin));
     await writeFile(
       "./models/directoriesDb.model.json",
       JSON.stringify(directoriesDb)
     );
 
-    if (deleted) {
-      await rm(
-        `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`
-      );
-      return res.status(200).json({ message: "File deleted permanently." });
-    }
-
+    // if (deleted) {
+    //   await rm(
+    //     `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`
+    //   );
+    //   return res.status(200).json({ message: "File deleted permanently." });
+    // }
     return res.status(200).json({ message: "File moved to bin." });
   } catch (error) {
     return res.status(500).json({ message: "Internal server issue." });
   }
 };
 
-const handleDeleteDirectory = async (req, res) => {
+const handleMoveToBinDirectory = async (req, res) => {
   const userContent = directoriesDb.find(
     (item) => item.id === req.user.id
   ).content;
@@ -274,11 +289,10 @@ const handleDeleteDirectory = async (req, res) => {
       .status(404)
       .json({ message: "Folder not found !! try with a valid id." });
   try {
-    await deletion(req.user.id,directory)
-    // console.log('deleted..')
+    await deleteDirectory(req.user.id, directory);
     return res.status(200).json({ message: "Folder moved to bin." });
   } catch (error) {
-    console.log(error)
+    console.log(error);
     return res.status(500).json({ message: "Internal server issue." });
   }
 };
@@ -290,6 +304,6 @@ export {
   handleCreateDirectory,
   handleUpdateFile,
   handleUpdateDirectory,
-  handleDeleteFile,
-  handleDeleteDirectory
+  handleMoveToBinFile,
+  handleMoveToBinDirectory,
 };
