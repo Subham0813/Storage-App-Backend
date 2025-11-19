@@ -16,7 +16,7 @@ let userContent, binContent;
 const findItemById = (arr, id) => arr.find((a) => a.id === id);
 const removeItemById = (arr, id) => arr.filter((a) => a.id !== id);
 
-const rmDirFromParentDir = (dir) => {
+const removeFromParent = (dir) => {
   if (!dir) return;
   
   const parentId = userContent.findIndex((item) => item.id === dir.parent_id);
@@ -29,7 +29,7 @@ const rmDirFromParentDir = (dir) => {
   userContent = removeItemById(userContent, dir.id);
 };
 
-const recursiveDeletion = async (directory, deleted, visited = new Set()) => {
+const recursiveRemove = async (directory, deleted, visited = new Set()) => {
   try {
     if (!directory || visited.has(directory.id)) return;
     visited.add(directory.id);
@@ -57,8 +57,8 @@ const recursiveDeletion = async (directory, deleted, visited = new Set()) => {
 
     for (const directory of directories) {
       const childDirectory = findItemById(userContent, directory.id);
-      await recursiveDeletion(childDirectory, deleted, visited);
-      rmDirFromParentDir(childDirectory);
+      await recursiveRemove(childDirectory, deleted, visited);
+      removeFromParent(childDirectory);
     }
   } catch (error) {
     // console.log(error);
@@ -66,14 +66,14 @@ const recursiveDeletion = async (directory, deleted, visited = new Set()) => {
   }
 };
 
-const deleteDirectory = async (userId, directory, deleted = false) => {
+const removeDirectory = async (userId, directory, deleted = false) => {
   try {
     const dbIndex = directoriesDb.findIndex((item) => item.id === userId);
     userContent = directoriesDb[dbIndex].content;
     binContent = bin.find((item) => item.id === userId).content;
 
-    await recursiveDeletion(directory, deleted);
-    rmDirFromParentDir(directory);
+    await recursiveRemove(directory, deleted);
+    removeFromParent(directory);
 
     directoriesDb[dbIndex].content = userContent;
     await writeFile(
@@ -86,4 +86,4 @@ const deleteDirectory = async (userId, directory, deleted = false) => {
   }
 };
 
-export default deleteDirectory;
+export {removeDirectory} ;
