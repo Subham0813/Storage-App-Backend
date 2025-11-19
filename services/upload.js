@@ -10,7 +10,7 @@ const diskStorage = multer.diskStorage({
     },
     filename: (req, file, cb) => {
       const id = crypto.randomUUID();
-      const name = `${id}.${path.extname(file.originalname)}`;
+      const name = `${id}${path.extname(file.originalname)}`;
       file.id = id
       cb(null, name);
     },
