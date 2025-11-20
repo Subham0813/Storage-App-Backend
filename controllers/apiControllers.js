@@ -1,11 +1,10 @@
 import { rm, writeFile } from "fs/promises";
-import deleteDirectory from "../services/deleteDirectoryRecursive.js";
+import { removeDirectory } from "../services/removeDirectory.js";
+import { restore } from "../services/restoreFile.js";
 
 let { default: directoriesDb } = await import(
   "../models/directoriesDb.model.json",
-  {
-    with: { type: "json" },
-  }
+  { with: { type: "json" } }
 );
 let { default: filesDb } = await import("../models/filesDb.model.json", {
   with: { type: "json" },
@@ -22,13 +21,13 @@ const handleGetDirectories = async (req, res) => {
 
   try {
     if (!userContent || !directory) throw new Error();
-    res
+    return res
       .status(200)
       .json({ res: true, message: "directory found.", content: directory });
   } catch (error) {
-    res
+    return res
       .status(404)
-      .json({ res: false, message: "directory not found!", content: null });
+      .json({ res: false, message: "directory not found! May be it is moved to bin.", content: null });
   }
 };
 
@@ -41,16 +40,16 @@ const handleGetFiles = async (req, res) => {
   );
 
   try {
-    if (!file) throw new Error("file not found");
+    if (!file) throw new Error("file not found! May be it is moved to bin.");
 
-    res.sendFile(
+    return res.sendFile(
       `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`,
       (error) => {
         // console.log(error)
       }
     );
   } catch (error) {
-    res.status(404).json({ message: error.message });
+    return res.status(404).json({ message: error.message });
   }
 };
 
@@ -70,8 +69,9 @@ const handleCreateFile = async (req, res) => {
   if (!req.file)
     return res.status(400).json({ message: "no file in the request!" });
 
-  req.file.parent_id = parentDirectory.id;
   req.file.user_id = req.user.id;
+  req.file.parentId = parentDirectory.id;
+  req.file.parentName = parentDirectory.name;
 
   filesDb.push(req.file);
 
@@ -89,10 +89,10 @@ const handleCreateFile = async (req, res) => {
         JSON.stringify(directoriesDb)
       ),
     ]);
-    res.status(201).json({ message: "file/s created." });
+    return res.status(201).json({ message: "file/s created." });
   } catch (error) {
     console.log(error.message);
-    res.status(500).json({ message: "Internal server issue.", error });
+    return res.status(500).json({ message: "Internal server error.", error });
   }
 };
 
@@ -114,7 +114,8 @@ const handleCreateDirectory = async (req, res) => {
   const newDirectory = {
     id: crypto.randomUUID(),
     name: req.body.name ? req.body.name : "Untitled Folder",
-    parent_id: parentDirectory.id,
+    parentId: parentDirectory.id,
+    parentName: parentDirectory.name,
     directories: [],
     files: [],
   };
@@ -131,10 +132,10 @@ const handleCreateDirectory = async (req, res) => {
       "./models/directoriesDb.model.json",
       JSON.stringify(directoriesDb)
     );
-    res.status(201).json({ message: "Folder created." });
+    return res.status(201).json({ message: "Folder created." });
   } catch (error) {
     console.log(error.message);
-    res.status(500).json({ message: "Internal server issue." });
+    return res.status(500).json({ message: "Internal server error." });
   }
 };
 
@@ -159,7 +160,7 @@ const handleUpdateFile = async (req, res) => {
   const userContent = directoriesDb.find(
     (item) => item.id === req.user.id
   ).content;
-  const parentId = userContent.findIndex((item) => item.id === file.parent_id);
+  const parentId = userContent.findIndex((item) => item.id === file.parentId);
   const fileInDirectoryDb = userContent[parentId].files.find(
     (item) => item.id === file.id
   );
@@ -174,9 +175,9 @@ const handleUpdateFile = async (req, res) => {
         JSON.stringify(directoriesDb)
       ),
     ]);
-    res.status(200).json({ message: "File renamed successfully." });
+    return res.status(200).json({ message: "File renamed successfully." });
   } catch (error) {
-    res.status(500).json({ message: "Internal server issue." });
+    return res.status(500).json({ message: "Internal server error." });
   }
 };
 
@@ -202,7 +203,7 @@ const handleUpdateDirectory = async (req, res) => {
 
   //changing name of the directory exists in the parent folder
   const parentId = userContent.findIndex(
-    (item) => item.id === directory.parent_id
+    (item) => item.id === directory.parentId
   );
   const directoryInDirectoryDb = userContent[parentId].directories.find(
     (item) => item.id === req.params.id
@@ -214,23 +215,22 @@ const handleUpdateDirectory = async (req, res) => {
       "./models/directoriesDb.model.json",
       JSON.stringify(directoriesDb)
     );
-    res.status(200).json({ message: "Folder renamed successfully." });
+    return res.status(200).json({ message: "Folder renamed successfully." });
   } catch (error) {
-    res.status(500).json({ message: "Internal server issue." });
+    return res.status(500).json({ message: "Internal server error." });
   }
 };
 
-//permanent delete & move to bin  logic
+// move to bin  logic
 const handleMoveToBinFile = async (req, res) => {
-
   const binContent = bin.find((item) => item.id === req.user.id).content[0];
   const userContent = directoriesDb.find(
     (item) => item.id === req.user.id
   ).content;
   const file = filesDb.find(
-    (item) => item.user_id === req.user.id && item.id === req.params.id 
+    (item) => item.user_id === req.user.id && item.id === req.params.id
   );
-  
+
   if (!file)
     return res
       .status(404)
@@ -238,25 +238,20 @@ const handleMoveToBinFile = async (req, res) => {
 
   //removing file from directoriesDb
   const parentDirIdx = userContent.findIndex(
-    (item) => item.id === file.parent_id
+    (item) => item.id === file.parentId
   );
   userContent[parentDirIdx].files = userContent[parentDirIdx].files.filter(
     (item) => item.id !== file.id
   );
 
-  // if (!deleted) {
-    //changing file destinaton in filesDb
-    file.destination = "./bin";
-    binContent.files.push({
-      id: file.id,
-      name: file.originalname,
-      parentId: file.parent_id,
-      parentDirName: userContent[parentDirIdx].name,
-    });
-  // } else {
-  //   filesDb = filesDb.filter((item) => item.id !== file.id);
-  //   binContent.files = binContent.files.filter((item) => item.id !== file.id);
-  // }
+  //changing file destinaton in filesDb
+  file.destination = "./bin";
+  binContent.files.push({
+    id: file.id,
+    name: file.originalname,
+    parentId: file.parentId,
+    parentName: userContent[parentDirIdx].name,
+  });
 
   try {
     await writeFile("./models/filesDb.model.json", JSON.stringify(filesDb));
@@ -265,16 +260,9 @@ const handleMoveToBinFile = async (req, res) => {
       "./models/directoriesDb.model.json",
       JSON.stringify(directoriesDb)
     );
-
-    // if (deleted) {
-    //   await rm(
-    //     `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`
-    //   );
-    //   return res.status(200).json({ message: "File deleted permanently." });
-    // }
     return res.status(200).json({ message: "File moved to bin." });
   } catch (error) {
-    return res.status(500).json({ message: "Internal server issue." });
+    return res.status(500).json({ message: "Internal server error." });
   }
 };
 
@@ -289,11 +277,54 @@ const handleMoveToBinDirectory = async (req, res) => {
       .status(404)
       .json({ message: "Folder not found !! try with a valid id." });
   try {
-    await deleteDirectory(req.user.id, directory);
+    await removeDirectory(req.user.id, directory);
     return res.status(200).json({ message: "Folder moved to bin." });
   } catch (error) {
     console.log(error);
-    return res.status(500).json({ message: "Internal server issue." });
+    return res.status(500).json({ message: "Internal server error." });
+  }
+};
+
+const handleRestoreFile = async (req, res) => {
+  const file = filesDb.find(
+    (item) =>
+      item.user_id === req.user.id &&
+      item.id === req.params.id &&
+      item.destination === "./bin"
+  );
+
+  if (!file)
+    return res
+      .status(404)
+      .json({ message: "file not found !! try with a valid id." });
+
+  try {
+    await restore(req.user.id, file.id, true);
+    return res.status(200).json({ message: "file is restored to its path." });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+};
+
+const handleRestoreDirectory = async (req, res) => {
+  const binContent = bin.find(
+    (item) => item.id === req.user.id
+  ).content;
+
+  const directory = binContent[0].directories.find((item) => item.id === req.params.id);
+
+  if (!directory)
+    return res
+      .status(404)
+      .json({ message: "Folder not found !! try with a valid id." });
+
+  try {
+    // const message = await restoreDirectory(req.user.id, directory.id, false);
+    return res.status(200).json({ message: message });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({ message: "Internal server error." });
   }
 };
 
@@ -306,4 +337,6 @@ export {
   handleUpdateDirectory,
   handleMoveToBinFile,
   handleMoveToBinDirectory,
+  handleRestoreFile,
+  handleRestoreDirectory
 };
