@@ -4,7 +4,8 @@ import {
   handleGetDirectories,
   handleCreateDirectory,
   handleUpdateDirectory,
-  handleMoveToBinDirectory
+  handleMoveToBinDirectory,
+  handleRestoreDirectory
 } from "../controllers/apiControllers.js";
 
 const router = Router();
@@ -21,5 +22,6 @@ router.patch("/:id", handleUpdateDirectory);
 
 //delete
 router.post("/:id/trash", handleMoveToBinDirectory);
+router.post("/:id/restore", handleRestoreDirectory);
 
 export default router;

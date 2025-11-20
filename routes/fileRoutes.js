@@ -1,11 +1,12 @@
 import { Router } from "express";
-import upload from "../services/upload.js";
+import upload from "../services/uploadFileUsingMulter.js";
 
 import {
   handleGetFiles,
   handleCreateFile,
   handleUpdateFile,
-  handleMoveToBinFile
+  handleMoveToBinFile,
+  handleRestoreFile
 } from "../controllers/apiControllers.js";
 
 const router = Router();
@@ -22,5 +23,6 @@ router.patch("/:id", handleUpdateFile);
 
 //delete
 router.post("/:id/trash", handleMoveToBinFile);
+router.post("/:id/restore", handleRestoreFile);
 
 export default router;
