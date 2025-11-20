@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { writeFile } from "fs/promises";
-import { createToken } from "../services/auth.js";
+import { createToken } from "../services/createAndValidateToken.js";
 
 const { default: userDb } = await import("../models/userDb.model.json", {
   with: { type: "json" },
@@ -39,7 +39,6 @@ router.post("/login", async (req, res) => {
       content: [
         {
           id: null,
-          parent: null,
           name: "root",
           directories: [],
           files: [],
@@ -55,7 +54,6 @@ router.post("/login", async (req, res) => {
       content: [
         {
           id: null,
-          parent: null,
           name: "bin",
           directories: [],
           files: [],
@@ -74,10 +72,7 @@ router.post("/login", async (req, res) => {
         "./models/directoriesDb.model.json",
         JSON.stringify(directoriesDb)
       );
-      await writeFile(
-        "./models/bin.model.json",
-        JSON.stringify(bin)
-      );
+    await writeFile("./models/bin.model.json", JSON.stringify(bin));
 
     return res
       .setHeader("Set-Cookie", [
