@@ -1,19 +1,31 @@
 import express from "express";
 import serveFavicon from "serve-favicon";
 import cors from "cors";
+import { writeFile } from "fs/promises";
 
 import fileRoutes from "./routes/fileRoutes.js";
 import directoryRoutes from "./routes/directoryRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import { validateToken } from "./services/createAndValidateToken.js";
 
-const { default: directoriesDb } = await import(
-  "./models/directoriesDb.model.json",
-  { with: { type: "json" } }
-);
-const { default: bin } = await import("./models/bin.model.json", {
+let { default: userDb } = await import("./models/userDb.model.json", {
   with: { type: "json" },
 });
+let { default: tokens } = await import("./models/tokens.model.json", {
+  with: { type: "json" },
+});
+let { default: bin } = await import("./models/bin.model.json", {
+  with: { type: "json" },
+});
+let { default: filesDb } = await import("./models/filesDb.model.json", {
+  with: { type: "json" },
+});
+let { default: directoriesDb } = await import(
+  "./models/directoriesDb.model.json",
+  {
+    with: { type: "json" },
+  }
+);
 
 const app = express();
 const port = 4000;
@@ -54,6 +66,33 @@ app.use("/bin", validateToken("uid"), (req, res) => {
 });
 app.use("/files", validateToken("uid"), fileRoutes);
 app.use("/dirs", validateToken("uid"), directoryRoutes);
+
+app.delete("/", validateToken("uid"), async (req, res) => {
+  userDb = userDb.filter((item) => item.id !== req.user.id);
+  directoriesDb = directoriesDb.filter((item) => item.id !== req.user.id);
+  bin = bin.filter((item) => item.id !== req.user.id);
+  filesDb = filesDb.filter((item) => item.user_id !== req.user.id);
+  tokens = tokens.filter((item) => item.userId !== req.user.id);
+
+  await Promise.all([
+    writeFile("./models/userDb.model.json", JSON.stringify(userDb)),
+    writeFile(
+      "./models/directoriesDb.model.json",
+      JSON.stringify(directoriesDb)
+    ),
+    writeFile("./models/filesDb.model.json", JSON.stringify(filesDb)),
+    writeFile("./models/bin.model.json", JSON.stringify(bin)),
+    writeFile("./models/tokens.model.json", JSON.stringify(tokens)),
+  ]);
+
+  return res
+    .setHeader(
+      "Set-Cookie",
+      `uid=; expires=${new Date(new Date() - 3600 * 1000).toUTCString()}`
+    )
+    .status(200)
+    .json("Account deleted successfully.");
+});
 
 app.listen(port, () => {
   console.log("server started at port :", port);
