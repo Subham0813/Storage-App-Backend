@@ -20,10 +20,6 @@ let { default: directoriesDb } = await import(
 
 const router = Router();
 
-router.get("/login", (req, res) => {
-  res.json("post req on http://localhost:4000/login with credetials");
-});
-
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password)

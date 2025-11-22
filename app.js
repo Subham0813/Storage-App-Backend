@@ -35,7 +35,7 @@ app.use(serveFavicon(import.meta.dirname + "/public/favicon.ico"));
 app.use(cors());
 app.use(express.json());
 
-app.use("/", authRoutes);
+app.use("/auth", authRoutes);
 app.use((req, res, next) => {
   //parsing cookies
   const cookies = {};
@@ -67,7 +67,7 @@ app.use("/bin", validateToken("uid"), (req, res) => {
 app.use("/files", validateToken("uid"), fileRoutes);
 app.use("/dirs", validateToken("uid"), directoryRoutes);
 
-app.delete("/", validateToken("uid"), async (req, res) => {
+app.delete("/delete", validateToken("uid"), async (req, res) => {
   userDb = userDb.filter((item) => item.id !== req.user.id);
   directoriesDb = directoriesDb.filter((item) => item.id !== req.user.id);
   bin = bin.filter((item) => item.id !== req.user.id);
