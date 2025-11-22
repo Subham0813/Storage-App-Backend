@@ -1,6 +1,6 @@
 import { rm, writeFile } from "fs/promises";
-import { removeDirectory, removeFile } from "../services/removeDirectory.js";
-import { restoreDirectory, restoreFile } from "../services/restoreFile.js";
+import { removeDirectory, removeFile } from "../utils/removeDirectory.js";
+import { restoreDirectory, restoreFile } from "../utils/restoreFile.js";
 
 let { default: directoriesDb } = await import(
   "../models/directoriesDb.model.json",
