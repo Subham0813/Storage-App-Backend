@@ -2,13 +2,16 @@ import { Router } from "express";
 import { writeFile } from "fs/promises";
 import { createToken } from "../services/createAndValidateToken.js";
 
-const { default: userDb } = await import("../models/userDb.model.json", {
+let { default: userDb } = await import("../models/userDb.model.json", {
   with: { type: "json" },
 });
-const { default: bin } = await import("../models/bin.model.json", {
+let { default: bin } = await import("../models/bin.model.json", {
   with: { type: "json" },
 });
-const { default: directoriesDb } = await import(
+let { default: filesDb } = await import("../models/filesDb.model.json", {
+  with: { type: "json" },
+});
+let { default: directoriesDb } = await import(
   "../models/directoriesDb.model.json",
   {
     with: { type: "json" },
