@@ -1,6 +1,6 @@
 import { rm, writeFile } from "fs/promises";
-import { removeDirectory } from "../services/removeDirectory.js";
-import { restore } from "../services/restoreFile.js";
+import { removeDirectory, removeFile } from "../services/removeDirectory.js";
+import { restoreDirectory, restoreFile } from "../services/restoreFile.js";
 
 let { default: directoriesDb } = await import(
   "../models/directoriesDb.model.json",
@@ -25,9 +25,11 @@ const handleGetDirectories = async (req, res) => {
       .status(200)
       .json({ res: true, message: "directory found.", content: directory });
   } catch (error) {
-    return res
-      .status(404)
-      .json({ res: false, message: "directory not found! May be it is moved to bin.", content: null });
+    return res.status(404).json({
+      res: false,
+      message: "directory not found! May be it is moved to bin.",
+      content: null,
+    });
   }
 };
 
@@ -223,12 +225,11 @@ const handleUpdateDirectory = async (req, res) => {
 
 // move to bin  logic
 const handleMoveToBinFile = async (req, res) => {
-  const binContent = bin.find((item) => item.id === req.user.id).content[0];
-  const userContent = directoriesDb.find(
-    (item) => item.id === req.user.id
-  ).content;
   const file = filesDb.find(
-    (item) => item.user_id === req.user.id && item.id === req.params.id
+    (item) =>
+      item.user_id === req.user.id &&
+      item.id === req.params.id &&
+      item.destination === "./RootDirectory"
   );
 
   if (!file)
@@ -236,30 +237,8 @@ const handleMoveToBinFile = async (req, res) => {
       .status(404)
       .json({ message: "file not found !! try with a valid id." });
 
-  //removing file from directoriesDb
-  const parentDirIdx = userContent.findIndex(
-    (item) => item.id === file.parentId
-  );
-  userContent[parentDirIdx].files = userContent[parentDirIdx].files.filter(
-    (item) => item.id !== file.id
-  );
-
-  //changing file destinaton in filesDb
-  file.destination = "./bin";
-  binContent.files.push({
-    id: file.id,
-    name: file.originalname,
-    parentId: file.parentId,
-    parentName: userContent[parentDirIdx].name,
-  });
-
   try {
-    await writeFile("./models/filesDb.model.json", JSON.stringify(filesDb));
-    await writeFile("./models/bin.model.json", JSON.stringify(bin));
-    await writeFile(
-      "./models/directoriesDb.model.json",
-      JSON.stringify(directoriesDb)
-    );
+    await removeFile(req.user.id, file);
     return res.status(200).json({ message: "File moved to bin." });
   } catch (error) {
     return res.status(500).json({ message: "Internal server error." });
@@ -292,14 +271,17 @@ const handleRestoreFile = async (req, res) => {
       item.id === req.params.id &&
       item.destination === "./bin"
   );
+  const fileInBin = bin
+    .find((b) => b.id === req.user.id)
+    .content[0].files.find((f) => f.id === file.id);
 
-  if (!file)
+  if (!file && !fileInBin)
     return res
       .status(404)
       .json({ message: "file not found !! try with a valid id." });
 
   try {
-    await restore(req.user.id, file.id, true);
+    await restoreFile(req.user.id, fileInBin, true);
     return res.status(200).json({ message: "file is restored to its path." });
   } catch (error) {
     console.log(error);
@@ -308,11 +290,9 @@ const handleRestoreFile = async (req, res) => {
 };
 
 const handleRestoreDirectory = async (req, res) => {
-  const binContent = bin.find(
-    (item) => item.id === req.user.id
-  ).content;
-
-  const directory = binContent[0].directories.find((item) => item.id === req.params.id);
+  const directory = bin
+    .find((item) => item.id === req.user.id)
+    .content[0].directories.find((item) => item.id === req.params.id);
 
   if (!directory)
     return res
@@ -320,8 +300,8 @@ const handleRestoreDirectory = async (req, res) => {
       .json({ message: "Folder not found !! try with a valid id." });
 
   try {
-    // const message = await restoreDirectory(req.user.id, directory.id, false);
-    return res.status(200).json({ message: message });
+    await restoreDirectory(req.user.id, directory.id);
+    return res.status(200).json({ message: "Folder restored successfully." });
   } catch (error) {
     console.log(error);
     return res.status(500).json({ message: "Internal server error." });
@@ -338,5 +318,5 @@ export {
   handleMoveToBinFile,
   handleMoveToBinDirectory,
   handleRestoreFile,
-  handleRestoreDirectory
+  handleRestoreDirectory,
 };

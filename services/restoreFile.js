@@ -14,6 +14,10 @@ let { default: bin } = await import("../models/bin.model.json", {
 let userContent, binContent;
 const findItemById = (arr, id) => arr.find((a) => a.id === id);
 const removeItemById = (arr, id) => arr.filter((a) => a.id !== id);
+const changeDestination = (id) => {
+  const idx = filesDb.findIndex((f) => f.id === id);
+  filesDb[idx].destination = "./RootDirectory";
+};
 
 const getDummyParent = (item, isFile) => {
   const dummy = {
@@ -45,20 +49,32 @@ const getDummyParent = (item, isFile) => {
   return dummy;
 };
 
-const searchAndPushToParentDir = async (item, isFile, visited) => {
+const pushHelper = async (isFile, parentDir, item) => {
+
+  if (isFile) {
+    const idx = parentDir.files.findIndex((p) => p.id === item.id);
+    if (idx === -1) parentDir.files.push({ id: item.id, name: item.name });
+  } else {
+    const idx = parentDir.directories.findIndex((p) => p.id === item.id);
+    if (idx === -1)
+      parentDir.directories.push({ id: item.id, name: item.name });
+  }
+
+  await writeFile(
+    "./models/directoriesDb.model.json",
+    JSON.stringify(directoriesDb)
+  );
+}
+
+const searchAndPushToParentDir = async (item, isFile, visited = new Set()) => {
   try {
     if (item.id === undefined || item.parentId === undefined)
       return new Error("Error: id can not be undefined");
 
     if (visited.has(item.parentId)) return;
     if (item.parentId === null) {
-      isFile
-        ? userContent[0].files.push(item)
-        : userContent[0].directories.push(item);
-      await writeFile(
-        "./models/directoriesDb.model.json",
-        JSON.stringify(directoriesDb)
-      );
+      const parentDir = userContent[0]
+      await pushHelper(isFile,parentDir,item)
       return;
     }
 
@@ -74,9 +90,9 @@ const searchAndPushToParentDir = async (item, isFile, visited) => {
           id: parentDummy.id,
           name: parentDummy.name,
         });
-      }else{
-        parentDummy.parentId = parentInBin.parentId
-        parentDummy.parentName = parentInBin.parentName
+      } else {
+        parentDummy.parentId = parentInBin.parentId;
+        parentDummy.parentName = parentInBin.parentName;
       }
 
       userContent.push(parentDummy);
@@ -86,13 +102,7 @@ const searchAndPushToParentDir = async (item, isFile, visited) => {
       );
       return await searchAndPushToParentDir(parentInBin, false, visited);
     } else {
-      isFile
-        ? parentInDb.files.push({ id: item.id, name: item.name })
-        : parentInDb.directories.push({ id: item.id, name: item.name });
-      await writeFile(
-        "./models/directoriesDb.model.json",
-        JSON.stringify(directoriesDb)
-      );
+      await pushHelper(isFile,parentInDb,item)
     }
     return;
   } catch (error) {
@@ -100,7 +110,7 @@ const searchAndPushToParentDir = async (item, isFile, visited) => {
   }
 };
 
-const restoreFile = async (userId, itemId, isFile = true) => {
+const restoreFile = async (userId, item) => {
   try {
     const dbIndex = directoriesDb.findIndex((item) => item.id === userId);
     userContent = directoriesDb[dbIndex].content;
@@ -109,32 +119,16 @@ const restoreFile = async (userId, itemId, isFile = true) => {
     if (!userContent || !binContent)
       return new Error("Error : userId not found");
 
-    const item = isFile
-      ? findItemById(binContent[0].files, itemId)
-      : findItemById(binContent, itemId);
-
-    if (!item) return new Error("Error: itemId not found");
-
     const visited = new Set();
-    await searchAndPushToParentDir(item, isFile, visited);
+    await searchAndPushToParentDir(item, true, visited);
 
-    if (isFile) {
-      //filesDb changed
-      const idx = filesDb.findIndex((f) => f.id === item.id);
-      filesDb[idx].destination = "./RootDirectory";
+    //filesDb changed
+    changeDestination(item.id);
 
-      //removed from bin
-      binContent[0].files = removeItemById(binContent[0].files, item.id);
-      const parentInBin = findItemById(binContent, item.parentId);
-      if (parentInBin) removeItemById(parentInBin.files, item.id);
-    } else {
-      //removed from bin
-      binContent = removeItemById(binContent, item.id);
-      binContent[0].directories = removeItemById(
-        binContent[0].directories,
-        item.id
-      );
-    }
+    //removed from bin
+    binContent[0].files = removeItemById(binContent[0].files, item.id);
+    const parentInBin = findItemById(binContent, item.parentId);
+    if (parentInBin) removeItemById(parentInBin.files, item.id);
 
     await Promise.all([
       writeFile(
@@ -151,5 +145,63 @@ const restoreFile = async (userId, itemId, isFile = true) => {
     return error;
   }
 };
+const restoreDirectory = async (userId, itemId) => {
+  try {
+    const dbIndex = directoriesDb.findIndex((d) => d.id === userId);
+    const binIndex = bin.findIndex((b) => b.id === userId);
+    userContent = directoriesDb[dbIndex].content;
+    binContent = bin[binIndex].content;
 
-export { restoreFile };
+    if (!userContent || !binContent)
+      return new Error("Error : userId not found");
+
+    const dirInDb = findItemById(userContent, itemId);
+    const dirInBin = findItemById(binContent, itemId);
+
+    if (!dirInDb) {
+      await searchAndPushToParentDir(dirInBin, false);
+      userContent.push(dirInBin);
+
+      for (const file of dirInBin.files) {
+        changeDestination(file.id);
+      }
+    } else {
+      for (const file of dirInBin.files) {
+        dirInDb.files.push(file);
+        changeDestination(file.id);
+      }
+
+      for (const directory of dirInBin.directories) {
+        const idx = dirInDb.directories.findIndex((d) => d.id === directory.id);
+        if (idx === -1) dirInDb.directories.push(directory);
+      }
+    }
+
+    binContent = removeItemById(binContent, itemId);
+    binContent[0].directories = removeItemById(
+      binContent[0].directories,
+      itemId
+    );
+
+    bin[binIndex].content = binContent;
+    directoriesDb[dbIndex].content = userContent;
+
+    await Promise.all([
+      writeFile(
+        "./models/directoriesDb.model.json",
+        JSON.stringify(directoriesDb)
+      ),
+      writeFile("./models/bin.model.json", JSON.stringify(bin)),
+      writeFile("./models/filesDb.model.json", JSON.stringify(filesDb)),
+    ]);
+
+    for (const child of dirInBin.directories) {
+      await restoreDirectory(userId, child.id);
+    }
+  } catch (error) {
+    console.log(error);
+    return error;
+  }
+};
+
+export { restoreFile, restoreDirectory };
