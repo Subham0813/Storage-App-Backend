@@ -1,13 +1,13 @@
 import { writeFile } from "fs/promises";
 
 let { default: directoriesDb } = await import(
-  "../models/directoriesDb.model.json",
+  "../DBs/directories.db.json",
   { with: { type: "json" } }
 );
-let { default: filesDb } = await import("../models/filesDb.model.json", {
+let { default: filesDb } = await import("../DBs/files.db.json", {
   with: { type: "json" },
 });
-let { default: bin } = await import("../models/bin.model.json", {
+let { default: bin } = await import("../DBs/bins.db.json", {
   with: { type: "json" },
 });
 
@@ -61,7 +61,7 @@ const pushHelper = async (isFile, parentDir, item) => {
   }
 
   await writeFile(
-    "./models/directoriesDb.model.json",
+    "./DBs/directories.db.json",
     JSON.stringify(directoriesDb)
   );
 }
@@ -97,7 +97,7 @@ const searchAndPushToParentDir = async (item, isFile, visited = new Set()) => {
 
       userContent.push(parentDummy);
       await writeFile(
-        "./models/directoriesDb.model.json",
+        "./DBs/directories.db.json",
         JSON.stringify(directoriesDb)
       );
       return await searchAndPushToParentDir(parentInBin, false, visited);
@@ -132,11 +132,11 @@ const restoreFile = async (userId, item) => {
 
     await Promise.all([
       writeFile(
-        "./models/directoriesDb.model.json",
+        "./DBs/directories.db.json",
         JSON.stringify(directoriesDb)
       ),
-      writeFile("./models/bin.model.json", JSON.stringify(bin)),
-      writeFile("./models/filesDb.model.json", JSON.stringify(filesDb)),
+      writeFile("./DBs/bins.db.json", JSON.stringify(bin)),
+      writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
     ]);
 
     return;
@@ -188,11 +188,11 @@ const restoreDirectory = async (userId, itemId) => {
 
     await Promise.all([
       writeFile(
-        "./models/directoriesDb.model.json",
+        "./DBs/directories.db.json",
         JSON.stringify(directoriesDb)
       ),
-      writeFile("./models/bin.model.json", JSON.stringify(bin)),
-      writeFile("./models/filesDb.model.json", JSON.stringify(filesDb)),
+      writeFile("./DBs/bins.db.json", JSON.stringify(bin)),
+      writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
     ]);
 
     for (const child of dirInBin.directories) {

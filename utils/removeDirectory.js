@@ -1,13 +1,13 @@
 import { writeFile } from "fs/promises";
 
 let { default: directoriesDb } = await import(
-  "../models/directoriesDb.model.json",
+  "../DBs/directories.db.json",
   { with: { type: "json" } }
 );
-let { default: filesDb } = await import("../models/filesDb.model.json", {
+let { default: filesDb } = await import("../DBs/files.db.json", {
   with: { type: "json" },
 });
-let { default: bin } = await import("../models/bin.model.json", {
+let { default: bin } = await import("../DBs/bins.db.json", {
   with: { type: "json" },
 });
 
@@ -29,7 +29,7 @@ const recursiveRemove = async (directory, visited = new Set()) => {
       const fileInfo = findItemById(filesDb, file.id);
       fileInfo.destination = "./bin";
     }
-    await writeFile("./models/filesDb.model.json", JSON.stringify(filesDb));
+    await writeFile("./DBs/files.db.json", JSON.stringify(filesDb));
 
     const binIdx = findIndexById(binContent, directory.id);
     if (binIdx === -1) binContent.push(directory);
@@ -44,7 +44,7 @@ const recursiveRemove = async (directory, visited = new Set()) => {
       userContent = removeItemById(userContent, childDirectory.id);
     }
 
-    await writeFile("./models/bin.model.json", JSON.stringify(bin));
+    await writeFile("./DBs/bins.db.json", JSON.stringify(bin));
   } catch (error) {
     // console.log(error);
     return error;
@@ -71,12 +71,12 @@ const removeDirectory = async (userId, dir) => {
 
     directoriesDb[dbIndex].content = userContent;
     await writeFile(
-      "./models/directoriesDb.model.json",
+      "./DBs/directories.db.json",
       JSON.stringify(directoriesDb)
     );
 
     binContent[0].directories.push({ id, name, parentId, parentName });
-    await writeFile("./models/bin.model.json", JSON.stringify(bin));
+    await writeFile("./DBs/bins.db.json", JSON.stringify(bin));
   } catch (error) {
     // console.log(error);
     return error;
@@ -109,10 +109,10 @@ const removeFile = async (userId, file) => {
     bin[binIdx].content[0] = binContent;
 
     await Promise.all([
-      writeFile("./models/filesDb.model.json", JSON.stringify(filesDb)),
-      writeFile("./models/bin.model.json", JSON.stringify(bin)),
+      writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
+      writeFile("./DBs/bins.db.json", JSON.stringify(bin)),
       writeFile(
-        "./models/directoriesDb.model.json",
+        "./DBs/directories.db.json",
         JSON.stringify(directoriesDb)
       ),
     ]);

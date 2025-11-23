@@ -1,5 +1,5 @@
 import { Router } from "express";
-import upload from "../services/uploadFileUsingMulter.js";
+import upload from "../utils/uploadFileUsingMulter.js"
 
 import {
   handleGetFiles,

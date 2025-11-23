@@ -1,15 +1,15 @@
-import { rm, writeFile } from "fs/promises";
+import { writeFile } from "fs/promises";
+import { env } from "process";
 import { removeDirectory, removeFile } from "../utils/removeDirectory.js";
 import { restoreDirectory, restoreFile } from "../utils/restoreFile.js";
 
-let { default: directoriesDb } = await import(
-  "../models/directoriesDb.model.json",
-  { with: { type: "json" } }
-);
-let { default: filesDb } = await import("../models/filesDb.model.json", {
+let { default: directoriesDb } = await import("../DBs/directories.db.json", {
   with: { type: "json" },
 });
-let { default: bin } = await import("../models/bin.model.json", {
+let { default: filesDb } = await import("../DBs/files.db.json", {
+  with: { type: "json" },
+});
+let { default: bin } = await import("../DBs/bins.db.json", {
   with: { type: "json" },
 });
 
@@ -38,18 +38,16 @@ const handleGetFiles = async (req, res) => {
     (file) =>
       file.user_id === req.user.id &&
       file.id === req.params.id &&
-      file.destination === "./RootDirectory"
+      file.destination === "./uploads"
   );
 
   try {
     if (!file) throw new Error("file not found! May be it is moved to bin.");
 
-    return res.sendFile(
-      `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`,
-      (error) => {
-        // console.log(error)
-      }
-    );
+    const path = `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`;
+    return res.sendFile(path, (error) => {
+      console.log(error);
+    });
   } catch (error) {
     return res.status(404).json({ message: error.message });
   }
@@ -85,11 +83,8 @@ const handleCreateFile = async (req, res) => {
   // console.log(filesDb);
   try {
     await Promise.all([
-      writeFile("./models/filesDb.model.json", JSON.stringify(filesDb)),
-      writeFile(
-        "./models/directoriesDb.model.json",
-        JSON.stringify(directoriesDb)
-      ),
+      writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
+      writeFile("./DBs/directories.db.json", JSON.stringify(directoriesDb)),
     ]);
     return res.status(201).json({ message: "file/s created." });
   } catch (error) {
@@ -130,10 +125,7 @@ const handleCreateDirectory = async (req, res) => {
   userContent.push(newDirectory);
 
   try {
-    await writeFile(
-      "./models/directoriesDb.model.json",
-      JSON.stringify(directoriesDb)
-    );
+    await writeFile("./DBs/directories.db.json", JSON.stringify(directoriesDb));
     return res.status(201).json({ message: "Folder created." });
   } catch (error) {
     console.log(error.message);
@@ -171,11 +163,8 @@ const handleUpdateFile = async (req, res) => {
 
   try {
     await Promise.all([
-      writeFile("./models/filesDb.model.json", JSON.stringify(filesDb)),
-      writeFile(
-        "./models/directoriesDb.model.json",
-        JSON.stringify(directoriesDb)
-      ),
+      writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
+      writeFile("./DBs/directories.db.json", JSON.stringify(directoriesDb)),
     ]);
     return res.status(200).json({ message: "File renamed successfully." });
   } catch (error) {
@@ -213,10 +202,7 @@ const handleUpdateDirectory = async (req, res) => {
   directoryInDirectoryDb.name = newname;
 
   try {
-    await writeFile(
-      "./models/directoriesDb.model.json",
-      JSON.stringify(directoriesDb)
-    );
+    await writeFile("./DBs/directories.db.json", JSON.stringify(directoriesDb));
     return res.status(200).json({ message: "Folder renamed successfully." });
   } catch (error) {
     return res.status(500).json({ message: "Internal server error." });
@@ -229,7 +215,7 @@ const handleMoveToBinFile = async (req, res) => {
     (item) =>
       item.user_id === req.user.id &&
       item.id === req.params.id &&
-      item.destination === "./RootDirectory"
+      item.destination === "./uploads"
   );
 
   if (!file)

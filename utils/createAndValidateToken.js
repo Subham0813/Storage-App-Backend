@@ -1,9 +1,9 @@
 import { writeFile } from "fs/promises";
 
-let { default: tokens } = await import("../models/tokens.model.json", {
+let { default: tokens } = await import("../DBs/tokens.db.json", {
   with: { type: "json" },
 });
-const { default: userDb } = await import("../models/userDb.model.json", {
+const { default: userDb } = await import("../DBs/users.db.json", {
   with: { type: "json" },
 });
 
@@ -20,7 +20,7 @@ const createToken = async (userId) => {
         exp_time: new Date(expiry).toLocaleString(),
       };
       tokens.push(token);
-      await writeFile("./models/tokens.model.json", JSON.stringify(tokens));
+      await writeFile("./DBs/tokens.db.json", JSON.stringify(tokens));
     }
     return token;
   } catch (error) {
@@ -64,7 +64,7 @@ const removeInvalidToken = async (userId) => {
   console.log(validTokens);
   tokens = validTokens;
   try {
-    await writeFile("./models/tokens.model.json", JSON.stringify(tokens));
+    await writeFile("./DBs/tokens.db.json", JSON.stringify(tokens));
     return null;
   } catch (error) {
     return error;

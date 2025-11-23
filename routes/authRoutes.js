@@ -1,22 +1,16 @@
 import { Router } from "express";
 import { writeFile } from "fs/promises";
-import { createToken } from "../services/createAndValidateToken.js";
+import { createToken } from "../utils/createAndValidateToken.js";
 
-let { default: userDb } = await import("../models/userDb.model.json", {
+let { default: bin } = await import("../DBs/bins.db.json", {
   with: { type: "json" },
 });
-let { default: bin } = await import("../models/bin.model.json", {
+let { default: directoriesDb } = await import("../DBs/directories.db.json", {
   with: { type: "json" },
 });
-let { default: filesDb } = await import("../models/filesDb.model.json", {
+let { default: userDb } = await import("../DBs/users.db.json", {
   with: { type: "json" },
 });
-let { default: directoriesDb } = await import(
-  "../models/directoriesDb.model.json",
-  {
-    with: { type: "json" },
-  }
-);
 
 const router = Router();
 
@@ -68,10 +62,10 @@ router.post("/login", async (req, res) => {
 
     if (!existingDb)
       await writeFile(
-        "./models/directoriesDb.model.json",
+        "./DBs/directories.db.json",
         JSON.stringify(directoriesDb)
       );
-    await writeFile("./models/bin.model.json", JSON.stringify(bin));
+    await writeFile("./DBs/bins.db.json", JSON.stringify(bin));
 
     return res
       .setHeader("Set-Cookie", [
@@ -107,7 +101,7 @@ router.post("/signup", async (req, res) => {
   userDb.push(newUser);
 
   try {
-    await writeFile("./models/userDb.model.json", JSON.stringify(userDb));
+    await writeFile("./DBs/users.db.json", JSON.stringify(userDb));
     return res.status(302).json("Sign up successfull.");
     // return res.status(302).redirect("/login"); // .redirect(...)  === .setHeader('Location', 'http://localhost:4000/login').end()
   } catch (error) {

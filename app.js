@@ -6,26 +6,23 @@ import { writeFile } from "fs/promises";
 import fileRoutes from "./routes/fileRoutes.js";
 import directoryRoutes from "./routes/directoryRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
-import { validateToken } from "./services/createAndValidateToken.js";
+import { validateToken } from "./utils/createAndValidateToken.js";
 
-let { default: userDb } = await import("./models/userDb.model.json", {
+let { default: bin } = await import("./DBs/bins.db.json", {
   with: { type: "json" },
 });
-let { default: tokens } = await import("./models/tokens.model.json", {
+let { default: directoriesDb } = await import("./DBs/directories.db.json", {
   with: { type: "json" },
 });
-let { default: bin } = await import("./models/bin.model.json", {
+let { default: filesDb } = await import("./DBs/files.db.json", {
   with: { type: "json" },
 });
-let { default: filesDb } = await import("./models/filesDb.model.json", {
+let { default: tokens } = await import("./DBs/tokens.db.json", {
   with: { type: "json" },
 });
-let { default: directoriesDb } = await import(
-  "./models/directoriesDb.model.json",
-  {
-    with: { type: "json" },
-  }
-);
+let { default: userDb } = await import("./DBs/users.db.json", {
+  with: { type: "json" },
+});
 
 const app = express();
 const port = 4000;
@@ -36,8 +33,9 @@ app.use(cors());
 app.use(express.json());
 
 app.use("/auth", authRoutes);
+
+//cookieParser
 app.use((req, res, next) => {
-  //parsing cookies
   const cookies = {};
   if (!req.headers || !req.headers.cookie)
     return res.status(400).json("Cookies not found! Relogin with credentials.");
@@ -50,6 +48,7 @@ app.use((req, res, next) => {
   req.cookies = cookies;
   next();
 });
+
 app.use("/storage", validateToken("uid"), (req, res) => {
   res.status(200).json({
     res: true,
@@ -57,6 +56,7 @@ app.use("/storage", validateToken("uid"), (req, res) => {
     content: directoriesDb.find((item) => item.id === req.user.id).content[0], //serving root directory
   });
 });
+
 app.use("/bin", validateToken("uid"), (req, res) => {
   res.status(200).json({
     res: true,
@@ -64,7 +64,9 @@ app.use("/bin", validateToken("uid"), (req, res) => {
     content: bin.find((item) => item.id === req.user.id).content[0], //serving bin directory
   });
 });
+
 app.use("/files", validateToken("uid"), fileRoutes);
+
 app.use("/dirs", validateToken("uid"), directoryRoutes);
 
 app.delete("/delete", validateToken("uid"), async (req, res) => {
@@ -75,14 +77,11 @@ app.delete("/delete", validateToken("uid"), async (req, res) => {
   tokens = tokens.filter((item) => item.userId !== req.user.id);
 
   await Promise.all([
-    writeFile("./models/userDb.model.json", JSON.stringify(userDb)),
-    writeFile(
-      "./models/directoriesDb.model.json",
-      JSON.stringify(directoriesDb)
-    ),
-    writeFile("./models/filesDb.model.json", JSON.stringify(filesDb)),
-    writeFile("./models/bin.model.json", JSON.stringify(bin)),
-    writeFile("./models/tokens.model.json", JSON.stringify(tokens)),
+    writeFile("./DBs/directories.db.json", JSON.stringify(directoriesDb)),
+    writeFile("./DBs/users.db.json", JSON.stringify(userDb)),
+    writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
+    writeFile("./DBs/bins.db.json", JSON.stringify(bin)),
+    writeFile("./DBs/tokens.db.json", JSON.stringify(tokens)),
   ]);
 
   return res
