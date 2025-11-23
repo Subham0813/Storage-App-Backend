@@ -18,12 +18,12 @@ A backend service for a storage & file-management application.
 - **Cookie-based custom tokens**
 
 ## 📁 Directory Structure
-/controllers    -- Logic for each API route
-/routes         -- Route definitions
-/services       -- Core logic for file & directory operations
-/models         -- Stores all .json database files
-/uploads        -- Local uploaded files storage
-app.js          -- Server entry file              
+- /controllers    -- Logic for each API route
+- /routes         -- Route definitions
+- /services       -- Core logic for file & directory operations
+- /models         -- Stores all .json database files
+- /uploads        -- Local uploaded files storage
+- app.js          -- Server entry file              
 
 ## 📋 Base Routes
 Base path: `/auth`
