@@ -2,6 +2,7 @@ import { writeFile } from "fs/promises";
 import { env } from "process";
 import { removeDirectory, removeFile } from "../utils/removeDirectory.js";
 import { restoreDirectory, restoreFile } from "../utils/restoreFile.js";
+import { Db, ObjectId } from "mongodb";
 
 let { default: directoriesDb } = await import("../DBs/directories.db.json", {
   with: { type: "json" },
@@ -14,220 +15,263 @@ let { default: bin } = await import("../DBs/bins.db.json", {
 });
 
 const handleGetDirectories = async (req, res) => {
-  const userContent = directoriesDb.find(
-    (item) => item.id === req.user.id
-  ).content;
-  const directory = userContent.find((item) => item.id === req.params.id);
-
   try {
-    if (!userContent || !directory) throw new Error();
-    return res
-      .status(200)
-      .json({ res: true, message: "directory found.", content: directory });
+    const db = req.db;
+    const userId = req.user._id;
+
+    const directory = await db
+      .collection("directories")
+      .findOne({ _id: new ObjectId(req.params.id), userId });
+
+    if (!directory || directory.isDeleted)
+      return res.status(404).json({
+        message: "directory not found! May be it is moved to bin.",
+        data: null,
+      });
+
+    const directories = await db
+      .collection("directories")
+      .find(
+        { userId, parentId: directory._id, isDeleted: false },
+        {
+          projection: {
+            _id: 1,
+            name: 1,
+            createdAt: 1,
+            modifiedAt: 1,
+          },
+        }
+      )
+      .toArray();
+
+    const files = await db
+      .collection("files")
+      .find(
+        { userId, parentId: directory._id, isDeleted: false },
+        {
+          projection: {
+            originalname: 1,
+            size: 1,
+            mimeType: 1,
+            createdAt: 1,
+            modifiedAt: 1,
+            _id: 1,
+          },
+        }
+      )
+      .toArray();
+
+    const data = {
+      _id: directory._id,
+      name: directory.name,
+      directories,
+      files,
+    };
+
+    return res.status(200).json({ message: "directory found.", data });
   } catch (error) {
-    return res.status(404).json({
-      res: false,
-      message: "directory not found! May be it is moved to bin.",
-      content: null,
-    });
+    return res
+      .status(500)
+      .json({ message: "Internal server error", data: null });
   }
 };
 
 const handleGetFiles = async (req, res) => {
-  const file = filesDb.find(
-    (file) =>
-      file.user_id === req.user.id &&
-      file.id === req.params.id &&
-      file.destination === "./uploads"
-  );
+  const db = req.db;
+  const userId = req.user._id;
 
   try {
-    if (!file) throw new Error("file not found! May be it is moved to bin.");
+    const file = await db
+      .collection("files")
+      .findOne({ _id: new ObjectId(req.params.id), userId, isDeleted: false });
+
+    if (!file)
+      return res.status(404).json({
+        message: "file not found! May be it is moved to bin.",
+        data: null,
+      });
 
     const path = `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`;
-    return res.sendFile(path, (error) => {
-      console.log(error);
-    });
+    return res.sendFile(path, (error) => console.log(error));
   } catch (error) {
-    return res.status(404).json({ message: error.message });
+    return res
+      .status(500)
+      .json({ message: "Internal server error", data: null });
   }
 };
 
 const handleCreateFile = async (req, res) => {
-  const { dirId } = req.params;
-  // console.log(req.user)
-  const userContent = directoriesDb.find(
-    (item) => item.id === req.user.id
-  ).content;
+  const db = req.db;
+  const dirId = req.params.dirId;
+  const userId = req.user._id;
+  const file = req.file;
 
-  let parentDirectory = dirId
-    ? userContent.find((item) => item.id === dirId)
-    : userContent[0];
+  if (!file)
+    return res
+      .status(400)
+      .json({ message: "no file in the request!", data: null });
 
-  if (!parentDirectory)
-    return res.status(404).json({ message: "Directory Not Found!" });
-  if (!req.file)
-    return res.status(400).json({ message: "no file in the request!" });
-
-  req.file.user_id = req.user.id;
-  req.file.parentId = parentDirectory.id;
-  req.file.parentName = parentDirectory.name;
-
-  filesDb.push(req.file);
-
-  parentDirectory.files.push({
-    id: req.file.id,
-    filename: req.file.originalname,
-  });
-
-  // console.log(filesDb);
   try {
-    await Promise.all([
-      writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
-      writeFile("./DBs/directories.db.json", JSON.stringify(directoriesDb)),
-    ]);
-    return res.status(201).json({ message: "file/s created." });
+    const parentDirectory = dirId
+      ? await db
+          .collection("directories")
+          .findOne({ userId, _id: new ObjectId(dirId) })
+      : await db.collection("directories").findOne({ userId, parentId: null });
+
+    if (!parentDirectory || parentDirectory.isDeleted)
+      return res
+        .status(404)
+        .json({ message: "Directory Not Found!", data: null });
+
+    file.userId = userId;
+    file.parentId = parentDirectory._id;
+    file.parentName = parentDirectory.name;
+    file.isDeleted = false;
+
+    const { insertedId: id } = await db.collection("files").insertOne(file);
+
+    return res
+      .status(201)
+      .json({ message: "file uploaded successfull.", data: id });
   } catch (error) {
     console.log(error.message);
-    return res.status(500).json({ message: "Internal server error.", error });
+    return res
+      .status(500)
+      .json({ message: "Internal server error.", data: null });
   }
 };
 
 const handleCreateDirectory = async (req, res) => {
-  const { dirId } = req.params;
-  // console.log(req.headers, req.body, req.user);
-
-  const userContent = directoriesDb.find(
-    (item) => item.id === req.user.id
-  ).content;
-
-  const parentDirectory = dirId
-    ? userContent.find((item) => item.id === dirId)
-    : userContent[0];
-
-  if (!parentDirectory)
-    return res.status(404).json({ message: "Directory Not Found!" });
-
-  const newDirectory = {
-    id: crypto.randomUUID(),
-    name: req.body.name ? req.body.name : "Untitled Folder",
-    parentId: parentDirectory.id,
-    parentName: parentDirectory.name,
-    directories: [],
-    files: [],
-  };
-
-  parentDirectory.directories.push({
-    id: newDirectory.id,
-    name: newDirectory.name,
-  });
-
-  userContent.push(newDirectory);
+  const db = req.db;
+  const dirId = req.params.dirId;
+  const userId = req.user._id;
 
   try {
-    await writeFile("./DBs/directories.db.json", JSON.stringify(directoriesDb));
-    return res.status(201).json({ message: "Folder created." });
+    const parentDirectory = dirId
+      ? await db
+          .collection("directories")
+          .findOne({ userId, _id: new ObjectId(dirId) })
+      : await db.collection("directories").findOne({ userId, parentId: null });
+
+    if (!parentDirectory || parentDirectory.isDeleted)
+      return res
+        .status(404)
+        .json({ message: "Directory Not Found!", data: null });
+
+    const { insertedId: id } = await db.collection("directories").insertOne({
+      name: req.body.name ? req.body.name : "Untitled Folder",
+      parentId: parentDirectory._id,
+      parentName: parentDirectory.name,
+      userId: userId,
+      isDeleted: false,
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+    });
+
+    return res.status(201).json({ message: "Folder created.", data: id });
   } catch (error) {
     console.log(error.message);
-    return res.status(500).json({ message: "Internal server error." });
+    return res
+      .status(500)
+      .json({ message: "Internal server error.", data: null });
   }
 };
 
 const handleUpdateFile = async (req, res) => {
   const { newname } = req.body;
+  const db = req.db;
+  const userId = req.user._id;
 
-  if (!newname)
+  if (!newname || newname.length < 0)
     return res.status(400).json({
-      message: "bad request! oldname & newname should pass on with body.",
+      message: "name should be one or more than one characters long!",
     });
-
-  //changing filename if exists in filesDb
-  const file = filesDb.find((file) => file.id === req.params.id);
-  if (!file)
-    return res.status(404).json({
-      message:
-        "file with same name not found on Db! Request with a valid name.",
-    });
-  file.originalname = newname;
-
-  //changing filename in its parent folder
-  const userContent = directoriesDb.find(
-    (item) => item.id === req.user.id
-  ).content;
-  const parentId = userContent.findIndex((item) => item.id === file.parentId);
-  const fileInDirectoryDb = userContent[parentId].files.find(
-    (item) => item.id === file.id
-  );
-
-  fileInDirectoryDb.filename = newname;
 
   try {
-    await Promise.all([
-      writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
-      writeFile("./DBs/directories.db.json", JSON.stringify(directoriesDb)),
-    ]);
-    return res.status(200).json({ message: "File renamed successfully." });
+    //changing filename if exists in filesDb
+    const update = await db.collection("files").updateOne(
+      { _id: new ObjectId(req.params.id), userId, isDeleted: false },
+      {
+        $set: { originalname: newname, modifiedAt: new Date().toISOString() },
+      }
+    );
+
+    return res
+      .status(200)
+      .json({ message: "File renamed successfully.", data: update });
   } catch (error) {
-    return res.status(500).json({ message: "Internal server error." });
+    return res
+      .status(500)
+      .json({ message: "Internal server error.", data: null });
   }
 };
 
 const handleUpdateDirectory = async (req, res) => {
   const { newname } = req.body;
-  if (!newname)
+  const db = req.db;
+  const userId = req.user._id;
+
+  if (!newname || newname.length < 0)
     return res.status(400).json({
-      message: "bad request! oldname & newname should pass on with body.",
+      message: "bad request! newname should pass on with body.",
     });
-
-  const userContent = directoriesDb.find(
-    (item) => item.id === req.user.id
-  ).content;
-
-  //changing name of the directory itself
-  const directory = userContent.find((item) => item.id === req.params.id);
-  if (!directory)
-    return res.status(404).json({
-      message:
-        "directory with same name not found on Db! Request with a valid name.",
-    });
-  directory.name = newname;
-
-  //changing name of the directory exists in the parent folder
-  const parentId = userContent.findIndex(
-    (item) => item.id === directory.parentId
-  );
-  const directoryInDirectoryDb = userContent[parentId].directories.find(
-    (item) => item.id === req.params.id
-  );
-  directoryInDirectoryDb.name = newname;
 
   try {
-    await writeFile("./DBs/directories.db.json", JSON.stringify(directoriesDb));
-    return res.status(200).json({ message: "Folder renamed successfully." });
+    const update = await db.collection("directories").updateOne(
+      { _id: new ObjectId(req.params.id), userId },
+      {
+        $set: { name: newname, modifiedAt: new Date().toISOString() },
+      }
+    );
+    return res
+      .status(200)
+      .json({ message: "Folder renamed successfully.", data: update });
   } catch (error) {
-    return res.status(500).json({ message: "Internal server error." });
+    return res
+      .status(500)
+      .json({ message: "Internal server error.", data: null });
   }
 };
 
-// move to bin  logic
 const handleMoveToBinFile = async (req, res) => {
-  const file = filesDb.find(
-    (item) =>
-      item.user_id === req.user.id &&
-      item.id === req.params.id &&
-      item.destination === "./uploads"
-  );
-
-  if (!file)
-    return res
-      .status(404)
-      .json({ message: "file not found !! try with a valid id." });
+  // console.log(req.originalUrl)
+  const db = req.db;
+  const userId = req.user._id;
+ 
 
   try {
-    await removeFile(req.user.id, file);
-    return res.status(200).json({ message: "File moved to bin." });
+    const file = await db
+      .collection("files")
+      .findOne({ _id: new ObjectId(req.params.id), userId, isDeleted: false });
+
+    if (!file)
+      return res.status(404).json({
+        message: "file not found! May be it is moved to bin.",
+        data: null,
+      });
+
+    await db.collection("files").updateOne(
+      { _id: new ObjectId(req.params.id), userId, isDeleted: false },
+      {
+        $set: { isDeleted: true, modifiedAt: new Date().toISOString() },
+      }
+    );
+
+    await db.collection("bins").updateOne(
+      { userId: userId },
+      {
+        $set: {
+          files: [...bin.files, { _id: file._id, name: file.originalname }],
+        },
+      }
+    );
+
+    return res.status(200).json({ message: "File moved to bin.", data: {} });
   } catch (error) {
-    return res.status(500).json({ message: "Internal server error." });
+    console.log({ error });
+    return res
+      .status(500)
+      .json({ message: "Internal server error.", data: null });
   }
 };
 
@@ -251,23 +295,21 @@ const handleMoveToBinDirectory = async (req, res) => {
 };
 
 const handleRestoreFile = async (req, res) => {
-  const file = filesDb.find(
-    (item) =>
-      item.user_id === req.user.id &&
-      item.id === req.params.id &&
-      item.destination === "./bin"
-  );
-  const fileInBin = bin
-    .find((b) => b.id === req.user.id)
-    .content[0].files.find((f) => f.id === file.id);
-
-  if (!file && !fileInBin)
-    return res
-      .status(404)
-      .json({ message: "file not found !! try with a valid id." });
+  const db = req.db;
+  const userId = req.user._id;
 
   try {
-    await restoreFile(req.user.id, fileInBin, true);
+  const file = await db
+      .collection("files")
+      .findOne({ _id: new ObjectId(req.params.id), userId, isDeleted: false });
+
+    if (!file)
+      return res.status(404).json({
+        message: "file not found! May be it is moved to bin.",
+        data: null,
+      });
+
+    await restoreFile(db, userId, file);
     return res.status(200).json({ message: "file is restored to its path." });
   } catch (error) {
     console.log(error);
