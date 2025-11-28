@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { writeFile } from "fs/promises";
 import { createToken } from "../utils/createAndValidateToken.js";
 import { Db } from "mongodb";
 
@@ -12,51 +11,16 @@ router.post("/login", async (req, res) => {
   if (!email || !password)
     return res.status(400).json({ message: "All the fields are required!" });
 
-  const existingUser = await db
+  const user = await db
     .collection("users")
     .findOne({ email: email.toLowerCase(), password: password });
 
-  if (!existingUser)
+  if (!user)
     return res.status(404).json({ message: "Invalid Cradentials!!" });
 
-  const userId = existingUser._id;
-
-  const existingDb = await db
-    .collection("directories")
-    .findOne({ userId, name: "root", parentId: null });
-  const existingBin = await db
-    .collection("bins")
-    .findOne({ userId: userId, name: "bin", parentId: null });
-
-  let id;
-  if (!existingDb) {
-    const newUserRoot = {
-      name: "root",
-      parentId: null,
-      parentname: null,
-      isDeleted: false,
-      userId,
-    };
-    const { insertedId } = await db
-      .collection("directories")
-      .insertOne(newUserRoot);
-    id = insertedId;
-  }
-
-  if (!existingBin) {
-    const newUserBin = {
-      name: "bin",
-      parentId: null,
-      directories: [],
-      files: [],
-      userId,
-    };
-    await db.collection("bins").insertOne(newUserBin);
-  }
-
   try {
-    const token = await createToken(userId);
-    res.cookie("uid", token.id, {
+    const token = await createToken(user._id);
+    res.cookie("uid", token.secrete, {
       httpOnly: true,
       sameSite: "lax",
       expires: new Date(token.expiry),
@@ -64,7 +28,7 @@ router.post("/login", async (req, res) => {
     });
     return res
       .status(200)
-      .json({ message: "User logged in Successfully.", data: id });
+      .json({ message: "User logged in Successfully.", data: token._id});
   } catch (error) {
     console.log(error);
     return res
@@ -80,10 +44,11 @@ router.post("/signup", async (req, res) => {
     return res.status(400).json({ message: "All the fields are required!" });
 
   try {
-    const existingUser = await db
+    const user = await db
       .collection("users")
       .findOne({ email: email.toLowerCase() });
-    if (existingUser) return res.status(400).json("User already exists!");
+    if (user) return res.status(400).json("User already exists!");
+    
     const newUser = {
       firstname,
       lastname,

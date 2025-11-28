@@ -1,30 +1,13 @@
 import express from "express";
 import serveFavicon from "serve-favicon";
 import cors from "cors";
-import { writeFile } from "fs/promises";
 
 import fileRoutes from "./routes/fileRoutes.js";
 import directoryRoutes from "./routes/directoryRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
-import { validateToken } from "./utils/createAndValidateToken.js";
+import { validateToken } from "./middlewares/validateToken.js";
 import { connectDb } from "./utils/db.js";
 import { Db } from "mongodb";
-
-let { default: bin } = await import("./DBs/bins.db.json", {
-  with: { type: "json" },
-});
-let { default: directoriesDb } = await import("./DBs/directories.db.json", {
-  with: { type: "json" },
-});
-let { default: filesDb } = await import("./DBs/files.db.json", {
-  with: { type: "json" },
-});
-let { default: tokens } = await import("./DBs/tokens.db.json", {
-  with: { type: "json" },
-});
-let { default: userDb } = await import("./DBs/users.db.json", {
-  with: { type: "json" },
-});
 
 try {
   const db = await connectDb();
@@ -61,122 +44,138 @@ try {
 
   app.use("/auth", authRoutes);
 
-  app.use("/storage", validateToken("uid"), async (req, res) => {
-    const { _id: userId } = req.user;
-    const root = await db
-      .collection("directories")
-      .findOne({ userId, name: "root", parentId: null });
-
-    const directories = await db
-      .collection("directories")
-      .find(
-        { userId, parentId: root._id ,isDeleted:false},
-        {
-          projection: {
-            _id:1,
-            name: 1,
-          },
-        }
-      )
-      .toArray();
-
-    const files = await db
-      .collection("files")
-      .find(
-        { userId, parentId: root._id ,isDeleted:false},
-        {
-          projection: {
-            originalname: 1,
-            size: 1,
-            mimeType: 1,
-            createdAt: 1,
-            modifiedAt: 1,
-            _id: 1,
-          },
-        }
-      )
-      .toArray();
-
-    const data = {
-      _id: root._id,
-      name: root.name,
-      directories,
-      files,
-    };
-
-    res.status(200).json({
-      message: "directory found!",
-      data, //serving root directory
-    });
-  });
-
-  app.use("/bin", validateToken("uid"), async (req, res) => {
+  app.use("/storage", validateToken, async (req, res) => {
     const { _id: userId } = req.user;
 
-    const directories = await db
-      .collection("directories")
-      .find(
-        { userId, parentId: bin._id },
-        {
-          projection: {
-            name: 1,
-          },
-        }
-      )
-      .toArray();
+    try {
+      const directories = await db
+        .collection("directories")
+        .find(
+          { userId, parentId: null, isDeleted: false },
+          {
+            projection: {
+              _id: 1,
+              name: 1,
+            },
+          }
+        )
+        .toArray();
 
-    const files = await db
-      .collection("files")
-      .find(
-        { userId, parentId: bin._id },
-        {
-          projection: {
-            originalname: 1,
-            size: 1,
-            mimeType: 1,
-            createdAt: 1,
-            modifiedAt: 1,
-            _id: 1,
-          },
-        }
-      )
-      .toArray();
+      const files = await db
+        .collection("files")
+        .find(
+          { userId, parentId: null, isDeleted: false },
+          {
+            projection: {
+              originalname: 1,
+              size: 1,
+              mimeType: 1,
+              createdAt: 1,
+              modifiedAt: 1,
+              _id: 1,
+            },
+          }
+        )
+        .toArray();
 
-    const data = {
-      _id: bin._id,
-      name: bin.name,
-      directories,
-      files,
-    };
+      const root = {
+        name: "root",
+        directories,
+        files,
+      };
 
-    res.status(200).json({
-      message: "bin found!",
-      data, //serving bin directory
-    });
+      res.status(200).json({
+        message: "directory found!",
+        data: root, //serving root directory
+      });
+    } catch (error) {
+      res.status(500).json({
+        message: "Something went wrong!",
+        data: null,
+      });
+    }
   });
 
-  app.use("/files", validateToken("uid"), fileRoutes);
+  app.use("/bin", validateToken, async (req, res) => {
+    const { _id: userId } = req.user;
+    try {
+      const directories = await db
+        .collection("directories")
+        .find(
+          { userId: userId, isDeleted: true, deletedBy: "user" },
+          {
+            projection: {
+              _id: 1,
+              name: 1,
+            },
+          }
+        )
+        .toArray();
 
-  app.use("/dirs", validateToken("uid"), directoryRoutes);
+      const files = await db
+        .collection("files")
+        .find(
+          { userId: userId, isDeleted: true, deletedBy: "user" },
+          {
+            projection: {
+              originalname: 1,
+              size: 1,
+              mimeType: 1,
+              createdAt: 1,
+              modifiedAt: 1,
+              _id: 1,
+            },
+          }
+        )
+        .toArray();
 
-  app.delete("/deleteProfile", validateToken("uid"), async (req, res) => {
+      const bin = {
+        name: "bin",
+        directories,
+        files,
+      };
+
+      res.status(200).json({
+        message: "bin found!",
+        data: bin, //serving bin directory
+      });
+    } catch (error) {
+      res.status(500).json({
+        message: "Something went wrong!",
+        data: null,
+      });
+    }
+  });
+
+  app.use("/files", validateToken, fileRoutes);
+
+  app.use("/dirs", validateToken, directoryRoutes);
+
+  app.delete("/deleteProfile", validateToken, async (req, res) => {
     const db = req.db;
     const userId = req.user._id;
 
-    await Promise.all([
-      db.collection("directories").deleteMany({ userId }),
-      db.collection("users").deleteOne({ _id:userId }),
-      db.collection("files").deleteMany({ userId }),
-      // writeFile("./DBs/tokens.db.json", JSON.stringify(tokens)),
-    ]);
+    try {
+      const op = await Promise.all([
+        db.collection("directories").deleteMany({ userId: userId }),
+        db.collection("users").deleteOne({ _id: userId }),
+        db.collection("files").deleteMany({ userId: userId }),
+        db.collection("tokens").deleteMany({ userId: userId }),
+      ]);
 
-    return res
-      .setHeader(
-        "Set-Cookie",
-        `uid=; expires=${new Date(new Date() - 3600 * 1000).toUTCString()}`
-      )
-      .status(200)
-      .json("Account deleted successfully.");
+      return res
+        .setHeader(
+          "Set-Cookie",
+          `uid=; expires=${new Date(new Date() - 3600 * 1000).toUTCString()}`
+        )
+        .status(200)
+        .json({ message: "Account deleted successfully.", data: op });
+    } catch (error) {
+      res.status(500).json({
+        message: "Something went wrong!",
+        data: null,
+      });
+    }
   });
 
   app.listen(port, () => {

@@ -1,74 +1,26 @@
-import { writeFile } from "fs/promises";
-
-let { default: tokens } = await import("../DBs/tokens.db.json", {
-  with: { type: "json" },
-});
-const { default: userDb } = await import("../DBs/users.db.json", {
-  with: { type: "json" },
-});
+import { ObjectId } from "mongodb";
+import { connectDb } from "../utils/db.js";
 
 const createToken = async (userId) => {
   try {
-    let token = await validate(userId);
+    const db = await connectDb();
+    await db.collection("tokens").deleteOne({ userId: userId });
 
-    const expiry = new Date().getTime() + 3600 * 1000;
-    if (!token) {
-      token = {
-        id: crypto.randomUUID(),
-        userId,
-        expiry,
-        exp_time: new Date(expiry).toLocaleString(),
-      };
-      tokens.push(token);
-      await writeFile("./DBs/tokens.db.json", JSON.stringify(tokens));
-    }
-    return token;
+    const expiry = new Date().getTime() + 24 * 3600 * 1000;
+    const payload = {
+      secrete: crypto.randomUUID(),
+      expiry,
+      userId,
+      exp_time: new Date(expiry).toLocaleString(),
+    };
+
+    const { insertedId } = await db.collection("tokens").insertOne(payload);
+    payload._id = insertedId;
+    return payload;
   } catch (error) {
     console.log("create token error", error);
-    return error;
-  }
-};
-
-const validateToken = (cookieName) => {
-  return async (req, res, next) => {
-    const uid = req.cookies[cookieName];
-    if (!uid)
-      return res
-        .status(400)
-        .json("Cookies not found! Relogin with credentials.");
-
-    const payload = tokens.find((item) => item.id === uid);
-    if (!payload)
-      return res.status(400).json("Invalid Cookies! Relogin with credentials.");
-
-    const isValidPayload = await validate(payload.userId);
-    if (isValidPayload) {
-      const user = userDb.find((user) => user.id === isValidPayload.userId);
-      req.user = user;
-      next();
-    } else
-      return res.status(302).json("Cookies expired! Relogin with credentials.");
-  };
-};
-
-const validate = async (userId) => {
-  const token = tokens.find((item) => item.userId === userId);
-  if (!token) return null;
-  return token.expiry - new Date().getTime() > 1
-    ? token
-    : await removeInvalidToken(userId);
-};
-
-const removeInvalidToken = async (userId) => {
-  const validTokens = tokens.filter((item) => item.userId !== userId);
-  console.log(validTokens);
-  tokens = validTokens;
-  try {
-    await writeFile("./DBs/tokens.db.json", JSON.stringify(tokens));
     return null;
-  } catch (error) {
-    return error;
   }
 };
 
-export { validateToken, createToken };
+export { createToken };

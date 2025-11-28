@@ -1,18 +1,62 @@
-import { writeFile } from "fs/promises";
-import { env } from "process";
-import { removeDirectory, removeFile } from "../utils/removeDirectory.js";
+import path from "path";
+import { recursiveRemove } from "../utils/removeDirectory.js";
 import { restoreDirectory, restoreFile } from "../utils/restoreFile.js";
 import { Db, ObjectId } from "mongodb";
 
-let { default: directoriesDb } = await import("../DBs/directories.db.json", {
-  with: { type: "json" },
-});
-let { default: filesDb } = await import("../DBs/files.db.json", {
-  with: { type: "json" },
-});
-let { default: bin } = await import("../DBs/bins.db.json", {
-  with: { type: "json" },
-});
+const handleCreateFile = async (req, res) => {
+  const db = req.db;
+  const parent = req.parentDir;
+  const file = req.file;
+  const userId = req.user._id;
+
+  if (!file)
+    return res
+      .status(400)
+      .json({ message: "no file in the request!", data: null });
+
+  try {
+    file.userId = userId;
+    file.parentId = parent?._id || null;
+    file.parentName = parent?.name || "";
+    file.isDeleted = false;
+
+    const { insertedId: id } = await db.collection("files").insertOne(file);
+
+    return res
+      .status(201)
+      .json({ message: "file uploaded successfull.", data: id });
+  } catch (error) {
+    console.log(error.message);
+    return res
+      .status(500)
+      .json({ message: "Internal server error.", data: null });
+  }
+};
+
+const handleCreateDirectory = async (req, res) => {
+  const db = req.db;
+  const parent = req.parentDir;
+  const userId = req.user._id;
+
+  try {
+    const { insertedId: id } = await db.collection("directories").insertOne({
+      name: req.body.name ? req.body.name : "Untitled Folder",
+      parentId: parent?._id || null,
+      parentName: parent?.name || "",
+      userId: userId,
+      isDeleted: false,
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+    });
+
+    return res.status(201).json({ message: "Folder created.", data: id });
+  } catch (error) {
+    console.log(error.message);
+    return res
+      .status(500)
+      .json({ message: "Internal server error.", data: null });
+  }
+};
 
 const handleGetDirectories = async (req, res) => {
   try {
@@ -21,9 +65,9 @@ const handleGetDirectories = async (req, res) => {
 
     const directory = await db
       .collection("directories")
-      .findOne({ _id: new ObjectId(req.params.id), userId });
+      .findOne({ _id: new ObjectId(req.params.id), userId, isDeleted: false });
 
-    if (!directory || directory.isDeleted)
+    if (!directory)
       return res.status(404).json({
         message: "directory not found! May be it is moved to bin.",
         data: null,
@@ -92,88 +136,21 @@ const handleGetFiles = async (req, res) => {
       });
 
     const path = `C:\\Subham_dir\\ProCodrr-NodeJS\\Storage-App-Express\\backend\\${file.path}`;
-    return res.sendFile(path, (error) => console.log(error));
+
+    if (file.mimetype !== "video/mp4")
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${file.originalname}"`
+      );
+    return res.sendFile(path, (error) =>
+      error
+        ? console.log({ [error.name]: error.message })
+        : console.log("file delivered gracefully..✨")
+    );
   } catch (error) {
     return res
       .status(500)
       .json({ message: "Internal server error", data: null });
-  }
-};
-
-const handleCreateFile = async (req, res) => {
-  const db = req.db;
-  const dirId = req.params.dirId;
-  const userId = req.user._id;
-  const file = req.file;
-
-  if (!file)
-    return res
-      .status(400)
-      .json({ message: "no file in the request!", data: null });
-
-  try {
-    const parentDirectory = dirId
-      ? await db
-          .collection("directories")
-          .findOne({ userId, _id: new ObjectId(dirId) })
-      : await db.collection("directories").findOne({ userId, parentId: null });
-
-    if (!parentDirectory || parentDirectory.isDeleted)
-      return res
-        .status(404)
-        .json({ message: "Directory Not Found!", data: null });
-
-    file.userId = userId;
-    file.parentId = parentDirectory._id;
-    file.parentName = parentDirectory.name;
-    file.isDeleted = false;
-
-    const { insertedId: id } = await db.collection("files").insertOne(file);
-
-    return res
-      .status(201)
-      .json({ message: "file uploaded successfull.", data: id });
-  } catch (error) {
-    console.log(error.message);
-    return res
-      .status(500)
-      .json({ message: "Internal server error.", data: null });
-  }
-};
-
-const handleCreateDirectory = async (req, res) => {
-  const db = req.db;
-  const dirId = req.params.dirId;
-  const userId = req.user._id;
-
-  try {
-    const parentDirectory = dirId
-      ? await db
-          .collection("directories")
-          .findOne({ userId, _id: new ObjectId(dirId) })
-      : await db.collection("directories").findOne({ userId, parentId: null });
-
-    if (!parentDirectory || parentDirectory.isDeleted)
-      return res
-        .status(404)
-        .json({ message: "Directory Not Found!", data: null });
-
-    const { insertedId: id } = await db.collection("directories").insertOne({
-      name: req.body.name ? req.body.name : "Untitled Folder",
-      parentId: parentDirectory._id,
-      parentName: parentDirectory.name,
-      userId: userId,
-      isDeleted: false,
-      createdAt: new Date().toISOString(),
-      modifiedAt: new Date().toISOString(),
-    });
-
-    return res.status(201).json({ message: "Folder created.", data: id });
-  } catch (error) {
-    console.log(error.message);
-    return res
-      .status(500)
-      .json({ message: "Internal server error.", data: null });
   }
 };
 
@@ -182,17 +159,36 @@ const handleUpdateFile = async (req, res) => {
   const db = req.db;
   const userId = req.user._id;
 
-  if (!newname || newname.length < 0)
+  if (!newname)
     return res.status(400).json({
       message: "name should be one or more than one characters long!",
     });
 
   try {
     //changing filename if exists in filesDb
+    const file = await db.collection("files").findOne({
+      _id: new ObjectId(req.params.id),
+      userId: userId,
+      isDeleted: false,
+    });
+    if (!file)
+      return res.status(404).json({
+        message: "file not found! May be it is moved to bin.",
+        data: null,
+      });
+
+    const currExt = path.extname(file.originalname);
+    const reqExt = path.extname(newname);
+
+    const finalName =
+      currExt === reqExt
+        ? newname
+        : `${path.basename(newname, reqExt)}${currExt}`;
+
     const update = await db.collection("files").updateOne(
-      { _id: new ObjectId(req.params.id), userId, isDeleted: false },
+      { _id: new ObjectId(req.params.id), userId: userId, isDeleted: false },
       {
-        $set: { originalname: newname, modifiedAt: new Date().toISOString() },
+        $set: { originalname: finalName, modifiedAt: new Date().toISOString() },
       }
     );
 
@@ -211,14 +207,25 @@ const handleUpdateDirectory = async (req, res) => {
   const db = req.db;
   const userId = req.user._id;
 
-  if (!newname || newname.length < 0)
+  if (!newname)
     return res.status(400).json({
       message: "bad request! newname should pass on with body.",
     });
 
   try {
+    const dir = await db.collection("directories").findOne({
+      _id: new ObjectId(req.params.id),
+      userId: userId,
+      isDeleted: false,
+    });
+    if (!dir)
+      return res.status(404).json({
+        message: "folder not found! May be it is moved to bin.",
+        data: null,
+      });
+
     const update = await db.collection("directories").updateOne(
-      { _id: new ObjectId(req.params.id), userId },
+      { _id: new ObjectId(req.params.id), userId, isDeleted: false },
       {
         $set: { name: newname, modifiedAt: new Date().toISOString() },
       }
@@ -234,15 +241,19 @@ const handleUpdateDirectory = async (req, res) => {
 };
 
 const handleMoveToBinFile = async (req, res) => {
-  // console.log(req.originalUrl)
   const db = req.db;
   const userId = req.user._id;
- 
 
   try {
-    const file = await db
-      .collection("files")
-      .findOne({ _id: new ObjectId(req.params.id), userId, isDeleted: false });
+    const file = await db.collection("files").findOne(
+      {
+        _id: new ObjectId(req.params.id),
+        userId,
+        deletedBy: { $exists: false },
+      },
+      { projection: { _id: 1 } }
+    );
+    console.log(file);
 
     if (!file)
       return res.status(404).json({
@@ -250,23 +261,18 @@ const handleMoveToBinFile = async (req, res) => {
         data: null,
       });
 
-    await db.collection("files").updateOne(
-      { _id: new ObjectId(req.params.id), userId, isDeleted: false },
-      {
-        $set: { isDeleted: true, modifiedAt: new Date().toISOString() },
-      }
-    );
-
-    await db.collection("bins").updateOne(
-      { userId: userId },
+    const op = await db.collection("files").updateOne(
+      { _id: file._id },
       {
         $set: {
-          files: [...bin.files, { _id: file._id, name: file.originalname }],
+          isDeleted: true,
+          modifiedAt: new Date().toISOString(),
+          deletedBy: "user",
         },
       }
     );
 
-    return res.status(200).json({ message: "File moved to bin.", data: {} });
+    return res.status(200).json({ message: "File moved to bin.", data: op });
   } catch (error) {
     console.log({ error });
     return res
@@ -276,21 +282,46 @@ const handleMoveToBinFile = async (req, res) => {
 };
 
 const handleMoveToBinDirectory = async (req, res) => {
-  const userContent = directoriesDb.find(
-    (item) => item.id === req.user.id
-  ).content;
-
-  const directory = userContent.find((item) => item.id === req.params.id);
-  if (!directory)
-    return res
-      .status(404)
-      .json({ message: "Folder not found !! try with a valid id." });
   try {
-    await removeDirectory(req.user.id, directory);
-    return res.status(200).json({ message: "Folder moved to bin." });
+    const db = req.db;
+    const userId = req.user._id;
+
+    const dir = await db.collection("directories").findOne(
+      {
+        _id: new ObjectId(req.params.id),
+        userId: userId,
+        deletedBy: { $exists: false },
+      },
+      { projection: { _id: 1 } }
+    );
+
+    if (!dir)
+      return res.status(404).json({
+        message: "directory not found! May be it is moved to bin.",
+        data: null,
+      });
+
+    const recRm = await recursiveRemove(db, dir._id, userId);
+
+    const rm = await db.collection("directories").updateOne(
+      { _id: dir._id },
+      {
+        $set: {
+          isDeleted: true,
+          modifiedAt: new Date().toISOString(),
+          deletedBy: "user",
+        },
+      }
+    );
+
+    return res
+      .status(200)
+      .json({ message: "Folder moved to bin.", data: { rm, recRm } });
   } catch (error) {
     console.log(error);
-    return res.status(500).json({ message: "Internal server error." });
+    return res
+      .status(500)
+      .json({ message: "Internal server error.", data: null });
   }
 };
 
@@ -299,40 +330,66 @@ const handleRestoreFile = async (req, res) => {
   const userId = req.user._id;
 
   try {
-  const file = await db
-      .collection("files")
-      .findOne({ _id: new ObjectId(req.params.id), userId, isDeleted: false });
+    const file = await db.collection("files").findOne(
+      {
+        _id: new ObjectId(req.params.id),
+        userId: userId,
+        isDeleted: true,
+        deletedBy: "user",
+      },
+      { projection: { _id: 1, originalname: 1, parentId: 1, parentName: 1 } }
+    );
 
     if (!file)
       return res.status(404).json({
-        message: "file not found! May be it is moved to bin.",
+        message: "file not found!",
         data: null,
       });
 
-    await restoreFile(db, userId, file);
-    return res.status(200).json({ message: "file is restored to its path." });
+    const op = await restoreFile(db, userId, file);
+    console.log(op);
+
+    return res
+      .status(200)
+      .json({ message: "file restored successfully.", data: op });
   } catch (error) {
     console.log(error);
-    return res.status(500).json({ message: "Internal server error." });
+    return res
+      .status(500)
+      .json({ message: "Internal server error.", data: null });
   }
 };
 
 const handleRestoreDirectory = async (req, res) => {
-  const directory = bin
-    .find((item) => item.id === req.user.id)
-    .content[0].directories.find((item) => item.id === req.params.id);
-
-  if (!directory)
-    return res
-      .status(404)
-      .json({ message: "Folder not found !! try with a valid id." });
-
   try {
-    await restoreDirectory(req.user.id, directory.id);
-    return res.status(200).json({ message: "Folder restored successfully." });
+    const db = req.db;
+    const userId = req.user._id;
+
+    const dir = await db.collection("directories").findOne(
+      {
+        _id: new ObjectId(req.params.id),
+        userId: userId,
+        deletedBy: "user",
+      },
+      { projection: { _id: 1, name: 1, parentId: 1, parentName: 1 } }
+    );
+
+    if (!dir)
+      return res.status(404).json({
+        message: "directory not found!",
+        data: null,
+      });
+
+    const op = await restoreDirectory(db, userId, dir);
+
+    return res
+      .status(200)
+      .json({ message: "Folder restored successfully.", data: op });
   } catch (error) {
     console.log(error);
-    return res.status(500).json({ message: "Internal server error." });
+    return res
+      .status(500)
+      .json({ message: "Internal server error.", data: null });
   }
 };
 
