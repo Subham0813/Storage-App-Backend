@@ -1,124 +1,70 @@
-import { writeFile } from "fs/promises";
+// import { Db } from "mongodb/lib/db";
+import { ObjectId } from "mongodb";
 
-let { default: directoriesDb } = await import(
-  "../DBs/directories.db.json",
-  { with: { type: "json" } }
-);
-let { default: filesDb } = await import("../DBs/files.db.json", {
-  with: { type: "json" },
-});
-let { default: bin } = await import("../DBs/bins.db.json", {
-  with: { type: "json" },
-});
-
-let dbIndex, userContent, binContent;
-
-const findItemById = (arr, id) => arr.find((a) => a.id === id);
-const removeItemById = (arr, id) => arr.filter((a) => a.id !== id);
-const findIndexById = (arr, id) => arr.findIndex((a) => a.id === id);
-
-const recursiveRemove = async (directory, visited = new Set()) => {
+const recursiveRemove = async (
+  db,
+  dirId,
+  userId,
+  visited = new Set(),
+  result = new Map()
+) => {
   try {
-    if (!directory || visited.has(directory.id)) return;
-    visited.add(directory.id);
+    if (!dirId || visited.has(dirId)) return null;
+    visited.add(dirId);
 
-    const directories = directory.directories || [];
-    const files = directory.files || [];
-
-    for (const file of files) {
-      const fileInfo = findItemById(filesDb, file.id);
-      fileInfo.destination = "./bin";
-    }
-    await writeFile("./DBs/files.db.json", JSON.stringify(filesDb));
-
-    const binIdx = findIndexById(binContent, directory.id);
-    if (binIdx === -1) binContent.push(directory);
-    else {
-      binContent[binIdx].directories.push(...directory.directories);
-      binContent[binIdx].files.push(...directory.files);
-    }
-
-    for (const directory of directories) {
-      const childDirectory = findItemById(userContent, directory.id);
-      await recursiveRemove(childDirectory, visited);
-      userContent = removeItemById(userContent, childDirectory.id);
-    }
-
-    await writeFile("./DBs/bins.db.json", JSON.stringify(bin));
-  } catch (error) {
-    // console.log(error);
-    return error;
-  }
-};
-
-const removeDirectory = async (userId, dir) => {
-  try {
-    dbIndex = findIndexById(directoriesDb, userId);
-    userContent = directoriesDb[dbIndex].content;
-    binContent = bin.find((item) => item.id === userId).content;
-
-    const { id, name, parentId, parentName } = dir;
-
-    await recursiveRemove(dir);
-    userContent = removeItemById(userContent, id);
-
-    const parentIdx = findIndexById(userContent, parentId);
-    if (parentIdx !== -1) {
-      userContent[parentIdx].directories = userContent[
-        parentIdx
-      ].directories.filter((d) => id !== d.id);
-    }
-
-    directoriesDb[dbIndex].content = userContent;
-    await writeFile(
-      "./DBs/directories.db.json",
-      JSON.stringify(directoriesDb)
+    //all files of the directory should be deleted
+    const fileUpdate = await db.collection("files").updateMany(
+      { parentId: dirId, userId: userId, isDeleted: false },
+      {
+        $set: {
+          isDeleted: true,
+          modifiedAt: new Date().toISOString(),
+          deletedBy: "process",
+        },
+      }
     );
 
-    binContent[0].directories.push({ id, name, parentId, parentName });
-    await writeFile("./DBs/bins.db.json", JSON.stringify(bin));
-  } catch (error) {
-    // console.log(error);
-    return error;
-  }
-};
+    //all child-directories of the directory should be deleted
+    const children = await db
+      .collection("directories")
+      .find(
+        { parentId: dirId, userId: userId, isDeleted: false },
+        {
+          projection: {
+            _id: 1,
+          },
+        }
+      )
+      .toArray();
 
-const removeFile = async (userId, file) => {
-  try {
-    const binIdx = findIndexById(bin, userId);
-    binContent = bin[binIdx].content[0];
-    userContent = directoriesDb.find((item) => item.id === userId).content;
+    const dirUpdt = new Map();
 
-    const parentIdx = findIndexById(userContent, file.parentId);
-    if (parentIdx !== -1)
-      userContent[parentIdx].files = removeItemById(
-        userContent[parentIdx].files,
-        file.id
+    for (const child of children) {
+      const recRm = await recursiveRemove(
+        db,
+        child._id,
+        userId,
+        visited,
+        result
       );
-
-    const fileIdx = findIndexById(filesDb, file.id);
-    if (fileIdx !== -1) filesDb[fileIdx].destination = "./bin";
-
-    binContent.files.push({
-      id: file.id,
-      name: file.originalname,
-      parentId: file.parentId,
-      parentName: userContent[parentIdx].name,
-    });
-
-    bin[binIdx].content[0] = binContent;
-
-    await Promise.all([
-      writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
-      writeFile("./DBs/bins.db.json", JSON.stringify(bin)),
-      writeFile(
-        "./DBs/directories.db.json",
-        JSON.stringify(directoriesDb)
-      ),
-    ]);
+      const updt = await db.collection("directories").updateOne(
+        { _id: child._id },
+        {
+          $set: {
+            isDeleted: true,
+            modifiedAt: new Date().toISOString(),
+            deletedBy: "process",
+          },
+        }
+      );
+      dirUpdt.set(child._id, { recrm: recRm, updt: updt });
+    }
+    result.set(dirId, { fileUpdate: fileUpdate, dirUpdt: dirUpdt });
+    return result;
   } catch (error) {
+    console.log({ error });
     return error;
   }
 };
 
-export { removeDirectory, removeFile };
+export { recursiveRemove };

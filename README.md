@@ -67,5 +67,5 @@ npm start
 ```
 
 # 📌 Next Steps
-- Db integration (MongoDb/PostgreSql)
+- Db integration (MongoDb/PostgreSql) [ongoing]
 

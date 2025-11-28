@@ -5,8 +5,9 @@ import {
   handleCreateDirectory,
   handleUpdateDirectory,
   handleMoveToBinDirectory,
-  handleRestoreDirectory
+  handleRestoreDirectory,
 } from "../controllers/apiControllers.js";
+import { validateParent } from "../middlewares/validateParentId.js";
 
 const router = Router();
 
@@ -15,7 +16,7 @@ router.get("/:id", handleGetDirectories);
 
 //create
 router.post("/", handleCreateDirectory);
-router.post("/:dirId", handleCreateDirectory);
+router.post("/:dirId", validateParent, handleCreateDirectory);
 
 //update
 router.patch("/:id", handleUpdateDirectory);

@@ -1,112 +1,70 @@
 import { Router } from "express";
-import { writeFile } from "fs/promises";
 import { createToken } from "../utils/createAndValidateToken.js";
-
-let { default: bin } = await import("../DBs/bins.db.json", {
-  with: { type: "json" },
-});
-let { default: directoriesDb } = await import("../DBs/directories.db.json", {
-  with: { type: "json" },
-});
-let { default: userDb } = await import("../DBs/users.db.json", {
-  with: { type: "json" },
-});
+import { Db } from "mongodb";
 
 const router = Router();
 
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
+  const db = req.db;
+
   if (!email || !password)
     return res.status(400).json({ message: "All the fields are required!" });
 
-  const user = userDb.find((item) => item.email === email.toLowerCase());
-  if (!user || user.password !== password)
-    return res.status(400).json({ message: "Invalid Cradentials!!" });
+  const user = await db
+    .collection("users")
+    .findOne({ email: email.toLowerCase(), password: password });
 
-  const existingDb = directoriesDb.find((item) => item.id === user.id);
-  const existingBin = bin.find((item) => item.id === user.id);
-
-  if (!existingDb) {
-    const newUserDb = {
-      id: user.id,
-      content: [
-        {
-          id: null,
-          name: "root",
-          directories: [],
-          files: [],
-        },
-      ],
-    };
-
-    directoriesDb.push(newUserDb);
-  }
-  if (!existingBin) {
-    const newUserBin = {
-      id: user.id,
-      content: [
-        {
-          id: null,
-          name: "bin",
-          directories: [],
-          files: [],
-        },
-      ],
-    };
-
-    bin.push(newUserBin);
-  }
+  if (!user)
+    return res.status(404).json({ message: "Invalid Cradentials!!" });
 
   try {
-    const token = await createToken(user.id);
-
-    if (!existingDb)
-      await writeFile(
-        "./DBs/directories.db.json",
-        JSON.stringify(directoriesDb)
-      );
-    await writeFile("./DBs/bins.db.json", JSON.stringify(bin));
-
+    const token = await createToken(user._id);
+    res.cookie("uid", token.secrete, {
+      httpOnly: true,
+      sameSite: "lax",
+      expires: new Date(token.expiry),
+      path: "/",
+    });
     return res
-      .setHeader("Set-Cookie", [
-        `uid=${token.id}; HttpOnly; Expires=${new Date(
-          token.expiry
-        ).toUTCString()}`,
-      ])
-      .status(302)
-      .json("User logged in Successfully.");
+      .status(200)
+      .json({ message: "User logged in Successfully.", data: token._id});
   } catch (error) {
     console.log(error);
-    return res.status(500).json("Somthing went wrong!");
+    return res
+      .status(500)
+      .json({ message: "Somthing went wrong!", data: null });
   }
 });
 
 router.post("/signup", async (req, res) => {
-  // console.log(req.headers);
+  const db = req.db;
   const { firstname, lastname, email, password } = req.body;
   if (!firstname || !lastname || !email || !password)
     return res.status(400).json({ message: "All the fields are required!" });
 
-  const userExists = userDb.find((item) => item.email === email);
-  if (userExists) return res.status(400).json("User already exists!");
-
-  const newUser = {
-    id: crypto.randomUUID(),
-    firstname,
-    lastname,
-    email: email.toLowerCase(),
-    password,
-  };
-
-  userDb.push(newUser);
-
   try {
-    await writeFile("./DBs/users.db.json", JSON.stringify(userDb));
-    return res.status(302).json("Sign up successfull.");
+    const user = await db
+      .collection("users")
+      .findOne({ email: email.toLowerCase() });
+    if (user) return res.status(400).json("User already exists!");
+    
+    const newUser = {
+      firstname,
+      lastname,
+      email: email.toLowerCase(),
+      password, //rn we're not using an hashing for password
+    };
+    const { insertedId } = await db.collection("users").insertOne(newUser);
+    return res
+      .status(302)
+      .json({ message: "Sign up successfull", data: insertedId });
     // return res.status(302).redirect("/login"); // .redirect(...)  === .setHeader('Location', 'http://localhost:4000/login').end()
   } catch (error) {
     console.log(error.message);
-    return res.status(500).json("Somthing went wrong!");
+    return res
+      .status(500)
+      .json({ message: "Somthing went wrong!", data: null });
   }
 });
 
@@ -117,7 +75,7 @@ router.post("/logout", (req, res) => {
       `uid=; expires=${new Date(new Date() - 3600 * 1000).toUTCString()}`
     )
     .status(200)
-    .json("User logged out Successfully.");
+    .json({ message: "User logged out Successfully.", data: null });
 });
 
 export default router;

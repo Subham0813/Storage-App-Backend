@@ -1,205 +1,176 @@
-import { writeFile } from "fs/promises";
-
-let { default: directoriesDb } = await import(
-  "../DBs/directories.db.json",
-  { with: { type: "json" } }
-);
-let { default: filesDb } = await import("../DBs/files.db.json", {
-  with: { type: "json" },
-});
-let { default: bin } = await import("../DBs/bins.db.json", {
-  with: { type: "json" },
-});
-
-let userContent, binContent;
-const findItemById = (arr, id) => arr.find((a) => a.id === id);
-const removeItemById = (arr, id) => arr.filter((a) => a.id !== id);
-const changeDestination = (id) => {
-  const idx = filesDb.findIndex((f) => f.id === id);
-  filesDb[idx].destination = "./RootDirectory";
-};
-
-const getDummyParent = (item, isFile) => {
+const getDummyParent = (item, userId) => {
   const dummy = {
-    id: item.parentId,
-    name: item.parentName,
+    name: `${item.parentName}-restored`,
     parentId: null,
     parentName: null,
-    directories: isFile
-      ? []
-      : [
-          {
-            id: item.id,
-            name: item.name,
-            parent_id: item.parentId,
-            parentName: item.parentName,
-          },
-        ],
-    files: isFile
-      ? [
-          {
-            id: item.id,
-            name: item.name,
-            parent_id: item.parentId,
-            parentName: item.parentName,
-          },
-        ]
-      : [],
+    isDeleted: false,
+    userId,
+    createdAt: new Date().toISOString(),
+    modifiedAt: new Date().toISOString(),
   };
   return dummy;
 };
 
-const pushHelper = async (isFile, parentDir, item) => {
-
-  if (isFile) {
-    const idx = parentDir.files.findIndex((p) => p.id === item.id);
-    if (idx === -1) parentDir.files.push({ id: item.id, name: item.name });
-  } else {
-    const idx = parentDir.directories.findIndex((p) => p.id === item.id);
-    if (idx === -1)
-      parentDir.directories.push({ id: item.id, name: item.name });
-  }
-
-  await writeFile(
-    "./DBs/directories.db.json",
-    JSON.stringify(directoriesDb)
-  );
-}
-
-const searchAndPushToParentDir = async (item, isFile, visited = new Set()) => {
+const restoreParentHelper = async (
+  db,
+  userId,
+  item,
+  type = "dir",
+  visited = new Set()
+) => {
   try {
-    if (item.id === undefined || item.parentId === undefined)
-      return new Error("Error: id can not be undefined");
-
-    if (visited.has(item.parentId)) return;
-    if (item.parentId === null) {
-      const parentDir = userContent[0]
-      await pushHelper(isFile,parentDir,item)
-      return;
-    }
-
+    if (visited.has(item.parentId) || item.parentId === null) return;
     visited.add(item.parentId);
 
-    let parentInDb = findItemById(userContent, item.parentId);
-    if (!parentInDb) {
-      let parentInBin = findItemById(binContent, item.parentId);
-      const parentDummy = getDummyParent(item, isFile);
+    const parent = await db
+      .collection("directories")
+      .findOne({ _id: item.parentId, userId: userId, isDeleted: false });
 
-      if (!parentInBin) {
-        userContent[0].directories.push({
-          id: parentDummy.id,
-          name: parentDummy.name,
-        });
-      } else {
-        parentDummy.parentId = parentInBin.parentId;
-        parentDummy.parentName = parentInBin.parentName;
-      }
+    if (parent) return;
 
-      userContent.push(parentDummy);
-      await writeFile(
-        "./DBs/directories.db.json",
-        JSON.stringify(directoriesDb)
+    const deletedParent = await db.collection("directories").findOne({
+      _id: item.parentId,
+      userId: userId,
+      isDeleted: true,
+    });
+
+    if (deletedParent) {
+      await restoreParentHelper(db, userId, deletedParent, visited, result);
+
+      await db.collection("directories").updateOne(
+        { _id: deletedParent._id },
+        {
+          $set: { isDeleted: false, modifiedAt: new Date().toISOString() },
+        }
       );
-      return await searchAndPushToParentDir(parentInBin, false, visited);
     } else {
-      await pushHelper(isFile,parentInDb,item)
+      const parentDummy = getDummyParent(item, userId);
+
+      const { insertedId: parentId } = await db
+        .collection("directories")
+        .insertOne(parentDummy);
+
+      if (type === "file")
+        await db
+          .collection("files")
+          .updateOne({ _id: item._id }, { $set: { parentId: parentId } });
+      else
+        await db
+          .collection("directories")
+          .updateOne({ _id: item._id }, { $set: { parentId: parentId } });
     }
-    return;
   } catch (error) {
     return error;
   }
 };
 
-const restoreFile = async (userId, item) => {
+const restoreChildrenFilesHelper = async (db, userId, dir) => {
   try {
-    const dbIndex = directoriesDb.findIndex((item) => item.id === userId);
-    userContent = directoriesDb[dbIndex].content;
-    binContent = bin.find((item) => item.id === userId).content;
+    const files = await db //1. get all the files and modify of the dir [not deleted by user]
+      .collection("files")
+      .find(
+        {
+          parentId: dir._id,
+          userId: userId,
+          isDeleted: true,
+          $or: [
+            { deletedBy: { $exists: false } }, //deletedBy property doesn't exists at all -> $exists
+            { deletedBy: { $ne: "user" } }, //deletedBy not equals to "user" -> $ne
+          ],
+        },
+        { projection: { _id: 1 } }
+      )
+      .toArray();
 
-    if (!userContent || !binContent)
-      return new Error("Error : userId not found");
+    for (const file of files) {
+      await db.collection("files").updateOne(
+        { _id: file._id },
+        {
+          $set: { isDeleted: false, modifiedAt: new Date().toISOString() },
+          $unset: { deletedBy: "" },
+        }
+      );
+    }
+  } catch (error) {
+    return error;
+  }
+};
 
-    const visited = new Set();
-    await searchAndPushToParentDir(item, true, visited);
+const restoreChildrenDirsHelper = async (db, userId, dir) => {
+  try {
+    const dirs = await db //2. get all the chDirs and modify of the parentDir [not deleted by user]
+      .collection("directories")
+      .find(
+        {
+          parentId: dir._id,
+          userId,
+          isDeleted: true,
+          $or: [
+            { deletedBy: { $exists: false } }, //deletedBy propertt doesn't exists at all -> $exists
+            { deletedBy: { $ne: "user" } }, //deletedBy not equals to "user" -> $ne
+          ],
+        },
+        {
+          projection: {
+            _id: 1,
+            name: 1,
+            parentId: 1,
+            parentName: 1,
+          },
+        }
+      )
+      .toArray();
 
-    //filesDb changed
-    changeDestination(item.id);
+    for (const child of dirs) {
+      await restoreDirectory(db, userId, child);
 
-    //removed from bin
-    binContent[0].files = removeItemById(binContent[0].files, item.id);
-    const parentInBin = findItemById(binContent, item.parentId);
-    if (parentInBin) removeItemById(parentInBin.files, item.id);
+      await db.collection("directories").updateOne(
+        { _id: child._id },
+        {
+          $set: { isDeleted: false, modifiedAt: new Date().toISOString() },
+          $unset: { deletedBy: "" },
+        }
+      );
+    }
+  } catch (error) {
+    return error;
+  }
+};
 
-    await Promise.all([
-      writeFile(
-        "./DBs/directories.db.json",
-        JSON.stringify(directoriesDb)
+const restoreFile = async (db, userId, file) => {
+  try {
+    return await Promise.all([
+      restoreParentHelper(db, userId, file, "file"), //1. search & bring back its parent
+
+      db.collection("files").updateOne(
+        { _id: file._id },
+        {
+          $set: { isDeleted: false, modifiedAt: new Date().toISOString() }, //2. filesDb update
+          $unset: { deletedBy: "" },
+        }
       ),
-      writeFile("./DBs/bins.db.json", JSON.stringify(bin)),
-      writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
     ]);
-
-    return;
   } catch (error) {
     console.log(error);
     return error;
   }
 };
-const restoreDirectory = async (userId, itemId) => {
+
+const restoreDirectory = async (db, userId, dir) => {
   try {
-    const dbIndex = directoriesDb.findIndex((d) => d.id === userId);
-    const binIndex = bin.findIndex((b) => b.id === userId);
-    userContent = directoriesDb[dbIndex].content;
-    binContent = bin[binIndex].content;
-
-    if (!userContent || !binContent)
-      return new Error("Error : userId not found");
-
-    const dirInDb = findItemById(userContent, itemId);
-    const dirInBin = findItemById(binContent, itemId);
-
-    if (!dirInDb) {
-      await searchAndPushToParentDir(dirInBin, false);
-      userContent.push(dirInBin);
-
-      for (const file of dirInBin.files) {
-        changeDestination(file.id);
-      }
-    } else {
-      for (const file of dirInBin.files) {
-        dirInDb.files.push(file);
-        changeDestination(file.id);
-      }
-
-      for (const directory of dirInBin.directories) {
-        const idx = dirInDb.directories.findIndex((d) => d.id === directory.id);
-        if (idx === -1) dirInDb.directories.push(directory);
-      }
-    }
-
-    binContent = removeItemById(binContent, itemId);
-    binContent[0].directories = removeItemById(
-      binContent[0].directories,
-      itemId
-    );
-
-    bin[binIndex].content = binContent;
-    directoriesDb[dbIndex].content = userContent;
-
-    await Promise.all([
-      writeFile(
-        "./DBs/directories.db.json",
-        JSON.stringify(directoriesDb)
+    return await Promise.all([
+      await restoreParentHelper(db, userId, dir), //1. search & bring back its parent
+      await db.collection("directories").updateOne(
+        { _id: dir._id },
+        {
+          $set: { isDeleted: false, modifiedAt: new Date().toISOString() }, //2. dir update
+          $unset: { deletedBy: "" },
+        }
       ),
-      writeFile("./DBs/bins.db.json", JSON.stringify(bin)),
-      writeFile("./DBs/files.db.json", JSON.stringify(filesDb)),
+      await restoreChildrenFilesHelper(db, userId, dir), //4. child files restore
+      await restoreChildrenDirsHelper(db, userId, dir), //3. child dirs restore (recursive)
     ]);
-
-    for (const child of dirInBin.directories) {
-      await restoreDirectory(userId, child.id);
-    }
   } catch (error) {
-    console.log(error);
     return error;
   }
 };

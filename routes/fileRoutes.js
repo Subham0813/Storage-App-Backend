@@ -1,19 +1,20 @@
 import { Router } from "express";
-import upload from "../utils/uploadFileUsingMulter.js"
+import upload from "../utils/uploadFileUsingMulter.js";
 
 import {
   handleGetFiles,
   handleCreateFile,
   handleUpdateFile,
   handleMoveToBinFile,
-  handleRestoreFile
+  handleRestoreFile,
 } from "../controllers/apiControllers.js";
+import { validateParent } from "../middlewares/validateParentId.js";
 
 const router = Router();
 
 //Create
 router.post("/", upload.single("file"), handleCreateFile);
-router.post("/:dirId", upload.single("file"), handleCreateFile);
+router.post("/:dirId", validateParent, upload.single("file"), handleCreateFile);
 
 //Read
 router.get("/:id", handleGetFiles);

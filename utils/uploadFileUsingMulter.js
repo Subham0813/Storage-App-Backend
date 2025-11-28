@@ -2,13 +2,15 @@ import multer from "multer";
 import path from "path";
 
 const diskStorage = multer.diskStorage({
+  
   destination: (req, file, cb) => {
     cb(null, "./uploads");
   },
+  
   filename: (req, file, cb) => {
-    const id = crypto.randomUUID();
-    const name = `${id}${path.extname(file.originalname)}`;
-    file.id = id;
+    const name = `${crypto.randomUUID()}${path.extname(file.originalname)}`;
+    file.createdAt = new Date().toISOString();
+    file.modifiedAt = new Date().toISOString();
     cb(null, name);
   },
 });
