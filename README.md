@@ -1,71 +1,73 @@
-# Storage-App-Backend
-A backend service for a storage & file-management application.  
-**Currently in active development (early stage).**
+# 📦 Storage-App Backend
+
+A backend service for a storage & file management application.  
+**Now running on MongoDB (v2 development stage 🚀)**
+
+---
 
 ## 🚧 Project Status
-- This backend is still **in building phase**.
-- **No database yet** — JSON files are used temporarily for storing user, directory, and file data.
-- **Local file storage** for uploads.
-- Custom lightweight **token generation + cookie-based sessions** (no JWT/OAuth yet).
-- Routes and architecture may change as the project evolves.
-- MongoDB + production-grade authentication will be added later.
+- MongoDB integration completed ✔
+- Custom cookie-based session auth in use (still no JWT )
+- Advanced features still under active development
+
+---
 
 ## 🧱 Tech Stack
-- **Node.js**
-- **Express.js**
-- **Multer** (file uploads)
-- **Local JSON files** (temporary database)
-- **Cookie-based custom tokens**
+- **Node.js** + **Express.js**
+- **MongoDB** (primary database)
+- **Multer** for file uploads
+
+---
+
+## 📂 Main Features
+- CRUD files & directories
+- **Soft delete (move to Bin) with full restore support**
+- **Restore folder structure recursively**
+
+---
 
 ## 📁 Directory Structure
-- /controllers    -- Logic for each API route
-- /routes         -- Route definitions
-- /services       -- Core logic for file & directory operations
-- /models         -- Stores all .json database files
-- /uploads        -- Local uploaded files storage
-- app.js          -- Server entry file              
+- /controllers → Route handlers
+- /routes → API route definitions
+- /utils → Recursive delete & restore logic
+- /uploads → File storage
+- app.js → Server entry
 
-## 📋 Base Routes
-Base path: `/auth`
+---
 
-### Auth
-- POST      `/signup `
-- POST      `/login` 
-- POST      `/logout `
+## 📡 API Overview
 
-### Storage / Bin
-- GET       `/:storage ` 
-- GET       `/:bin`  
+### 📁 Directories — `/directories`
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST   | `/` | Create root directory |
+| POST   | `/:dirId` | Create sub-directory |
+| GET    | `/:id` | Get directory content |
+| PATCH  | `/:id` | Rename directory send in ```req.body``` => ```{newname : "filename"}```|
+| POST   | `/:id/trash` | Move directory to Bin |
+| POST   | `/:id/restore` | Restore directory |
 
-### Delete account
-- DELETE    `/delete`
+---
 
+### 📄 Files — `/files`
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST   | `/:dirId?` | Upload file |
+| GET    | `/:id` | Download/Open file |
+| PATCH  | `/:id` | Rename file send in ```req.body``` => ```{newname : "filename"}```|
+| POST   | `/:id/trash` | Move file to Bin |
+| POST   | `/:id/restore` | Restore file |
 
-## 📋 API Routes
-Base paths: `/directories` & `/files`
+---
 
-### Read
-- GET      ` /:id ` 
+## 🔐 Auth Routes — `/auth`
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST   | `/signup` | Register user ```{"firstname": "","lastname": "","email": "","password": ""}```|
+| POST   | `/login` | Login & Set cookie ```{"email": "","password": ""}```|
+| POST   | `/logout` | Clear cookie |
+| DELETE   | `/delete` | Delete all userdata|
 
-### Create
-- POST      `/`  
-- POST      `/:dirId`  
+---
 
-### Update
-- PATCH    ` /:id ` 
-
-### Trash (Soft Delete & restore)
-- POST      `/:id/trash`  
-- POST      `/:id/restore`   
-
-## 🚀 Getting Started
-```bash
-git clone https://github.com/Subham0813/Storage-App-Backend.git
-cd Storage-App-Backend
-npm install
-npm start
-```
-
-# 📌 Next Steps
-- Db integration (MongoDb/PostgreSql) [ongoing]
 
