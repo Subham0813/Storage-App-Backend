@@ -1,5 +1,5 @@
 import { ObjectId } from "mongodb";
-import { connectDb } from "../utils/db.js";
+import { connectDb } from "../configs/db.js";
 
 const createToken = async (userId) => {
   try {
