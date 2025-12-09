@@ -1,4 +1,3 @@
-// import { Db } from "mongodb/lib/db";
 import { ObjectId } from "mongodb";
 
 const recursiveRemove = async (
