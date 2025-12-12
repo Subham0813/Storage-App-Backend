@@ -1,10 +1,10 @@
 import { Router } from "express";
-import { createToken } from "../utils/createAndValidateToken.js";
+import { createToken } from "../utils/createToken.js";
 import { Db } from "mongodb";
 
 const router = Router();
 
-router.post("/login", async (req, res) => {
+router.post("/login", async (req, res, next) => {
   const { email, password } = req.body;
   const db = req.db;
 
@@ -15,8 +15,7 @@ router.post("/login", async (req, res) => {
     .collection("users")
     .findOne({ email: email.toLowerCase(), password: password });
 
-  if (!user)
-    return res.status(404).json({ message: "Invalid Cradentials!!" });
+  if (!user) return res.status(404).json({ message: "Invalid Cradentials!!" });
 
   try {
     const token = await createToken(user._id);
@@ -28,31 +27,28 @@ router.post("/login", async (req, res) => {
     });
     return res
       .status(200)
-      .json({ message: "User logged in Successfully.", data: token._id});
-  } catch (error) {
-    console.log(error);
-    return res
-      .status(500)
-      .json({ message: "Somthing went wrong!", data: null });
+      .json({ message: "User logged in Successfully.", data: token._id });
+  } catch (err) {
+   next(err)
   }
 });
 
-router.post("/signup", async (req, res) => {
+router.post("/signup", async (req, res, next) => {
   const db = req.db;
   const { firstname, lastname, email, password } = req.body;
-  if (!firstname || !lastname || !email || !password)
+  if (!firstname || !email || !password)
     return res.status(400).json({ message: "All the fields are required!" });
 
   try {
     const user = await db
       .collection("users")
-      .findOne({ email: email.toLowerCase() });
+      .findOne({ email: email.toLowerCase().trim() });
     if (user) return res.status(400).json("User already exists!");
-    
+
     const newUser = {
       firstname,
-      lastname,
-      email: email.toLowerCase(),
+      lastname: lastname || "",
+      email: email.toLowerCase().trim(),
       password, //rn we're not using an hashing for password
     };
     const { insertedId } = await db.collection("users").insertOne(newUser);
@@ -60,11 +56,8 @@ router.post("/signup", async (req, res) => {
       .status(302)
       .json({ message: "Sign up successfull", data: insertedId });
     // return res.status(302).redirect("/login"); // .redirect(...)  === .setHeader('Location', 'http://localhost:4000/login').end()
-  } catch (error) {
-    console.log(error.message);
-    return res
-      .status(500)
-      .json({ message: "Somthing went wrong!", data: null });
+  } catch (err) {
+    next(err);
   }
 });
 

@@ -5,9 +5,10 @@ import cors from "cors";
 import fileRoutes from "./routes/fileRoutes.js";
 import directoryRoutes from "./routes/directoryRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
-import { validateToken } from "./middlewares/validateToken.js";
-import { connectDb } from "./utils/db.js";
+import { validateToken } from "./middlewares/validate.js";
+import { connectDb } from "./configs/db.js";
 import { Db } from "mongodb";
+import { appendFile } from "fs/promises";
 
 try {
   const db = await connectDb();
@@ -17,7 +18,7 @@ try {
   app.use(serveFavicon(import.meta.dirname + "/public/favicon.ico"));
   app.use(
     cors({
-      origin: "http://localhost:4000",
+      origin: "http://localhost:5173",
       credentials: true,
     })
   );
@@ -44,18 +45,20 @@ try {
 
   app.use("/auth", authRoutes);
 
-  app.use("/storage", validateToken, async (req, res) => {
+  app.use("/storage", validateToken, async (req, res, next) => {
     const { _id: userId } = req.user;
 
     try {
       const directories = await db
         .collection("directories")
         .find(
-          { userId, parentId: null, isDeleted: false },
+          { userId: userId, parentId: null, isDeleted: false },
           {
             projection: {
               _id: 1,
               name: 1,
+              createdAt,
+              modifiedAt,
             },
           }
         )
@@ -64,7 +67,7 @@ try {
       const files = await db
         .collection("files")
         .find(
-          { userId, parentId: null, isDeleted: false },
+          { userId: userId, parentId: null, isDeleted: false },
           {
             projection: {
               originalname: 1,
@@ -88,15 +91,12 @@ try {
         message: "directory found!",
         data: root, //serving root directory
       });
-    } catch (error) {
-      res.status(500).json({
-        message: "Something went wrong!",
-        data: null,
-      });
+    } catch (err) {
+      next(err);
     }
   });
 
-  app.use("/bin", validateToken, async (req, res) => {
+  app.use("/bin", validateToken, async (req, res, next) => {
     const { _id: userId } = req.user;
     try {
       const directories = await db
@@ -107,6 +107,8 @@ try {
             projection: {
               _id: 1,
               name: 1,
+              createdAt,
+              modifiedAt,
             },
           }
         )
@@ -115,7 +117,7 @@ try {
       const files = await db
         .collection("files")
         .find(
-          { userId: userId, isDeleted: true, deletedBy: "user" },
+          { userId, isDeleted: true, deletedBy: "user" },
           {
             projection: {
               originalname: 1,
@@ -139,11 +141,8 @@ try {
         message: "bin found!",
         data: bin, //serving bin directory
       });
-    } catch (error) {
-      res.status(500).json({
-        message: "Something went wrong!",
-        data: null,
-      });
+    } catch (err) {
+      next(err);
     }
   });
 
@@ -151,16 +150,16 @@ try {
 
   app.use("/dirs", validateToken, directoryRoutes);
 
-  app.delete("/deleteProfile", validateToken, async (req, res) => {
+  app.delete("/deleteProfile", validateToken, async (req, res, next) => {
     const db = req.db;
     const userId = req.user._id;
 
     try {
       const op = await Promise.all([
-        db.collection("directories").deleteMany({ userId: userId }),
         db.collection("users").deleteOne({ _id: userId }),
-        db.collection("files").deleteMany({ userId: userId }),
-        db.collection("tokens").deleteMany({ userId: userId }),
+        db.collection("directories").deleteMany({ userId }),
+        db.collection("files").deleteMany({ userId }),
+        db.collection("tokens").deleteMany({ userId }),
       ]);
 
       return res
@@ -170,12 +169,23 @@ try {
         )
         .status(200)
         .json({ message: "Account deleted successfully.", data: op });
-    } catch (error) {
-      res.status(500).json({
-        message: "Something went wrong!",
-        data: null,
-      });
+    } catch (err) {
+      next(err);
     }
+  });
+
+  app.use(async (err, req, res, next) => {
+    console.error(err);
+    // await appendFile("./error.log", JSON.stringify(err.errorResponse));
+    const status = err.statusCode || 500;
+    const message =
+      err?.message?.split(",")[0]?.split(`${err.code}:`)[1]?.trim() ||
+      "Internal server error. Please try again later.";
+
+    return res.status(status).json({
+      success: false,
+      message,
+    });
   });
 
   app.listen(port, () => {

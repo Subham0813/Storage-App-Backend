@@ -1,12 +1,11 @@
-// import { Db } from "mongodb/lib/db";
 import { ObjectId } from "mongodb";
 
 const recursiveRemove = async (
   db,
   dirId,
   userId,
-  visited = new Set(),
-  result = new Map()
+  visited,
+  result
 ) => {
   try {
     if (!dirId || visited.has(dirId)) return null;
@@ -51,7 +50,6 @@ const recursiveRemove = async (
         { _id: child._id },
         {
           $set: {
-            isDeleted: true,
             modifiedAt: new Date().toISOString(),
             deletedBy: "process",
           },

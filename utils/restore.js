@@ -1,23 +1,19 @@
 const getDummyParent = (item, userId) => {
   const dummy = {
+    _id: item.parentId,
     name: `${item.parentName}-restored`,
     parentId: null,
-    parentName: null,
-    isDeleted: false,
+    parentName: "",
     userId,
+    deletedBy: "",
+    isDeleted: false,
     createdAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),
   };
   return dummy;
 };
 
-const restoreParentHelper = async (
-  db,
-  userId,
-  item,
-  type = "dir",
-  visited = new Set()
-) => {
+const restoreParentHelper = async (db, userId, item, visited, type = "dir") => {
   try {
     if (visited.has(item.parentId) || item.parentId === null) return;
     visited.add(item.parentId);
@@ -35,14 +31,23 @@ const restoreParentHelper = async (
     });
 
     if (deletedParent) {
-      await restoreParentHelper(db, userId, deletedParent, visited, result);
+      await restoreParentHelper(db, userId, deletedParent, visited);
 
-      await db.collection("directories").updateOne(
-        { _id: deletedParent._id },
+      await db.collection("directories").updateOne({ _id: deletedParent._id }, [
         {
-          $set: { isDeleted: false, modifiedAt: new Date().toISOString() },
-        }
-      );
+          $set: {
+            isDeleted: false,
+            modifiedAt: new Date().toISOString(),
+            deletedBy: {
+              $cond: [
+                { $eq: ["$deletedBy", "process"] }, // IF deletedBy == "process"
+                "", // THEN set ""
+                "$deletedBy", // ELSE keep existing value
+              ],
+            },
+          },
+        },
+      ]);
     } else {
       const parentDummy = getDummyParent(item, userId);
 
@@ -50,14 +55,14 @@ const restoreParentHelper = async (
         .collection("directories")
         .insertOne(parentDummy);
 
-      if (type === "file")
-        await db
-          .collection("files")
-          .updateOne({ _id: item._id }, { $set: { parentId: parentId } });
-      else
-        await db
-          .collection("directories")
-          .updateOne({ _id: item._id }, { $set: { parentId: parentId } });
+      // if (type === "file")
+      //   await db
+      //     .collection("files")
+      //     .updateOne({ _id: item._id }, { $set: { parentId: parentId } });
+      // else
+      //   await db
+      //     .collection("directories")
+      //     .updateOne({ _id: item._id }, { $set: { parentId: parentId } });
     }
   } catch (error) {
     return error;
@@ -73,10 +78,11 @@ const restoreChildrenFilesHelper = async (db, userId, dir) => {
           parentId: dir._id,
           userId: userId,
           isDeleted: true,
-          $or: [
-            { deletedBy: { $exists: false } }, //deletedBy property doesn't exists at all -> $exists
-            { deletedBy: { $ne: "user" } }, //deletedBy not equals to "user" -> $ne
-          ],
+          deletedBy: { $ne: "user" },
+          // $or: [
+          //   { deletedBy: { $exists: false } }, //deletedBy property doesn't exists at all -> $exists
+          //   { deletedBy: { $ne: "user" } }, //deletedBy not equals to "user" -> $ne
+          // ],
         },
         { projection: { _id: 1 } }
       )
@@ -86,8 +92,11 @@ const restoreChildrenFilesHelper = async (db, userId, dir) => {
       await db.collection("files").updateOne(
         { _id: file._id },
         {
-          $set: { isDeleted: false, modifiedAt: new Date().toISOString() },
-          $unset: { deletedBy: "" },
+          $set: {
+            deletedBy: "",
+            isDeleted: false,
+            modifiedAt: new Date().toISOString(),
+          },
         }
       );
     }
@@ -105,10 +114,11 @@ const restoreChildrenDirsHelper = async (db, userId, dir) => {
           parentId: dir._id,
           userId,
           isDeleted: true,
-          $or: [
-            { deletedBy: { $exists: false } }, //deletedBy propertt doesn't exists at all -> $exists
-            { deletedBy: { $ne: "user" } }, //deletedBy not equals to "user" -> $ne
-          ],
+          deletedBy: { $ne: "user" },
+          // $or: [
+          //   { deletedBy: { $exists: false } }, //deletedBy propertt doesn't exists at all -> $exists
+          //   { deletedBy: { $ne: "user" } }, //deletedBy not equals to "user" -> $ne
+          // ],
         },
         {
           projection: {
@@ -127,8 +137,11 @@ const restoreChildrenDirsHelper = async (db, userId, dir) => {
       await db.collection("directories").updateOne(
         { _id: child._id },
         {
-          $set: { isDeleted: false, modifiedAt: new Date().toISOString() },
-          $unset: { deletedBy: "" },
+          $set: {
+            deletedBy: "",
+            isDeleted: false,
+            modifiedAt: new Date().toISOString(),
+          },
         }
       );
     }
@@ -139,14 +152,17 @@ const restoreChildrenDirsHelper = async (db, userId, dir) => {
 
 const restoreFile = async (db, userId, file) => {
   try {
+    const visited = new Set();
     return await Promise.all([
-      restoreParentHelper(db, userId, file, "file"), //1. search & bring back its parent
-
-      db.collection("files").updateOne(
-        { _id: file._id },
+      await restoreParentHelper(db, userId, file, visited, "file"), //1. search & bring back its parent
+      await db.collection("files").updateOne(
+        { _id: file._id }, //2. filesDb update
         {
-          $set: { isDeleted: false, modifiedAt: new Date().toISOString() }, //2. filesDb update
-          $unset: { deletedBy: "" },
+          $set: {
+            isDeleted: false,
+            deletedBy: "",
+            modifiedAt: new Date().toISOString(),
+          },
         }
       ),
     ]);
@@ -158,13 +174,17 @@ const restoreFile = async (db, userId, file) => {
 
 const restoreDirectory = async (db, userId, dir) => {
   try {
+    const visited = new Set();
     return await Promise.all([
-      await restoreParentHelper(db, userId, dir), //1. search & bring back its parent
+      await restoreParentHelper(db, userId, dir, visited, "dir"), //1. search & bring back its parent
       await db.collection("directories").updateOne(
-        { _id: dir._id },
+        { _id: dir._id }, //2. dir update
         {
-          $set: { isDeleted: false, modifiedAt: new Date().toISOString() }, //2. dir update
-          $unset: { deletedBy: "" },
+          $set: {
+            isDeleted: false,
+            deletedBy: "",
+            modifiedAt: new Date().toISOString(),
+          },
         }
       ),
       await restoreChildrenFilesHelper(db, userId, dir), //4. child files restore
