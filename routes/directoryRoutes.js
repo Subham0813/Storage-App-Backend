@@ -6,8 +6,9 @@ import {
   handleUpdateDirectory,
   handleMoveToBinDirectory,
   handleRestoreDirectory,
+  // handleDelete
 } from "../controllers/apiControllers.js";
-import { validateParent } from "../middlewares/validateParentId.js";
+import { validateParent } from "../middlewares/validate.js";
 
 const router = Router();
 
@@ -24,5 +25,7 @@ router.patch("/:id", handleUpdateDirectory);
 //delete
 router.post("/:id/trash", handleMoveToBinDirectory);
 router.post("/:id/restore", handleRestoreDirectory);
+
+// router.delete('/:id', handleDelete)
 
 export default router;
