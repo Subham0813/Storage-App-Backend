@@ -36,7 +36,6 @@ router.post("/", uploadFile, handleCreateFile);
 router.post("/:dirId", validateParent, uploadFile, handleCreateFile);
 
 //Read
-
 router.get("/:id/metadata", handleGetFiles);
 router.get("/:id/preview", handleGetFiles);
 router.get("/:id/download", handleGetFiles);

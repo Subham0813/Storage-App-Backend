@@ -8,7 +8,6 @@ import {
   handleMoveToBinDirectory,
   handleRestoreDirectory,
   handleDeleteDirectory
-  // handleDelete
 } from "../controllers/DirectoryControllers.js";
 import { validateParent } from "../middlewares/validate.js";
 
