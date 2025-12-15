@@ -2,11 +2,14 @@ import express from "express";
 import serveFavicon from "serve-favicon";
 import cors from "cors";
 
-import fileRoutes from "./routes/fileRoutes.js";
-import directoryRoutes from "./routes/directoryRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
+import directoryRoutes from "./routes/directoryRoutes.js";
+import fileRoutes from "./routes/fileRoutes.js";
+import homeRoutes from "./routes/homeRoutes.js";
+
 import { validateToken } from "./middlewares/validate.js";
 import { connectDb } from "./configs/db.js";
+
 import { Db } from "mongodb";
 import { appendFile } from "fs/promises";
 
@@ -45,137 +48,23 @@ try {
 
   app.use("/auth", authRoutes);
 
-  app.use("/storage", validateToken, async (req, res, next) => {
-    const { _id: userId } = req.user;
-
-    try {
-      const directories = await db
-        .collection("directories")
-        .find(
-          { userId: userId, parentId: null, isDeleted: false },
-          {
-            projection: {
-              _id: 1,
-              name: 1,
-              createdAt,
-              modifiedAt,
-            },
-          }
-        )
-        .toArray();
-
-      const files = await db
-        .collection("files")
-        .find(
-          { userId: userId, parentId: null, isDeleted: false },
-          {
-            projection: {
-              originalname: 1,
-              size: 1,
-              mimeType: 1,
-              createdAt: 1,
-              modifiedAt: 1,
-              _id: 1,
-            },
-          }
-        )
-        .toArray();
-
-      const root = {
-        name: "root",
-        directories,
-        files,
-      };
-
-      res.status(200).json({
-        message: "directory found!",
-        data: root, //serving root directory
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  app.use("/bin", validateToken, async (req, res, next) => {
-    const { _id: userId } = req.user;
-    try {
-      const directories = await db
-        .collection("directories")
-        .find(
-          { userId: userId, isDeleted: true, deletedBy: "user" },
-          {
-            projection: {
-              _id: 1,
-              name: 1,
-              createdAt,
-              modifiedAt,
-            },
-          }
-        )
-        .toArray();
-
-      const files = await db
-        .collection("files")
-        .find(
-          { userId, isDeleted: true, deletedBy: "user" },
-          {
-            projection: {
-              originalname: 1,
-              size: 1,
-              mimeType: 1,
-              createdAt: 1,
-              modifiedAt: 1,
-              _id: 1,
-            },
-          }
-        )
-        .toArray();
-
-      const bin = {
-        name: "bin",
-        directories,
-        files,
-      };
-
-      res.status(200).json({
-        message: "bin found!",
-        data: bin, //serving bin directory
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
+  app.use("/", validateToken, homeRoutes);
 
   app.use("/files", validateToken, fileRoutes);
 
   app.use("/dirs", validateToken, directoryRoutes);
 
-  app.delete("/deleteProfile", validateToken, async (req, res, next) => {
-    const db = req.db;
-    const userId = req.user._id;
-
-    try {
-      const op = await Promise.all([
-        db.collection("users").deleteOne({ _id: userId }),
-        db.collection("directories").deleteMany({ userId }),
-        db.collection("files").deleteMany({ userId }),
-        db.collection("tokens").deleteMany({ userId }),
-      ]);
-
-      return res
-        .setHeader(
-          "Set-Cookie",
-          `uid=; expires=${new Date(new Date() - 3600 * 1000).toUTCString()}`
-        )
-        .status(200)
-        .json({ message: "Account deleted successfully.", data: op });
-    } catch (err) {
-      next(err);
-    }
+  // 404 handler
+  app.use((req, res) => {
+    return res.status(404).send();
   });
 
   app.use(async (err, req, res, next) => {
-    console.error(err);
+    // console.log(err);
+    // console.error(
+    //   err?.errInfo?.details?.schemaRulesNotSatisfied[0]
+    //     .propertiesNotSatisfied[0].details
+    // );
     // await appendFile("./error.log", JSON.stringify(err.errorResponse));
     const status = err.statusCode || 500;
     const message =
