@@ -22,7 +22,7 @@ const validateParent = async (req, res, next) => {
           {
             projection: {
               _id: 1,
-              ancestors: 1,
+              name: 1,
             },
           }
         )
@@ -35,8 +35,9 @@ const validateParent = async (req, res, next) => {
 
     req.parentDir = parentDirectory;
     next();
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    console.log({[error.name]: error.message});
+    return res.status(500).json("Something went wrong!!");
   }
 };
 
@@ -64,8 +65,9 @@ const validateToken = async (req, res, next) => {
       await db.collection("tokens").deleteOne({ _id: new ObjectId(uid) });
       return res.status(302).json("Cookies expired! Relogin with credentials.");
     }
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    console.log(error.name, error.message);
+    return res.status(500).json("Something went wrong!!");
   }
 };
 export { validateToken, validateParent };

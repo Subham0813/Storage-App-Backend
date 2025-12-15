@@ -7,8 +7,7 @@ import {
   handleUpdateFile,
   handleMoveToBinFile,
   handleRestoreFile,
-  handleDeleteFile
-} from "../controllers/FileControllers.js";
+} from "../controllers/apiControllers.js";
 import { validateParent } from "../middlewares/validate.js";
 import { MulterError } from "multer";
 
@@ -36,17 +35,15 @@ router.post("/", uploadFile, handleCreateFile);
 router.post("/:dirId", validateParent, uploadFile, handleCreateFile);
 
 //Read
-router.get("/:id/metadata", handleGetFiles);
-router.get("/:id/preview", handleGetFiles);
-router.get("/:id/download", handleGetFiles);
+router.get("/:id", handleGetFiles);
 
 //Update
 router.patch("/:id", handleUpdateFile);
 
+//delete
 router.post("/:id/trash", handleMoveToBinFile);
 router.post("/:id/restore", handleRestoreFile);
 
-//delete
-router.delete('/:id/delete', handleDeleteFile)
+// router.delete('/:id', handleDelete)
 
 export default router;

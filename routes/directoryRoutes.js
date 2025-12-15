@@ -2,20 +2,18 @@ import { Router } from "express";
 
 import {
   handleGetDirectories,
-  handleDownloadDirectory,
   handleCreateDirectory,
   handleUpdateDirectory,
   handleMoveToBinDirectory,
   handleRestoreDirectory,
-  handleDeleteDirectory
-} from "../controllers/DirectoryControllers.js";
+  // handleDelete
+} from "../controllers/apiControllers.js";
 import { validateParent } from "../middlewares/validate.js";
 
 const router = Router();
 
 //read
 router.get("/:id", handleGetDirectories);
-router.get("/:id/download", handleDownloadDirectory);
 
 //create
 router.post("/", handleCreateDirectory);
@@ -28,6 +26,6 @@ router.patch("/:id", handleUpdateDirectory);
 router.post("/:id/trash", handleMoveToBinDirectory);
 router.post("/:id/restore", handleRestoreDirectory);
 
-router.delete('/:id/delete', handleDeleteDirectory)
+// router.delete('/:id', handleDelete)
 
 export default router;
