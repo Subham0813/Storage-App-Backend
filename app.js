@@ -9,7 +9,6 @@ import homeRoutes from "./routes/homeRoutes.js";
 
 import { validateToken } from "./middlewares/validate.js";
 import { connectDb } from "./configs/db.js";
-import errorHandler from "./middlewares/error.js";
 
 import { Db } from "mongodb";
 import { appendFile } from "fs/promises";
