@@ -7,7 +7,7 @@ await client.connect();
 const db = client.db();
 
 await db.command({
-  create: "users",
+  collMod: "users",
   validator: {
     $jsonSchema: {
       bsonType: "object",
@@ -44,23 +44,20 @@ await db.command({
   validationAction: "error",
 });
 await db.command({
-  create: "files",
+  collMod: "files",
   validator: {
     $jsonSchema: {
       bsonType: "object",
       required: [
         "userId",
-        "parentId",
         "originalname",
-        "parentName",
         "filename",
-        "destination",
-        "path",
-        "encoding",
-        "mimetype",
+        "objectKey",
+        "storageProvider",
+        "detectedMime",
         "size",
         "isDeleted",
-        "deletedBy",
+        "createdAt",
       ],
       properties: {
         _id: {
@@ -74,49 +71,72 @@ await db.command({
         },
         originalname: {
           bsonType: "string",
-        },
-        parentName: {
-          bsonType: "string",
-          maxLength: 50,
+          minLength: 1,
+          maxLength: 255,
         },
         filename: {
           bsonType: "string",
+          pattern: "^[a-f0-9\\-]{36}$",
         },
-        destination: {
+        storageProvider: {
           bsonType: "string",
+          enum: ["local", "s3", "r2", "gcs"],
         },
-        path: {
+        objectKey: {
           bsonType: "string",
-        },
-        encoding: {
-          bsonType: "string",
+          minLength: 1,
         },
         mimetype: {
           bsonType: "string",
+          minLength: 3,
+        },
+        detectedMime: {
+          bsonType: "string",
+          minLength: 3,
+        },
+        disposition: {
+          bsonType: "string",
+          enum: ["inline", "attachment"],
         },
         size: {
-          bsonType: ["decimal", "double", "int", "long"],
+          bsonType: ["int", "long"],
+          minimum: 1,
         },
-        isdeleted: {
+        checksum: {
+          bsonType: "string",
+        },
+        cdnUrl: {
+          bsonType: ["null", "string"],
+        },
+        isDeleted: {
           bsonType: "bool",
         },
         deletedBy: {
           bsonType: "string",
           enum: ["", "user", "process"],
         },
+        deletedAt: {
+          bsonType: ["null", "date"],
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+        modifiedAt: {
+          bsonType: "date",
+        },
       },
-      additionalProperties: true,
+      additionalProperties: false,
     },
   },
   validationLevel: "strict",
   validationAction: "error",
 });
 await db.command({
-  create: "directories",
+  collMod: "directories",
   validator: {
     $jsonSchema: {
       bsonType: "object",
-      required: ["name", "parentId", "parentName", "userId", "deletedBy"],
+      required: ["name", "userId", "isDeleted", "createdAt"],
       properties: {
         _id: {
           bsonType: "objectId",
@@ -124,24 +144,39 @@ await db.command({
         name: {
           bsonType: "string",
           minLength: 1,
-          maxLength: 50,
+          maxLength: 255,
+          pattern: '^[^\\\\/:*?"<>|]+$',
         },
         parentId: {
           bsonType: ["null", "objectId"],
         },
-        parentName: {
-          bsonType: "string",
-          maxLength: 50,
+        ancestors: {
+          bsonType: "array",
+          items: {
+            bsonType: ["null", "objectId"],
+          },
         },
         userId: {
           bsonType: "objectId",
+        },
+        isDeleted: {
+          bsonType: "bool",
         },
         deletedBy: {
           bsonType: "string",
           enum: ["", "user", "process"],
         },
+        deletedAt: {
+          bsonType: ["null", "date"],
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+        modifiedAt: {
+          bsonType: "date",
+        },
       },
-      additionalProperties: true,
+      additionalProperties: false,
     },
   },
   validationLevel: "strict",
@@ -149,3 +184,4 @@ await db.command({
 });
 
 await client.close();
+console.log("client closed successfully");
