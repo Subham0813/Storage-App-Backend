@@ -26,7 +26,7 @@ const uploadFile = (req, res, next) => {
       return next("Unknown error occured!!");
     }
     // Everything went fine.
-    console.error("Upload successfull..✨");
+    console.log("Upload successfull...", req.file.filename);
     return next();
   });
 };
@@ -41,12 +41,17 @@ router.get("/:id/preview", handleGetFiles);
 router.get("/:id/download", handleGetFiles);
 
 //Update
-router.patch("/:id", handleUpdateFile);
+router.patch("/:id", handleUpdateFile); //rename
+router.patch("/:id/move",validateParent, handleUpdateFile); //move
+router.patch("/:id/copy",validateParent, handleUpdateFile); //copy
+//bulkcopy
 
-router.post("/:id/trash", handleMoveToBinFile);
-router.post("/:id/restore", handleRestoreFile);
+router.post("/:id/trash", handleMoveToBinFile); //bin
+router.post("/:id/restore", handleRestoreFile); //restore
 
 //delete
 router.delete('/:id/delete', handleDeleteFile)
+
+//bulkdelete
 
 export default router;
