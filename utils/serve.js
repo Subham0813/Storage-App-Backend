@@ -1,22 +1,28 @@
 import fs from "node:fs";
 import path from "path";
 
-async function serve({ db, archive, userId, dirId, zipPath, visited ,UPLOAD_ROOT}) {
-  const dirIdStr = dirId.toString();
+import Directory from "../models/directory.model.js";
+import FileModel from "../models/file.model.js";
 
+async function serve({
+  archive,
+  userId,
+  dirId,
+  zipPath,
+  visited,
+  UPLOAD_ROOT,
+}) {
+  const dirIdStr = dirId.toString();
 
   if (visited.has(dirIdStr)) return;
   visited.add(dirIdStr);
 
   //Fetch files in this dir
-  const files = await db
-    .collection("files")
-    .find({
-      parentId: dirId,
-      userId,
-      isDeleted: false,
-    })
-    .toArray();
+  const files = await FileModel.find({
+    parentId: dirId,
+    userId,
+    isDeleted: false,
+  }).lean();
 
   for (const file of files) {
     const safeName = sanitizeName(file.originalname);
@@ -35,14 +41,14 @@ async function serve({ db, archive, userId, dirId, zipPath, visited ,UPLOAD_ROOT
   }
 
   // Fetch child dirs
-  const dirs = await db
-    .collection("directories")
-    .find({
+  const dirs = await Directory.find(
+    {
       parentId: dirId,
       userId,
       isDeleted: false,
-    })
-    .toArray();
+    },
+    { name: 1 }
+  ).lean();
 
   for (const dir of dirs) {
     const safeDirName = sanitizeName(dir.name);
@@ -53,13 +59,13 @@ async function serve({ db, archive, userId, dirId, zipPath, visited ,UPLOAD_ROOT
     });
 
     await serve({
-      db,
+
       archive,
       userId,
       dirId: dir._id,
       zipPath: zipPath + safeDirName + "/",
       visited,
-      UPLOAD_ROOT
+      UPLOAD_ROOT,
     });
   }
 }

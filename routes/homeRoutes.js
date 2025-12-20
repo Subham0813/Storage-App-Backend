@@ -2,54 +2,46 @@ import { Router } from "express";
 import { unlink } from "fs/promises";
 import path from "path";
 
-const UPLOAD_ROOT = process.env.UPLOAD_ROOT || path.resolve(process.cwd() +"/uploads");
+import Directory from "../models/directory.model.js";
+import FileModel from "../models/file.model.js";
+
+const UPLOAD_ROOT =
+  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
 
 const router = Router();
 
 router.get("/storage", async (req, res, next) => {
-  const db = req.db;
   const { _id: userId } = req.user;
 
   try {
-    const directories = await db
-      .collection("directories")
-      .find(
-        { userId: userId, parentId: null, isDeleted: false },
-        {
-          projection: {
-            _id: 1,
-            name: 1,
-            createdAt: 1,
-            modifiedAt: 1,
-          },
-        }
-      )
-      .toArray();
+    const directories = await Directory.find(
+      { userId: userId, parentId: null, isDeleted: false },
+      {
+        _id: 1,
+        name: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      }
+    ).lean();
 
-    const files = await db
-      .collection("files")
-      .find(
-        { userId: userId, parentId: null, isDeleted: false },
-        {
-          projection: {
-            originalname: 1,
-            size: 1,
-            detectedMime: 1,
-            createdAt: 1,
-            modifiedAt: 1,
-            _id: 1,
-          },
-        }
-      )
-      .toArray();
-
+    const files = await FileModel.find(
+      { userId: userId, parentId: null, isDeleted: false },
+      {
+        originalname: 1,
+        size: 1,
+        detectedMime: 1,
+        createdAt: 1,
+        modifiedAt: 1,
+        _id: 1,
+      }
+    ).lean();
     const root = {
       directories,
       files,
     };
 
     res.status(200).json({
-      message: "directory found!",
+      success: true,
       data: root, //serving root directory
     });
   } catch (err) {
@@ -58,49 +50,37 @@ router.get("/storage", async (req, res, next) => {
 });
 
 router.get("/bin", async (req, res, next) => {
-  const db = req.db;
-  const { _id: userId } = req.user;
+  const userId = req.user._id;
   try {
-    const directories = await db
-      .collection("directories")
-      .find(
-        { userId: userId, deletedBy: "user" },
-        {
-          projection: {
-            _id: 1,
-            name: 1,
-            createdAt: 1,
-            deletedAt: 1,
-          },
-        }
-      )
-      .toArray();
+    const directories = await Directory.find(
+      { userId: userId, deletedBy: "user" },
+      {
+        name: 1,
+        createdAt: 1,
+        deletedAt: 1,
+      }
+    ).lean();
 
-    const files = await db
-      .collection("files")
-      .find(
-        { userId, deletedBy: "user" },
-        {
-          projection: {
-            originalname: 1,
-            size: 1,
-            detectedMime: 1,
-            createdAt: 1,
-            deletedAt: 1,
-            _id: 1,
-          },
-        }
-      )
-      .toArray();
+    const files = await FileModel.find(
+      { userId: userId, deletedBy: "user" },
+      {
+        originalname: 1,
+        size: 1,
+        detectedMime: 1,
+        createdAt: 1,
+        deletedAt: 1,
+      }
+    ).lean();
+
+    // console.log(directories, files);
 
     const bin = {
-      name: "bin",
       directories,
       files,
     };
 
     res.status(200).json({
-      message: "bin found!",
+      success: true,
       data: bin, //serving bin directory
     });
   } catch (err) {
@@ -114,10 +94,10 @@ router.delete("/deleteProfile", async (req, res, next) => {
 
   try {
     //unlink all files
-    const files = db
-      .collection("files")
-      .find({ userId }, { projection: { objectKey: 1 } })
-      .toArray();
+    const files = FileModel.find(
+      { userId },
+      { projection: { objectKey: 1 } }
+    ).lean();
     for (const file of files) {
       const absolutePath = path.join(path.resolve(UPLOAD_ROOT), file.objectKey);
 
@@ -132,7 +112,7 @@ router.delete("/deleteProfile", async (req, res, next) => {
 
       try {
         await unlink(absolutePath);
-        console.log('File deleted from local..')
+        console.log("File deleted from local..");
       } catch (err) {
         if (err.code !== "ENOENT") {
           throw err;
@@ -142,10 +122,10 @@ router.delete("/deleteProfile", async (req, res, next) => {
 
     //delete all user related infos from Db
     const op = await Promise.all([
-      db.collection("users").deleteOne({ _id: userId }),
-      db.collection("directories").deleteMany({ userId }),
-      db.collection("files").deleteMany({ userId }),
+      Directory.deleteMany({ userId }),
+      FileModel.deleteMany({ userId }),
       db.collection("tokens").deleteMany({ userId }),
+      // db.collection("users").deleteOne({ _id: userId }),
     ]);
 
     return res

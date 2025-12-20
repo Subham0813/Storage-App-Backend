@@ -1,31 +1,24 @@
 import { ObjectId } from "mongodb";
+import User from "../models/user.model.js";
+import Directory from "../models/directory.model.js";
 
 const validateParent = async (req, res, next) => {
   try {
-    const db = req.db;
     const userId = req.user._id;
-    const dirId = req.params.dirId;
+    const dirId = req.params.dirId || req.body.dirId;
+    console.log(req.body)
 
-    if(dirId && !ObjectId.isValid(dirId)){
+    if (dirId && !ObjectId.isValid(dirId)) {
       return res
         .status(400)
         .json({ message: "Invalid id. Directory Not Found!", data: null });
     }
 
     const parentDirectory = dirId
-      ? await db.collection("directories").findOne(
-          {
-            _id: new ObjectId(dirId),
-            isDeleted: false,
-            userId: userId,
-          },
-          {
-            projection: {
-              _id: 1,
-              ancestors: 1,
-            },
-          }
-        )
+      ? await Directory.findOne(
+          { _id: new ObjectId(dirId), isDeleted: false, userId: userId },
+          { _id: 1 }
+        ).lean()
       : null;
 
     if (dirId && !parentDirectory)
@@ -55,9 +48,7 @@ const validateToken = async (req, res, next) => {
       return res.status(400).json("Invalid Cookies! Relogin with credentials.");
 
     if (payload.expiry - currTime > 1) {
-      const user = await req.db
-        .collection("users")
-        .findOne({ _id: new ObjectId(payload.userId) });
+      const user = await User.findById(payload.userId);
       req.user = user;
       next();
     } else {
