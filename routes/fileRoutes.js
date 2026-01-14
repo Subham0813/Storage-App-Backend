@@ -1,39 +1,16 @@
 import { Router } from "express";
-import upload from "../middlewares/upload.js";
 
 import {
   handleGetFiles,
-  handleCreateFile,
   handleUpdateFile,
   handleMoveToBinFile,
   handleRestoreFile,
-  handleDeleteFile
+  handleDeleteFile,
 } from "../controllers/FileControllers.js";
-import { validateParent } from "../middlewares/validate.js";
-import { MulterError } from "multer";
+
+import { loadParentDir } from "../middlewares/loadParentDirectory.js";
 
 const router = Router();
-
-const uploadFile = (req, res, next) => {
-  upload.single("file")(req, res, (err) => {
-    if (err instanceof MulterError) {
-      // A Multer error occurred when uploading.
-      console.error("Multer error", err.name, err.message);
-      return next("Multer Error occurred!!");
-    } else if (err) {
-      // An unknown error occurred when uploading.
-      console.error("Other error", err.name, err.message);
-      return next("Unknown error occured!!");
-    }
-    // Everything went fine.
-    console.log("Upload successfull...", req.file.filename);
-    return next();
-  });
-};
-
-//Create
-router.post("/", uploadFile, handleCreateFile);
-router.post("/:dirId", validateParent, uploadFile, handleCreateFile);
 
 //Read
 router.get("/:id/metadata", handleGetFiles);
@@ -42,16 +19,14 @@ router.get("/:id/download", handleGetFiles);
 
 //Update
 router.patch("/:id", handleUpdateFile); //rename
-router.patch("/:id/move",validateParent, handleUpdateFile); //move
-router.patch("/:id/copy",validateParent, handleUpdateFile); //copy
+router.patch("/:id/move", loadParentDir, handleUpdateFile); //move
+router.patch("/:id/copy", loadParentDir, handleUpdateFile); //copy
 //bulkcopy
 
 router.post("/:id/trash", handleMoveToBinFile); //bin
 router.post("/:id/restore", handleRestoreFile); //restore
 
 //delete
-router.delete('/:id/delete', handleDeleteFile)
-
-//bulkdelete
+router.delete("/:id/delete", handleDeleteFile);
 
 export default router;
