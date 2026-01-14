@@ -1,13 +1,14 @@
 //dbSchema & validations
-import { MongoClient } from "mongodb";
+import connectMongoose from "./connect.js";
 
-const client = new MongoClient("mongodb://127.0.0.1:27017/StorageApp");
+const mongoose = await connectMongoose();
+const client = mongoose.connection.getClient();
+const db = mongoose.connection.db;
 
-await client.connect();
-const db = client.db();
+const command = "collMod";
 
 await db.command({
-  collMod: "users",
+  [command]: "users",
   validator: {
     $jsonSchema: {
       bsonType: "object",
@@ -18,17 +19,80 @@ await db.command({
         fullname: {
           bsonType: "string",
           minLength: 3,
-          maxLength: 50,
+          maxLength: 100,
+          pattern:
+            "^(?!s*(?:undefined|null|na|n/a|none|unknown|test)s*$)[A-Za-z ]{3,100}$",
         },
 
         email: {
           bsonType: "string",
-          pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+          pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+.[a-zA-Z]{2,}$",
         },
 
         password: { bsonType: "string", minLength: 8 },
 
         username: { bsonType: "string" },
+
+        deviceCount: { bsonType: "int", minimum: 0 },
+        
+        createdAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
+        __v: { bsonType: "int" },
+      },
+
+      additionalProperties: false,
+    },
+  },
+  validationLevel: "strict",
+  validationAction: "error",
+});
+
+await db.command({
+  [command]: "files",
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: [
+        "userId",
+        "hash",
+        "hashAlgo",
+        "detectedMime",
+        "size",
+        "refCount",
+        "storageProvider",
+        "createdAt",
+        "objectKey",
+      ],
+      properties: {
+        _id: { bsonType: "objectId" },
+
+        userId: { bsonType: "objectId" },
+
+        hash: {
+          bsonType: "string",
+          // pattern: "^[a-f0-9]{43}$",
+        },
+
+        hashAlgo: {
+          bsonType: "string",
+          enum: ["sha256"],
+        },
+
+        storageProvider: {
+          bsonType: "string",
+          enum: ["local", "s3", "r2", "gcs"],
+        },
+
+        detectedMime: { bsonType: "string", minLength: 1 },
+
+        objectKey: { bsonType: "string" },
+
+        size: { bsonType: ["int", "double", "long"], minimum: 1 },
+
+        refCount: {
+          bsonType: ["int", "long"],
+          minimum: 0,
+        },
 
         createdAt: { bsonType: "date" },
         updatedAt: { bsonType: "date" },
@@ -43,20 +107,21 @@ await db.command({
 });
 
 await db.command({
-  collMod: "files",
+  [command]: "user_files",
   validator: {
     $jsonSchema: {
       bsonType: "object",
       required: [
-        "createdAt",
-        "detectedMime",
-        "filename",
-        "isDeleted",
-        "objectKey",
-        "originalname",
-        "size",
-        "storageProvider",
         "userId",
+        "parentId",
+        "meta",
+        "name",
+        "mimetype",
+        "disposition",
+        "isDeleted",
+        "deletedBy",
+        "deletedAt",
+        "createdAt",
       ],
       properties: {
         _id: { bsonType: "objectId" },
@@ -65,42 +130,26 @@ await db.command({
 
         parentId: { bsonType: ["null", "objectId"] },
 
-        originalname: {
+        meta: { bsonType: "objectId" },
+
+        name: {
           bsonType: "string",
           minLength: 1,
           maxLength: 255,
         },
 
-        filename: {
-          bsonType: "string",
-          pattern:
-            "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-        },
-
-        objectKey: {
-          bsonType: "string",
-          pattern:
-            "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-        },
-
-        storageProvider: {
-          bsonType: "string",
-          enum: ["local", "s3", "r2", "gcs"],
-        },
-
-        mimetype: { bsonType: "string", minLength: 3 },
-
-        detectedMime: { bsonType: "string", minLength: 3 },
+        mimetype: { bsonType: "string", minLength: 1 },
 
         disposition: { bsonType: "string", enum: ["inline", "attachment"] },
 
-        size: { bsonType: ["int", "long", "double"], minimum: 1 },
+        inline_preview: { bsonType: "bool" },
+        force_inline_preview: { bsonType: "bool" },
 
         isDeleted: { bsonType: "bool" },
 
         deletedBy: {
           bsonType: "string",
-          enum: ["", "user", "process"],
+          enum: ["none", "user", "process"],
         },
 
         deletedAt: { bsonType: ["null", "date"] },
@@ -117,7 +166,7 @@ await db.command({
 });
 
 await db.command({
-  collMod: "directories",
+  [command]: "directories",
   validator: {
     $jsonSchema: {
       bsonType: "object",
@@ -140,7 +189,7 @@ await db.command({
 
         deletedBy: {
           bsonType: "string",
-          enum: ["", "user", "process"],
+          enum: ["none", "user", "process"],
         },
 
         deletedAt: { bsonType: ["null", "date"] },
@@ -157,5 +206,57 @@ await db.command({
   validationAction: "error",
 });
 
+await db.command({
+  [command]: "sessions",
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["userId", "createdAt"],
+      properties: {
+        _id: { bsonType: "objectId" },
+        userId: { bsonType: "objectId" },
+        expiry: { bsonType: "string" },
+
+        createdAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
+        __v: { bsonType: "int" },
+      },
+      additionalProperties: false,
+    },
+  },
+  validationLevel: "strict",
+  validationAction: "error",
+});
+
+await db.command({
+  [command]: "otps",
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["email", "otp", "purpose", "createdAt"],
+      properties: {
+        _id: { bsonType: "objectId" },
+        email: {
+          bsonType: "string",
+          pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+.[a-zA-Z]{2,}$",
+        },
+
+        purpose: {
+          bsonType: "string",
+          enum: ["login", "register", "forgotPassword"],
+        },
+
+        otp: { bsonType: "string" },
+        isVerified: { bsonType: "bool" },
+        createdAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
+        __v: { bsonType: "int" },
+      },
+      additionalProperties: false,
+    },
+  },
+  validationLevel: "strict",
+  validationAction: "error",
+});
 await client.close();
 console.log("client closed successfully");
