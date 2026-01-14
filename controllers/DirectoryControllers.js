@@ -1,13 +1,13 @@
 import path from "path";
 import archiver from "archiver";
-import { Db, ObjectId } from "mongodb";
+import mongoose from "mongoose";
 
 import { recursiveDelete, recursiveRemove } from "../utils/remove.js";
 import { restoreDirectory } from "../utils/restore.js";
-import serve from "../utils/serve.js";
+import { serveZip, sanitizeName } from "../utils/serve.js";
 import { badRequest, notFound, getDbData } from "../utils/helper.js";
 
-import Directory from "../models/directory.model.js";
+import {Directory} from "../models/directory.model.js";
 
 //env variables
 const UPLOAD_ROOT =
@@ -25,7 +25,7 @@ const handleCreateDirectory = async (req, res, next) => {
       parentId: parent?._id || null,
       userId: userId,
       isDeleted: false,
-      deletedBy: "",
+      deletedBy: "none",
       deletedAt: null,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -33,7 +33,7 @@ const handleCreateDirectory = async (req, res, next) => {
 
     return res
       .status(201)
-      .json({ sucess: true, message: "Folder created.", data: dir });
+      .json({ sucess: true, message: "Folder created.", dir });
   } catch (err) {
     next(err);
   }
@@ -42,12 +42,12 @@ const handleCreateDirectory = async (req, res, next) => {
 const handleGetDirectories = async (req, res, next) => {
   try {
     const userId = req.user._id;
-    if (!ObjectId.isValid(req.params.id)) {
+    if (!mongoose.isValidObjectId(req.params.id)) {
       return badRequest(res, "Please provide a valid id.");
     }
 
     const directory = await Directory.findOne({
-      _id: new ObjectId(req.params.id),
+      _id: req.params.id,
       userId,
       isDeleted: false,
     }).lean();
@@ -55,9 +55,16 @@ const handleGetDirectories = async (req, res, next) => {
     if (!directory)
       return notFound(res, "directory not found! Maybe it have got deleted.");
 
-    const data = await getDbData(directory);
+    const parent = {
+      dirId: directory._id,
+      dirName: directory.name,
+      userId,
+      isDeleted: false,
+    };
 
-    return res.status(200).json({ message: "directory found.", data });
+    const dir = await getDbData(parent);
+
+    return res.status(200).json({ message: "directory found.", dir });
   } catch (err) {
     next(err);
   }
@@ -69,14 +76,14 @@ const handleUpdateDirectory = async (req, res, next) => {
   const action = path.basename(req.path);
 
   const userId = req.user._id;
-  if (!ObjectId.isValid(req.params.id)) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
     return badRequest(res, "Please provide a valid id.");
   }
 
   try {
     const dir = await Directory.findOne(
       {
-        _id: new ObjectId(req.params.id),
+        _id: req.params.id,
         userId: userId,
         isDeleted: false,
       },
@@ -96,14 +103,15 @@ const handleUpdateDirectory = async (req, res, next) => {
         return badRequest(res, "Folder already in the target destination!");
       }
 
-      await Directory.updateOne(
+      const moved = await Directory.updateOne(
         { _id: dir._id },
-        { $set: { parentId: parent?._id || null, updatedAt: new Date() } }
+        { $set: { parentId: parent?._id || null, updatedAt: new Date() } },{new:true}
       );
 
       return res.status(200).json({
         success: true,
         message: "Moved successfully.",
+        dir:moved
       });
     }
 
@@ -111,14 +119,14 @@ const handleUpdateDirectory = async (req, res, next) => {
 
     if (!newname) return badRequest(res, "newname not found in request!!");
 
-    const update = await Directory.updateOne(
+    const renamed = await Directory.updateOne(
       { _id: dir._id },
       { $set: { name: newname, updatedAt: new Date() } }
     );
 
     return res
       .status(200)
-      .json({ message: "Folder renamed successfully.", data: update });
+      .json({ message: "Folder renamed successfully.", dir: renamed });
   } catch (err) {
     next(err);
   }
@@ -128,14 +136,14 @@ const handleDownloadDirectory = async (req, res, next) => {
   const userId = req.user._id;
   const dirId = req.params.id;
 
-  if (!ObjectId.isValid(dirId)) {
+  if (!mongoose.isValidObjectId(dirId)) {
     return badRequest(res, "Please provide a valid id!!");
   }
 
   try {
     const dir = await Directory.findOne(
       {
-        _id: new ObjectId(dirId),
+        _id: dirId,
         userId,
         isDeleted: false,
       },
@@ -146,14 +154,22 @@ const handleDownloadDirectory = async (req, res, next) => {
       return res.status(404).json({ message: "Directory not found!" });
     }
 
-    const zipName = `${dir.name}.zip`;
+    const safeDirname = sanitizeName(dir.name);
+    const safeTimeStamp = new Date().toISOString().replace(/[-:.]/g, "");
+
+    // const zipName = `${dir.name}-${new Date().toJSON()}-${dir.filesCount}-001.zip`; //google drive naming
+
+    const zipName = `${safeDirname}-${safeTimeStamp}-001.zip`;
+    // const zipPath = path.join(process.cwd(),"uploads", "temp", zipName);
+    // const output = createWriteStream(zipPath);
 
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename="${zipName}"`);
+    // res.status(200).setHeader("Content-Length", dir.size);
 
     // Create ZIP stream
     const archive = archiver("zip", {
-      zlib: { level: 1 }, // fast compression (Google Drive like)
+      zlib: { level: 2 }, // fast compression 
     });
 
     // If client aborts, stop everything
@@ -161,14 +177,20 @@ const handleDownloadDirectory = async (req, res, next) => {
       console.log("Client aborted download!!");
       archive.abort();
     });
+
     req.on("aborted", () => {
       console.log("Client aborted download!!");
       archive.abort();
     });
 
+    req.on("end", () => console.log("Zip served successFully."));
+
     archive.on("error", (err) => {
       throw err;
     });
+
+    // archive.pipe(output);
+    // console.log("Zip creating started..");
 
     archive.pipe(res);
     console.log("Zip serving started..");
@@ -176,7 +198,7 @@ const handleDownloadDirectory = async (req, res, next) => {
     // Traverse folder tree and add files
     const visited = new Set();
 
-    await serve({
+    await serveZip({
       archive,
       userId,
       dirId: dir._id,
@@ -187,6 +209,8 @@ const handleDownloadDirectory = async (req, res, next) => {
 
     // Finalize ZIP
     await archive.finalize();
+    res.status(200).end();
+
   } catch (err) {
     next(err);
   }
@@ -194,19 +218,18 @@ const handleDownloadDirectory = async (req, res, next) => {
 
 const handleMoveToBinDirectory = async (req, res, next) => {
   const userId = req.user._id;
-  if (!ObjectId.isValid(req.params.id)) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
     return badRequest(res, "Please provide a valid id.");
   }
 
   try {
     const dir = await Directory.findOne(
       {
-        _id: new ObjectId(req.params.id),
+        _id: req.params.id,
         userId: userId,
         isDeleted: false,
         deletedBy: { $ne: "process" },
-      },
-      { _id: 1 }
+      }
     ).lean();
 
     if (!dir)
@@ -237,18 +260,17 @@ const handleMoveToBinDirectory = async (req, res, next) => {
 
 const handleRestoreDirectory = async (req, res, next) => {
   const userId = req.user._id;
-  if (!ObjectId.isValid(req.params.id)) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
     return badRequest(res, "Please provide a valid id.");
   }
 
   try {
     const dir = await Directory.findOne(
       {
-        _id: new ObjectId(req.params.id),
+        _id: req.params.id,
         userId: userId,
         deletedBy: "user",
-      },
-      { name: 1, parentId: 1, parentName: 1 }
+      }
     );
 
     if (!dir) return notFound(res, "directory not found!");
@@ -264,19 +286,15 @@ const handleRestoreDirectory = async (req, res, next) => {
 
 const handleDeleteDirectory = async (req, res, next) => {
   const userId = req.user._id;
-  if (!ObjectId.isValid(req.params.id)) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
     return badRequest(res, "Please provide a valid id.");
   }
 
   try {
     const dir = await Directory.findOne(
-      {
-        _id: new ObjectId(req.params.id),
-        userId: userId,
-        deletedBy: { $in: ["", "user"] },
-      },
+      { _id: req.params.id, userId: userId },
       { _id: 1 }
-    );
+    ).lean();
 
     if (!dir)
       return notFound(res, "directory not found! May be it have got deleted.");

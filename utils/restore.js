@@ -1,6 +1,5 @@
-import { ObjectId } from "mongodb";
-import Directory from "../models/directory.model.js";
-import FileModel from "../models/file.model.js";
+import { Directory } from "../models/directory.model.js";
+import { UserFile } from "../models/user_file.model.js";
 
 let dummyParent = null;
 //helper
@@ -10,7 +9,7 @@ const getDummyParent = (item, userId) => ({
   parentId: null,
   userId,
   isDeleted: false,
-  deletedBy: "",
+  deletedBy: "none",
   deletedAt: null,
 });
 
@@ -47,7 +46,7 @@ const restoreParentChain = async (userId, item, visited) => {
             isDeleted: false,
             updatedAt: new Date(),
             deletedBy:
-              binParent.deletedBy === "process" ? "" : binParent.deletedBy,
+              binParent.deletedBy === "process" ? "none" : binParent.deletedBy,
           },
         }
       );
@@ -57,7 +56,7 @@ const restoreParentChain = async (userId, item, visited) => {
     //create dummy parent for missing parent
     const dummy = await Directory.updateOne(
       { _id: item.parentId, userId },
-      { $setOnInsert: getDummyParent(item, userId, deletedItemParent) },
+      { $setOnInsert: getDummyParent(item, userId) },
       { upsert: true }
     );
 
@@ -70,7 +69,7 @@ const restoreParentChain = async (userId, item, visited) => {
 /* Restore files under a directory */
 const restoreFiles = async (userId, dirId) => {
   try {
-    await FileModel.updateMany(
+    await UserFile.updateMany(
       {
         parentId: dirId,
         userId,
@@ -80,7 +79,7 @@ const restoreFiles = async (userId, dirId) => {
       {
         $set: {
           isDeleted: false,
-          deletedBy: "",
+          deletedBy: "none",
           updatedAt: new Date(),
         },
       }
@@ -109,7 +108,7 @@ const restoreDirsRecursive = async (userId, dirId) => {
         {
           $set: {
             isDeleted: false,
-            deletedBy: "",
+            deletedBy: "none",
             updatedAt: new Date(),
           },
         }
@@ -129,12 +128,12 @@ const restoreFile = async (userId, file) => {
   try {
     await restoreParentChain(userId, file, visited);
 
-    await FileModel.updateOne(
+    await UserFile.updateOne(
       { _id: file._id },
       {
         $set: {
           isDeleted: false,
-          deletedBy: "",
+          deletedBy: "none",
           updatedAt: new Date(),
         },
       }
@@ -158,7 +157,7 @@ const restoreDirectory = async (userId, dir) => {
       {
         $set: {
           isDeleted: false,
-          deletedBy: "",
+          deletedBy: "none",
           updatedAt: new Date(),
         },
       }

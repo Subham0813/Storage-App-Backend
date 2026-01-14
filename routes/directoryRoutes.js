@@ -9,7 +9,7 @@ import {
   handleRestoreDirectory,
   handleDeleteDirectory
 } from "../controllers/DirectoryControllers.js";
-import { validateParent } from "../middlewares/validate.js";
+import { loadParentDir } from "../middlewares/loadParentDirectory.js";
 
 const router = Router();
 
@@ -19,11 +19,11 @@ router.get("/:id/download", handleDownloadDirectory);
 
 //create
 router.post("/", handleCreateDirectory);
-router.post("/:dirId", validateParent, handleCreateDirectory);
+router.post("/:dirId", loadParentDir, handleCreateDirectory);
 
 //update
 router.patch("/:id", handleUpdateDirectory); //rename
-router.patch("/:id/move", validateParent, handleUpdateDirectory); //move
+router.patch("/:id/move", loadParentDir, handleUpdateDirectory); //move
 
 router.post("/:id/trash", handleMoveToBinDirectory); //bin
 router.post("/:id/restore", handleRestoreDirectory); //restore

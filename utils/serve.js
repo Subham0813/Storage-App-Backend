@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "path";
 
-import Directory from "../models/directory.model.js";
-import FileModel from "../models/file.model.js";
+import { Directory } from "../models/directory.model.js";
+import { UserFile } from "../models/user_file.model.js";
 
-async function serve({
+async function serveZip({
   archive,
   userId,
   dirId,
@@ -18,17 +18,19 @@ async function serve({
   visited.add(dirIdStr);
 
   //Fetch files in this dir
-  const files = await FileModel.find({
+  const files = await UserFile.find({
     parentId: dirId,
     userId,
     isDeleted: false,
-  }).lean();
+  })
+    .populate({ path: "meta", select: "objectKey" })
+    .lean();
 
   for (const file of files) {
-    const safeName = sanitizeName(file.originalname);
+    const safeName = sanitizeName(file.name);
     const entryPath = zipPath + safeName;
 
-    const absolutePath = path.resolve(UPLOAD_ROOT, file.objectKey);
+    const absolutePath = path.resolve(UPLOAD_ROOT, file.meta.objectKey);
     // console.log({safeName, entryPath, absolutePath})
 
     // Safety check
@@ -58,8 +60,7 @@ async function serve({
       name: zipPath + safeDirName + "/",
     });
 
-    await serve({
-
+    await serveZip({
       archive,
       userId,
       dirId: dir._id,
@@ -77,4 +78,4 @@ const sanitizeName = (name) => {
     .trim();
 };
 
-export default serve;
+export { serveZip, sanitizeName };
