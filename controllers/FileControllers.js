@@ -1,6 +1,5 @@
-import fs from "node:fs";
 import path from "path";
-import { unlink } from "node:fs/promises";
+import { unlink, copyFile } from "node:fs/promises";
 import { Db, ObjectId } from "mongodb";
 
 import { fileTypeFromFile } from "file-type";
@@ -11,42 +10,25 @@ import {
 } from "../configs/mimeSet.js";
 
 import { restoreFile } from "../utils/restore.js";
+import {
+  badRequest,
+  notFound,
+  getFileDocHelper,
+  getMetadataHelper,
+} from "../utils/helper.js";
+
+import FileModel from "../models/file.model.js";
 
 //env variables
-const UPLOAD_ROOT = process.env.UPLOAD_ROOT || path.resolve(process.cwd() +"/uploads");
-
-/* helper Functions */
-const badRequest = (res, message) =>
-  res.status(400).json({ success: false, message: message });
-
-const notFound = (res, message) =>
-  res.status(404).json({ success: false, message: message });
-
-const getMetadata = (file) => {
-  if (!file) return {};
-  const metadata = {
-    id: file._id,
-    parentId: file.parentId,
-    name: file.originalname,
-    mime: file.detectedMime,
-    size: file.size,
-    isDeleted: file.isDeleted,
-    deletedBy: file.deletedBy,
-    deletedAt: file.deletedAt,
-    createdAt: file.createdAt,
-    modifiedAt: file.modifiedAt,
-  };
-  return metadata;
-};
+const UPLOAD_ROOT =
+  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
 
 //API Handlers
 
 const handleCreateFile = async (req, res, next) => {
-  const db = req.db;
   const parent = req.parentDir;
   const multerFile = req.file;
   const userId = req.user._id;
-  // const externalView = req.body.viewPermission;
 
   if (!multerFile) {
     return badRequest(res, "No file in the request!!");
@@ -63,44 +45,38 @@ const handleCreateFile = async (req, res, next) => {
 
     const disposition = INLINE_MIME.has(detectedMime) ? "inline" : "attachment";
 
-    const fileDoc = {
-      userId,
+    const fileDoc = getFileDocHelper(multerFile);
 
-      parentId: parent?._id || null,
+    fileDoc.userId = userId;
+    fileDoc.parentId = parent?._id || null;
+    fileDoc.detectedMime = detectedMime;
+    fileDoc.disposition = disposition;
 
-      originalname: multerFile.originalname,
-      filename: multerFile.filename,
+    /*  handle same name files  */
 
-      // storage abstraction
-      storageProvider: "local",
-      objectKey: multerFile.filename, // NOT path
+    // const sameFiles = await FileModel.find({
+    //   originalname: fileDoc.originalname,
+    //   userId: userId,
+    //   parentId: fileDoc.parentId,
+    // }).lean();
 
-      mimetype: multerFile.mimetype, // informational only
-      detectedMime,
+    // if (sameFiles.length > 0){
+    //   const ext = path.extname(fileDoc.originalname);
+    //   fileDoc.originalname = fileDoc.originalname.replace(`${ext}`, `(${sameFiles.length})`)+ `${ext}`
+    // }
 
-      disposition,
-
-      size: multerFile.size,
-
-      isDeleted: false,
-      deletedBy: "",
-      deletedAt: null,
-
-      createdAt: new Date(),
-      modifiedAt: new Date(),
-    };
-
-    const { insertedId } = await db.collection("files").insertOne(fileDoc);
+    const file = await FileModel.insertOne(fileDoc);
 
     return res.status(201).json({
       message: "File uploaded successfully.",
-      data: insertedId,
+      data: file._id,
     });
   } catch (err) {
     // Safe cleanup (ONLY local storage)
     try {
       if (multerFile?.path) {
         await unlink(multerFile.path);
+        console.error("File unlinked...", multerFile.filename);
       }
     } catch (cleanupErr) {
       console.error("Cleanup failed:", cleanupErr.message);
@@ -111,16 +87,15 @@ const handleCreateFile = async (req, res, next) => {
 };
 
 const handleGetFiles = async (req, res, next) => {
-  const db = req.db;
   const userId = req.user._id;
-  const queries = req.query; //t=type, vid=video, fp=forcePreview, y=yes
-
   if (!ObjectId.isValid(req.params.id)) {
     return badRequest(res, "Please provide a valid id.");
   }
 
+  const queries = req.query; // type=video | type=audio, prev=yes
+
   try {
-    const file = await db.collection("files").findOne({
+    const file = await FileModel.findOne({
       _id: new ObjectId(req.params.id),
       userId,
       isDeleted: false,
@@ -135,10 +110,9 @@ const handleGetFiles = async (req, res, next) => {
     // }
 
     if (path.basename(req.path) === "metadata") {
-      const metadata = getMetadata(file);
-      return res
-        .status(200)
-        .json({ message: "File metadata found.", metadata: metadata });
+      const metadata = getMetadataHelper(file);
+
+      return res.status(200).json({ success: true, metadata });
     }
 
     const absolutePath = path.join(path.resolve(UPLOAD_ROOT), file.objectKey);
@@ -166,16 +140,20 @@ const handleGetFiles = async (req, res, next) => {
       path.basename(req.path) === "preview"
     ) {
       if (
-        (queries.t === "vid" || queries.t === "aud") &&
-        file.detectedMime.startsWith(queries.t) &&
-        queries.fp === "y" &&
+        (queries.type === "video" || queries.type === "audio") &&
+        file.detectedMime.startsWith(queries.type) &&
+        queries.prev === "yes" &&
         INLINE_MIME_AUDIO_VIDEO_EXT.has(ext)
       ) {
         file.disposition = "inline";
         file.detectedMime = INLINE_MIME_AUDIO_VIDEO_EXT.has(ext)
           ? `video/${ext}`
           : file.mime;
-      } else return badRequest(res, "File is not available for preview.");
+      } else
+        return badRequest(
+          res,
+          "Sorry! Requested file is not available for preview."
+        );
     }
 
     const mime = file.detectedMime || "application/octet-stream";
@@ -226,85 +204,131 @@ const handleGetFiles = async (req, res, next) => {
 };
 
 const handleUpdateFile = async (req, res, next) => {
-  const { newname } = req.body;
-  const db = req.db;
+  let { newname } = req.body;
+  const parent = req.parentDir;
+
   const userId = req.user._id;
+  if (!ObjectId.isValid(req.params.id)) {
+    return badRequest(res, "Please provide a valid id!");
+  }
 
-  //check for id validation
-  if (!ObjectId.isValid(req.params.id))
-    return badRequest(res, "Please provide a valid id!!");
-
-  if (!newname) return badRequest(res, "newname not found in the request!!");
+  const action = path.basename(req.path);
 
   try {
-    //changing filename if exists in filesDb
-    const file = await db.collection("files").findOne(
-      {
-        _id: new ObjectId(req.params.id),
-        userId: userId,
-        isDeleted: false,
-      },
-      {
-        projection: {
-          _id: 1,
-          originalname: 1,
-        },
-      }
-    );
+    const file = await FileModel.findOne({
+      _id: new ObjectId(req.params.id),
+      userId: userId,
+      isDeleted: false,
+    }).lean();
+
     if (!file)
       return notFound(res, "File not found! May be it have got deleted.");
 
+    /**********         COPY          **********/
+    if (action === "copy") {
+      const fileDoc = getFileDocHelper(file);
+
+      fileDoc.originalname = `Copy-${file.originalname}`;
+      fileDoc.parentId = parent?._id || null;
+      fileDoc.filename = `${crypto.randomUUID()}`;
+      fileDoc.objectKey = fileDoc.filename;
+
+      await copyFile(
+        path.join(UPLOAD_ROOT, file.objectKey),
+        path.join(UPLOAD_ROOT, fileDoc.objectKey)
+      );
+
+      const created = await FileModel.insertOne(fileDoc);
+
+      return res.status(201).json({
+        success: true,
+        message: "Copied successfully.",
+        data: created.insertedId,
+      });
+    }
+
+    /**********         MOVE          **********/
+    if (action === "move") {
+      if (
+        (file.parentId === null && !parent) ||
+        file.parentId?.toString() === parent?._id?.toString()
+      ) {
+        return badRequest(res, "File already in the target folder!");
+      }
+
+      await FileModel.updateOne(
+        { _id: file._id },
+        { $set: { parentId: parent?._id || null, updatedAt: new Date() } }
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Moved successfully.",
+      });
+    }
+
+    /**********         RENAME          **********/
+    if (!newname) return badRequest(res, "newname is required.");
+    else {
+      if (typeof newname !== "string") newname = String(newname);
+
+      if (newname.length < 1 && action !== "move" && action !== "copy") {
+        return badRequest(res, "Invalid name provided.");
+      }
+
+      if (newname.startsWith(".")) {
+        return badRequest(res, "newname cannot start with dot (.)");
+      }
+    }
     const currExt = path.extname(file.originalname);
     const reqExt = path.extname(newname);
+    const reqName = newname.trim();
 
     const finalName =
       currExt === reqExt
-        ? newname
-        : `${path.basename(newname, reqExt)}${currExt}`;
+        ? reqName
+        : `${path.basename(reqName, reqExt)}${currExt}`;
 
-    const update = await db.collection("files").updateOne(
+    await FileModel.updateOne(
       { _id: file._id },
-      {
-        $set: { originalname: finalName, modifiedAt: new Date() },
-      }
+      { $set: { originalname: finalName, updatedAt: new Date() } }
     );
 
-    return res
-      .status(200)
-      .json({ message: "File renamed successfully.", data: update });
+    return res.status(200).json({
+      success: true,
+      message: "File renamed successfully.",
+    });
   } catch (err) {
-    return next(err);
+    next(err);
   }
 };
 
 const handleMoveToBinFile = async (req, res, next) => {
-  //check for id validation
-  if (!ObjectId.isValid(req.params.id))
-    return badRequest(res, "Please provide a valid id!!");
-
-  const db = req.db;
   const userId = req.user._id;
+  if (!ObjectId.isValid(req.params.id))
+    return badRequest(res, "Please provide a valid id!");
 
   try {
-    const file = await db.collection("files").findOne(
+    const file = await FileModel.findOne(
       {
         _id: new ObjectId(req.params.id),
         userId: userId,
         isDeleted: false,
         deletedBy: "",
       },
-      { projection: { _id: 1 } }
-    );
+      { _id: 1 }
+    ).lean();
 
     if (!file)
       return badRequest(res, "file not found! May be it have got deleted.");
 
-    const op = await db.collection("files").updateOne(
+    const op = await FileModel.updateOne(
       { _id: file._id },
       {
         $set: {
           isDeleted: true,
-          modifiedAt: new Date(),
+          updatedAt: new Date(),
+          deletedAt: new Date(),
           deletedBy: "user",
         },
       }
@@ -319,27 +343,24 @@ const handleMoveToBinFile = async (req, res, next) => {
 };
 
 const handleRestoreFile = async (req, res, next) => {
-  //check for id validation
-  if (!ObjectId.isValid(req.params.id))
-    return badRequest(res, "Please provide a valid id!!");
-
-  const db = req.db;
   const userId = req.user._id;
+  if (!ObjectId.isValid(req.params.id))
+    return badRequest(res, "Please provide a valid id!");
 
   try {
-    const file = await db.collection("files").findOne(
+    const file = await FileModel.findOne(
       {
         _id: new ObjectId(req.params.id),
         userId: userId,
         isDeleted: true,
         deletedBy: "user",
       },
-      { projection: { _id: 1, originalname: 1, parentId: 1, parentName: 1 } }
+      { _id: 1, originalname: 1, parentId: 1, parentName: 1 }
     );
 
     if (!file) return notFound(res, "file not found!");
 
-    const op = await restoreFile(db, userId, file);
+    const op = await restoreFile(userId, file);
 
     return res
       .status(200)
@@ -350,18 +371,16 @@ const handleRestoreFile = async (req, res, next) => {
 };
 
 const handleDeleteFile = async (req, res, next) => {
-  const db = req.db;
   const userId = req.user._id;
   const fileId = req.params.id;
 
   //invalid id check
   if (!ObjectId.isValid(fileId))
-    return badRequest(res, "Please provide a valid id!!");
+    return badRequest(res, "Please provide a valid id!");
 
   try {
-    const file = await db
-      .collection("files")
-      .findOne({ _id: new ObjectId(fileId), userId });
+    const file = await FileModel.findOne({ _id: new ObjectId(fileId), userId });
+
     if (!file) return notFound(res, "File not found!");
 
     const absolutePath = path.join(path.resolve(UPLOAD_ROOT), file.objectKey);
@@ -375,7 +394,7 @@ const handleDeleteFile = async (req, res, next) => {
       return next("Error occured during execution!!");
     }
 
-    await db.collection("files").deleteOne({ _id: file._id });
+    await FileModel.deleteOne({ _id: file._id });
 
     try {
       await unlink(absolutePath);

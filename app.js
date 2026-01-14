@@ -13,6 +13,8 @@ import { connectDb } from "./configs/db.js";
 import { Db } from "mongodb";
 import { appendFile } from "fs/promises";
 
+import "./configs/connect.js";
+
 try {
   const db = await connectDb();
   const app = express();

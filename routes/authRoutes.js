@@ -1,23 +1,21 @@
 import { Router } from "express";
 import { createToken } from "../utils/createToken.js";
 import { Db } from "mongodb";
+import User from "../models/user.model.js";
 
 const router = Router();
 
 router.post("/login", async (req, res, next) => {
   const { email, password } = req.body;
-  const db = req.db;
-
-  if (!email || !password)
-    return res.status(400).json({ message: "All the fields are required!" });
-
-  const user = await db
-    .collection("users")
-    .findOne({ email: email.toLowerCase(), password: password });
-
-  if (!user) return res.status(404).json({ message: "Invalid Cradentials!!" });
 
   try {
+    const user = await User.exists({
+      email: email.toLowerCase().trim(),
+      password: password,
+    });
+
+    if (!user) return res.status(404).json({ error: "Invalid Cradentials!!" });
+
     const token = await createToken(user._id);
     res.cookie("uid", token.secrete, {
       httpOnly: true,
@@ -27,35 +25,29 @@ router.post("/login", async (req, res, next) => {
     });
     return res
       .status(200)
-      .json({ message: "User logged in Successfully.", data: token._id });
+      .json({ message: "user logged in Successfully.", data: token._id });
   } catch (err) {
-   next(err)
+    next(err);
   }
 });
 
 router.post("/signup", async (req, res, next) => {
-  const db = req.db;
-  const { firstname, lastname, email, password } = req.body;
-  if (!firstname || !email || !password)
-    return res.status(400).json({ message: "All the fields are required!" });
+  const { fullname, email, password } = req.body;
 
   try {
-    const user = await db
-      .collection("users")
-      .findOne({ email: email.toLowerCase().trim() });
-    if (user) return res.status(400).json("User already exists!");
-
     const newUser = {
-      firstname,
-      lastname: lastname || "",
-      email: email.toLowerCase().trim(),
+      fullname, //allowing all type of names inc. falsy input
+      email,
       password, //rn we're not using an hashing for password
     };
-    const { insertedId } = await db.collection("users").insertOne(newUser);
+
+    const result = await User.insertOne(newUser);
     return res
-      .status(302)
-      .json({ message: "Sign up successfull", data: insertedId });
-    // return res.status(302).redirect("/login"); // .redirect(...)  === .setHeader('Location', 'http://localhost:4000/login').end()
+      .status(201)
+      .json({
+        success: true,
+        message: "user signed up successfully.",
+      });
   } catch (err) {
     next(err);
   }
@@ -67,8 +59,8 @@ router.post("/logout", (req, res) => {
       "Set-Cookie",
       `uid=; expires=${new Date(new Date() - 3600 * 1000).toUTCString()}`
     )
-    .status(200)
-    .json({ message: "User logged out Successfully.", data: null });
+    .status(302)
+    .json({ success: true, message: "user logged out Successfully." });
 });
 
 export default router;
