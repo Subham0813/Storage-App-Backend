@@ -1,35 +1,27 @@
-import mongoose from "mongoose";
+import { model, Schema } from "mongoose";
 
-const UploadSessionSchema = new mongoose.Schema(
+const UploadSessionSchema = new Schema(
   {
     userId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: Schema.Types.ObjectId,
+      ref: "User",
       required: true,
-      index: true,
-    },
-
-    fileName: {
-      type: String,
-      required: true,
-    },
-
-    size: {
-      type: Number,
-      required: true,
-    },
-
-    mime: {
-      type: String,
+      
     },
 
     parentId: {
-      type: mongoose.Schema.Types.ObjectId,
-      default: null,
+      type: Schema.Types.ObjectId,
+      ref: "Directory",
+      required: true,
     },
+
+    fileName: { type: String, required: true },
+    size: { type: Number, required: true },
+    mime: { type: String, required: true },
 
     strategy: {
       type: String,
-      enum: ["direct", "chunked"],
+      enum: ["direct", "chunked", "google-drive"],
       required: true,
     },
 
@@ -38,33 +30,31 @@ const UploadSessionSchema = new mongoose.Schema(
       enum: [
         "initiated",
         "uploading",
-        "paused",
+        "importing",
         "uploaded",
-        "completed",
+        "imported",
+        "paused",
         "failed",
+        "cancelled",
       ],
       default: "initiated",
-      index: true,
     },
+    //google-drive specific
+    bytesRead: { type: Number, required: true , default:0},
 
     // chunk-specific
-    chunkSize: Number,
-    totalChunks: Number,
-    uploadedChunks: {
-      type: [Number], // [0, 1, 2, 5...]
-      default: [],
-    },
+    chunkSize: { type: Number, required: true },
+    totalChunks: { type: Number, required: true },
+    uploadedChunks: { type: [Number], default: [] },
 
-    tempDir: {
-      type: String, // /uploads/tmp/<uploadId>/
-    },
+    tempDir: { type: String},
 
     expiresAt: {
       type: Date,
-      index: { expireAfterSeconds: 0 }, 
+      index: { expireAfterSeconds: 0 },
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
-export const UploadSession =  mongoose.model("UploadSession", UploadSessionSchema);
+export const UploadSession = model("upload_sessions", UploadSessionSchema);

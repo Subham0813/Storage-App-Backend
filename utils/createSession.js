@@ -5,12 +5,14 @@ const MAX_DEVICE_COUNT = process.env.MAX_DEVICE_COUNT || 2;
 
 const createSession = async (user, res) => {
   if (!user || !res) return {};
-  
+
   try {
     if (user.deviceCount < MAX_DEVICE_COUNT) {
       user.deviceCount = user.deviceCount + 1;
       await user.save();
-    } else Session.deleteOne({ userId: user._id });
+    } else {
+      await Session.deleteOne({ userId: user._id });
+    }
 
     const { _id: sid, expiry } = await Session.create({ userId: user._id });
 

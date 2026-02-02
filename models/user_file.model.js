@@ -1,39 +1,13 @@
 import { Schema, model } from "mongoose";
-
-const AncestorSchema = new Schema(
-  {
-    _id: {
-      type: Schema.Types.ObjectId,
-      ref: "Directory",
-      required: true,
-    },
-    name: {
-      type: String,
-      required: true,
-    },
-  },
-  { _id: false }
-);
+import { sharedWithSchema } from "./directory.model.js";
 
 const fileSchema = new Schema(
   {
-    userId: {
-      type: Schema.Types.ObjectId,
-      required: true,
-      ref: "User",
-    },
+    userId: { type: Schema.Types.ObjectId, required: true, ref: "User" },
 
-    parentId: {
-      type: Schema.Types.ObjectId,
-      ref: "Directory",
-      default: null,
-    },
+    parentId: { type: Schema.Types.ObjectId, ref: "Directory", required: true },
 
-    meta: {
-      type: Schema.Types.ObjectId,
-      ref: "File",
-      required: true,
-    },
+    meta: { type: Schema.Types.ObjectId, ref: "File", required: true },
 
     name: {
       type: String,
@@ -46,31 +20,28 @@ const fileSchema = new Schema(
       trim: true,
     },
 
-    mimetype: {
-      type: String,
-      minLength: 1,
-      trim: true,
-      required: true,
-    },
+    mimetype: { type: String, trim: true, required: true },
 
     disposition: {
       type: String,
       enum: ["inline", "attachment"],
       trim: true,
+      required: true,
       default: "attachment",
     },
 
-    inline_preview: { type: Boolean },
-    force_inline_preview: { type: Boolean },
+    size: { type: Number, min: 1, required: true },
 
-    isDeleted: {
-      type: Boolean,
-      default: false,
-    },
+    inline_preview: { type: Boolean, required: true },
+    force_inline_preview: { type: Boolean, required: true },
+
+    isDeleted: { type: Boolean, required: true, default: false },
+    isStarred: { type: Boolean, required: true, default: false },
 
     deletedBy: {
       type: String,
       enum: ["none", "user", "process"],
+      required: true,
       default: "none",
     },
 
@@ -79,8 +50,15 @@ const fileSchema = new Schema(
       default: null,
       expires: 15 * 24 * 3600,
     },
+
+    publicRole: {
+      type: String,
+      enum: ["VIEWER", "COMMENTER", "EDITOR", "OWNER"],
+      default:"OWNER"
+    },
+    sharedWith: { type: [sharedWithSchema], default: [] },
   },
-  { strict: "throw", timestamps: true }
+  { strict: "throw", timestamps: true },
 );
 
 export const UserFile = model("user_files", fileSchema);

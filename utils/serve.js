@@ -4,14 +4,14 @@ import path from "path";
 import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
 
-async function serveZip({
+export const serveZip = async ({
   archive,
   userId,
   dirId,
   zipPath,
   visited,
   UPLOAD_ROOT,
-}) {
+}) => {
   const dirIdStr = dirId.toString();
 
   if (visited.has(dirIdStr)) return;
@@ -69,13 +69,12 @@ async function serveZip({
       UPLOAD_ROOT,
     });
   }
-}
+};
 
-const sanitizeName = (name) => {
+export const sanitizeName = (name) => {
   return name
     .replace(/[\/\\]/g, "_") // no slashes
     .replace(/\.\./g, "_") // no traversal
     .trim();
 };
 
-export { serveZip, sanitizeName };

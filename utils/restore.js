@@ -2,11 +2,12 @@ import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
 
 let dummyParent = null;
+let rootDirId = null;
 //helper
-const getDummyParent = (item, userId) => ({
+const getDummyParent = (item, userId, rootDirId) => ({
   _id: item.parentId,
   name: "restored folder",
-  parentId: null,
+  parentId: rootDirId,
   userId,
   isDeleted: false,
   deletedBy: "none",
@@ -16,63 +17,47 @@ const getDummyParent = (item, userId) => ({
 /* Restore parent chain (bottom to root) */
 const restoreParentChain = async (userId, item, visited) => {
   try {
-    if (!item.parentId) return;
-
     const pid = item.parentId.toString();
     if (visited.has(pid)) return;
     visited.add(pid);
 
-    const parent = await Directory.findOne({
-      _id: item.parentId,
-      userId,
-      isDeleted: false,
-    });
+    const parent = await Directory.findById(item.parentId);
+    if (!parent) {
+      //create dummy parent for missing parent
+      const dummy = await Directory.findOneAndUpdate(
+        { _id: item.parentId, userId },
+        {
+          $setOnInsert: getDummyParent(item, userId, rootDirId),
+        },
+        { upsert: true },
+      );
+    } else if (parent.isDeleted) {
+      await restoreParentChain(userId, parent, visited);
 
-    if (parent) return;
-
-    const binParent = await Directory.findOne({
-      _id: item.parentId,
-      userId,
-      isDeleted: true,
-    });
-
-    if (binParent) {
-      await restoreParentChain(userId, binParent, visited);
-
-      await Directory.updateOne(
-        { _id: binParent._id },
+      await Directory.findOneAndUpdate(
+        { _id: parent._id },
         {
           $set: {
             isDeleted: false,
             updatedAt: new Date(),
             deletedBy:
-              binParent.deletedBy === "process" ? "none" : binParent.deletedBy,
+              parent.deletedBy === "process" ? "none" : parent.deletedBy,
           },
-        }
+        },
+        { new: true },
       );
-      return;
     }
-
-    //create dummy parent for missing parent
-    const dummy = await Directory.updateOne(
-      { _id: item.parentId, userId },
-      { $setOnInsert: getDummyParent(item, userId) },
-      { upsert: true }
-    );
-
-    dummyParent = dummy;
   } catch (err) {
     throw err;
   }
 };
 
 /* Restore files under a directory */
-const restoreFiles = async (userId, dirId) => {
+const restoreFiles = async (dir) => {
   try {
     await UserFile.updateMany(
       {
-        parentId: dirId,
-        userId,
+        parentId: dir._id,
         isDeleted: true,
         deletedBy: "process", //only deletedby process
       },
@@ -82,7 +67,7 @@ const restoreFiles = async (userId, dirId) => {
           deletedBy: "none",
           updatedAt: new Date(),
         },
-      }
+      },
     );
   } catch (err) {
     throw err;
@@ -90,20 +75,15 @@ const restoreFiles = async (userId, dirId) => {
 };
 
 /* Restore directories recursively (DFS) */
-const restoreDirsRecursive = async (userId, dirId) => {
+const restoreDirsRecursive = async (dir) => {
   try {
-    const children = await Directory.find(
-      {
-        parentId: dirId,
-        userId,
-        isDeleted: true,
-        deletedBy: "process",
-      },
-      { _id: 1 }
-    ).lean();
-
-    for (const child of children) {
-      await Directory.updateOne(
+    const children = await Directory.find({
+      parentId: dir._id,
+      isDeleted: true,
+      deletedBy: "process",
+    });
+    for (let child of children) {
+      child = await Directory.findOneAndUpdate(
         { _id: child._id },
         {
           $set: {
@@ -111,66 +91,41 @@ const restoreDirsRecursive = async (userId, dirId) => {
             deletedBy: "none",
             updatedAt: new Date(),
           },
-        }
+        },
       );
 
-      await restoreDirsRecursive(userId, child._id);
-      await restoreFiles(userId, child._id);
+      await restoreDirsRecursive(child);
+      await restoreFiles(child);
     }
   } catch (err) {
     throw err;
   }
 };
 
-const restoreFile = async (userId, file) => {
+export const restoreFile = async (userId, file, rootId) => {
   const visited = new Set();
-
+  rootDirId = rootId;
   try {
     await restoreParentChain(userId, file, visited);
-
-    await UserFile.updateOne(
-      { _id: file._id },
-      {
-        $set: {
-          isDeleted: false,
-          deletedBy: "none",
-          updatedAt: new Date(),
-        },
-      }
-    );
-    return dummyParent;
   } catch (err) {
     throw err;
   }
 };
 
-const restoreDirectory = async (userId, dir) => {
+export const restoreDirectory = async (userId, dir, rootId) => {
   const visited = new Set();
+  rootDirId = rootId;
 
   try {
     // 1. restore parent chain
     await restoreParentChain(userId, dir, visited);
 
-    // 2. restore this directory
-    await Directory.updateOne(
-      { _id: dir._id },
-      {
-        $set: {
-          isDeleted: false,
-          deletedBy: "none",
-          updatedAt: new Date(),
-        },
-      }
-    );
-
-    // 3. restore subtree
-    await restoreDirsRecursive(userId, dir._id);
+    // 2. restore subtree
+    await restoreDirsRecursive(userId, dir);
     await restoreFiles(userId, dir._id);
 
-    return dummyParent;
+    return true;
   } catch (err) {
     throw err;
   }
 };
-
-export { restoreFile, restoreDirectory };

@@ -2,13 +2,13 @@ import { UploadSession } from "../models/uploadSession.model.js";
 import mongoose from "mongoose";
 
 const loadUploadSession = async (req, res, next) => {
-  const { uploadId } = req.params;
+  const { sessionId } = req.params;
 
-  if (!mongoose.Types.ObjectId.isValid(uploadId)) {
-    return res.status(400).json({ message: "Invalid uploadId" });
+  if (!mongoose.Types.ObjectId.isValid(sessionId)) {
+    return res.status(400).json({ message: "Invalid sessionId" });
   }
 
-  const upload = await UploadSession.findById(uploadId);
+  const upload = await UploadSession.findById(sessionId);
 
   if (!upload) {
     return res.status(404).json({ message: "Upload session not found" });

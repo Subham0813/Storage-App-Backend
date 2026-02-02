@@ -1,10 +1,6 @@
 import express, { Router } from "express";
 
-import {
-  completeUpload,
-  getUploadStatus,
-  initUpload,
-  uploadChunk,
+import { cancelUpload, completeUpload, getUploadStatus, initUpload, uploadChunk
 } from "../controllers/uploadControllers.js";
 
 import upload from "../middlewares/upload.js";
@@ -13,9 +9,10 @@ import { loadParentDir } from "../middlewares/loadParentDirectory.js";
 
 const router = Router();
 
-router.post("/init-upload", express.json(), loadParentDir, initUpload);
-router.post("/upload-chunk/:uploadId", upload.single("file"), loadUploadSession, uploadChunk);
-router.post("/complete-upload/:uploadId", express.json(), loadUploadSession, completeUpload);
-router.get("/uploads/:uploadId", express.json(), loadUploadSession, getUploadStatus);
+router.get( "/session/:sessionId",express.json(),loadUploadSession, getUploadStatus );
+router.post("/session/create", express.json(), loadParentDir, initUpload );
+router.post("/session/:sessionId/chunk", upload.single("file"), loadUploadSession, uploadChunk );
+router.post("/session/:sessionId/complete", express.json(), loadUploadSession, completeUpload );
+router.delete("/session/:sessionId/cancel", express.json(), loadUploadSession, cancelUpload );
 
 export default router;

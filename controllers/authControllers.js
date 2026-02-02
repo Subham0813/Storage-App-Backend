@@ -3,18 +3,12 @@ import mongoose from "mongoose";
 import * as bcrypt from "bcrypt";
 
 import { User } from "../models/user.model.js";
-import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
-import { File as FileModel } from "../models/file.model.js";
-import { Session } from "../models/session.model.js";
 import { OTP } from "../models/otp.model.js";
 import { badRequest, notFound } from "../utils/helper.js";
 import { createSession } from "../utils/createSession.js";
 
-const UPLOAD_ROOT =
-  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
-
-const handleRequestOTP = async (req, res, next) => {
+export const requestOtpHandler = async (req, res, next) => {
   const { email, purpose } = req.body;
   const { authToken } = req.signedCookies;
 
@@ -36,7 +30,7 @@ const handleRequestOTP = async (req, res, next) => {
 
     //create & send otp to email
     const otp = await new Promise((resolve) =>
-      setTimeout(resolve(Math.floor(100000 + Math.random() * 900000), 1000))
+      setTimeout(resolve(Math.floor(100000 + Math.random() * 900000), 1000)),
     );
 
     //await sendEmail({email, purpose, otp})
@@ -48,17 +42,18 @@ const handleRequestOTP = async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      otp,
+      statusCode: 201,
       message: "An One Time Password has been sent to your Email address.",
-      expiresAt: otpRecord.createdAt.getTime() + 300 * 1000,
+      data: { otp, expiresAt: otpRecord.createdAt.getTime() + 300 * 1000 },
     });
   } catch (err) {
-    err.customMessage = "One Time Password request failed due to some unavoidable reasons. Try again."
+    err.customMessage =
+      "One Time Password request failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };
 
-const handleVerifyOTP = async (req, res, next) => {
+export const verifyOtpHandler = async (req, res, next) => {
   const { email, otp, purpose } = req.body;
   if (!email || !otp) return badRequest(res, "Invalid payload.");
 
@@ -73,6 +68,19 @@ const handleVerifyOTP = async (req, res, next) => {
     let otpRecord = otps[otps.length - 1];
     const isValid = await otpRecord.compareOTP(otp.toString());
     if (!isValid) return badRequest(res, "Invalid OTP.");
+
+    if (!user.rootDirId) {
+      const root = await Directory.create({
+        name: `root-${user.username}`,
+        parentId: new mongoose.Types.ObjectId(),
+        userId: user._id,
+      });
+
+      user.rootDirId = root._id;
+    }
+
+    user.emailVerified = true;
+    await user.save();
 
     let userPayload = {};
 
@@ -91,7 +99,11 @@ const handleVerifyOTP = async (req, res, next) => {
           path: "/",
         })
         .status(201)
-        .json({ success: true, message: "OTP verified." });
+        .json({
+          success: true,
+          statusCode: 201,
+          message: "OTP verified.",
+        });
     }
 
     userPayload = await createSession(user, res);
@@ -100,22 +112,36 @@ const handleVerifyOTP = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
+      statusCode: 200,
       message: "OTP verification successful. Session created.",
-      user: userPayload,
+      data: { user: userPayload },
     });
   } catch (err) {
-    err.customMessage = "One Time Password verification failed due to some unavoidable reasons. Try again."
+    err.customMessage =
+      "One Time Password verification failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };
 
-const handleLogin = async (req, res, next) => {
-  const { email, password } = req.body;
-  if (!email || !password) return badRequest(res, "Invalid payload.");
+export const loginHandler = async (req, res, next) => {
+  const { email, password, username } = req.body;
+  if ((!email && !password) || (!username && !password) || !password)
+    return badRequest(res, "Invalid payload.");
+
+  if (email && !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email))
+    return badRequest(res, "Invalid email address.");
 
   try {
-    const user = await User.findOne({ email }).select("+password");
-    if (!user) return notFound(res, "Incorrect email or password.");
+    let user = null;
+
+    if (email) {
+      user = await User.findOne({ email }).select("+password");
+    } else if (username) {
+      user = await User.findOne({ username }).select("+password");
+    }
+
+    if (!user || !user.password)
+      return notFound(res, "Incorrect email or password.");
 
     if (!(await user.comparePassword(password)))
       return notFound(res, "Incorrect email or password.");
@@ -131,33 +157,40 @@ const handleLogin = async (req, res, next) => {
         signed: true,
         expires: new Date(expires),
         path: "/",
-      }
+      },
     );
 
     return res.status(200).json({
       success: true,
+      statusCode: 200,
       message: "Login Successful.",
     });
   } catch (err) {
-    err.customMessage = "Login process failed due to some unavoidable reasons. Try again."
+    err.customMessage =
+      "Login process failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };
 
-const handleRegister = async (req, res, next) => {
-  const { fullname, email, password } = req.body;
+export const registerHandler = async (req, res, next) => {
+  const { name, email, password } = req.body;
 
-  if (!fullname || !email || !password)
-    return badRequest(res, "Invalid payload.");
+  if (!name || !email || !password) return badRequest(res, "Invalid payload.");
+
+  if (email && !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email))
+    return badRequest(res, "Invalid email address.");
 
   try {
     const existUser = await User.findOne({ email });
     if (existUser)
-      return res
-        .status(409)
-        .json({ success: false, message: "User already registerd." });
+      return res.status(409).json({
+        success: false,
+        statusCode: 409,
+        message: "User already registered.",
+        error: "Conflict",
+      });
 
-    const user = await User.create({ fullname, email, password });
+    const user = await User.create({ name, email, password });
 
     const expires = Date.now() + 600 * 1000;
     res.cookie(
@@ -170,20 +203,22 @@ const handleRegister = async (req, res, next) => {
         signed: true,
         expires: new Date(expires),
         path: "/",
-      }
+      },
     );
 
     return res.status(201).json({
       success: true,
+      statusCode: 201,
       message: "Register successful.",
     });
   } catch (err) {
-    err.customMessage = "Register process failed due to some unavoidable reasons. Try again."
+    err.customMessage =
+      "Register process failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };
 
-const handleForgotPasswordInit = async (req, res, next) => {
+export const forgotPasswordInitHandler = async (req, res, next) => {
   const { email } = req.body;
   if (!email) return badRequest(res, "Invalid payload.");
 
@@ -202,20 +237,22 @@ const handleForgotPasswordInit = async (req, res, next) => {
         signed: true,
         expires: new Date(expires),
         path: "/",
-      }
+      },
     );
 
     return res.status(201).json({
       success: true,
-      message: "Request registerd.",
+      statusCode: 201,
+      message: "Request registered.",
     });
   } catch (err) {
-    err.customMessage = "Forgot password initialization failed due to some unavoidable reasons. Try again."
+    err.customMessage =
+      "Forgot password initialization failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };
 
-const handleForgotPassword = async (req, res, next) => {
+export const forgotPasswordHandler = async (req, res, next) => {
   const { newPassword } = req.body;
   const { oid } = req.signedCookies;
 
@@ -237,115 +274,22 @@ const handleForgotPassword = async (req, res, next) => {
     await User.findOneAndUpdate(
       { email: otpRecord.email },
       { $set: { password: hashedPass } },
-      { new: true }
+      { new: true },
     );
 
-    //await sendEmail({email})
+    //password changed success message
+    //await sendEmail({email, purpose})
 
     await otpRecord.deleteOne({ _id: oid });
 
     return res.clearCookie("oid").status(201).json({
       success: true,
+      statusCode: 201,
       message: "Password changed.",
     });
   } catch (err) {
-    err.customMessage = "Password reset process failed due to some unavoidable reasons. Try again."
+    err.customMessage =
+      "Password reset process failed due to some unavoidable reasons. Try again.";
     next(err);
   }
-};
-
-const handleLogout = async (req, res, next) => {
-  try {
-    const user = await User.findOneAndUpdate(
-      { _id: req.user._id, deviceCount: { $gt: 0 } },
-      { $inc: { deviceCount: -1 } },
-      { select: "-__v", new: true }
-    );
-
-    await Session.deleteOne({ _id: req.signedCookies.sid });
-
-    return res
-      .status(200)
-      .clearCookie("sid")
-      .json({ success: true, message: "Logout Successful." });
-  } catch (err) {
-    err.customMessage = "Logout process failed due to some unavoidable reasons. Try again."
-    next(err);
-
-  }
-};
-
-const handleLogoutAll = async (req, res, next) => {
-  try {
-    const user = await User.findOneAndUpdate(
-      { _id: req.user._id, deviceCount: { $gt: 0 } },
-      { $set: { deviceCount: 0 } },
-      { select: "-__v", new: true }
-    );
-
-    await Session.deleteMany({ userId: user._id });
-
-    return res
-      .status(200)
-      .clearCookie("sid")
-      .json({ success: true, message: "Logout Successful from all devices." });
-  } catch (err) {
-    err.customMessage = "Logout from all devices failed due to some unavoidable reasons. Try again."
-    next(err);
-  }
-};
-
-const handleDeleteProfile = async (req, res, next) => {
-  const userId = req.user._id;
-
-  try {
-    //unlink all files
-    const files = UserFile.find({ userId })
-      .populate({ path: "meta", select: "hash" })
-      .lean();
-    for (const file of files) {
-      const absolutePath = path.join(path.resolve(UPLOAD_ROOT), file.meta.hash);
-
-      if (!absolutePath.startsWith(path.resolve(UPLOAD_ROOT))) {
-        throw new Error("Error occured during execution!!");
-      }
-
-      try {
-        await unlink(absolutePath);
-        console.log("File deleted from local..");
-      } catch (err) {
-        if (err.code !== "ENOENT") {
-          throw err;
-        }
-      }
-    }
-
-    //delete all user related infos from Db
-    const op = await Promise.all([
-      Directory.deleteMany({ userId }),
-      FileModel.deleteMany({ userId }),
-      UserFile.deleteMany({ userId }),
-      Session.deleteMany({ userId }),
-    ]);
-
-    return res
-      .status(200)
-      .clearCookie("sid")
-      .json({ message: "Account deleted successfully.", expiresIn: op });
-  } catch (err) {
-    err.customMessage = "Accound deletion failed due to some unavoidable reasons. Try again."
-    next(err);
-  }
-};
-
-export {
-  handleLogin,
-  handleRegister,
-  handleLogout,
-  handleLogoutAll,
-  handleDeleteProfile,
-  handleRequestOTP,
-  handleVerifyOTP,
-  handleForgotPassword,
-  handleForgotPasswordInit,
 };
