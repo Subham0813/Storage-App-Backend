@@ -7,30 +7,19 @@ import { Directory } from "../models/directory.model.js";
 import { createSession } from "../utils/createSession.js";
 import { DriveIntegration } from "../models/integration.model.js";
 
-const github_client_id = process.env.GITHUB_CLIENT_ID || "Ov23lidhcTGC5plM2W6v";
+const github_client_id = process.env.GITHUB_CLIENT_ID;
 
-const github_redirect_uri =
-  process.env.GITHUB_REDIRECT_URI ||
-  "http://localhost:4000/auth/github/callback";
+const github_redirect_uri = process.env.GITHUB_REDIRECT_URI;
 
-const github_client_secret =
-  process.env.GITHUB_CLIENT_SECRET ||
-  "bdedf19598cabd15076909fa1dbf2b912d0bddf1";
+const github_client_secret = process.env.GITHUB_CLIENT_SECRET;
 
-const google_client_id =
-  process.env.GOOGLE_CLIENT_ID ||
-  "19238739219-dl25hbv2fvs54pb7vr5ah3aop5acrflc.apps.googleusercontent.com";
+const google_client_id = process.env.GOOGLE_CLIENT_ID;
 
-const google_redirect_uri =
-  process.env.GOOGLE_REDIRECT_URI ||
-  "http://localhost:4000/oauth/google/callback";
+const google_redirect_uri = process.env.GOOGLE_REDIRECT_URI;
 
-const google_drive_redirect_uri =
-  process.env.GOOGLE_DRIVE_REDIRECT_URI ||
-  "http://localhost:4000/oauth/google-drive/callback";
+const google_drive_redirect_uri = process.env.GOOGLE_DRIVE_REDIRECT_URI;
 
-const google_client_secret =
-  process.env.GOOGLE_CLIENT_SECRET || "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";
+const google_client_secret = process.env.GOOGLE_CLIENT_SECRET;
 
 const googleClient = new google.auth.OAuth2(
   google_client_id,
@@ -128,7 +117,6 @@ export const googleOAuthHandler = async (req, res, next) => {
     });
 
     if (req.user?._id) {
-      console.log("userId found....");
       res.cookie("oauth_user_google", req.user._id, {
         httpOnly: true,
         secure: true,
@@ -208,7 +196,6 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
       }
     } else {
       user = await User.findById(userId);
-      console.log(user);
     }
 
     if (!user) {

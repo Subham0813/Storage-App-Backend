@@ -8,12 +8,9 @@ import { DriveIntegration } from "../models/integration.model.js";
 import { UploadSession } from "../models/uploadSession.model.js";
 import { finalizeStorageRecord } from "../utils/storage.js";
 
-const google_client_id =
-  process.env.GOOGLE_CLIENT_ID ||
-  "19238739219-dl25hbv2fvs54pb7vr5ah3aop5acrflc.apps.googleusercontent.com";
+const google_client_id = process.env.GOOGLE_CLIENT_ID;
 
-const google_client_secret =
-  process.env.GOOGLE_CLIENT_SECRET || "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";
+const google_client_secret = process.env.GOOGLE_CLIENT_SECRET;
 
 const google_drive_redirect_uri =
   process.env.GOOGLE_DRIVE_REDIRECT_URI ||
@@ -75,8 +72,6 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
     // 1. Create sessions for frontend polling
     const sessions = await Promise.all(
       files.map(async (file) => {
-        console.log(file.sizeBytes);
-
         const chunkSize = CHUNK_SIZE[req.user.role];
         const totalChunks = Math.ceil(file.sizeBytes / chunkSize) || 1;
 
@@ -126,17 +121,12 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
                 { responseType: "stream" },
               );
 
-          driveRes.data.on("data", (chunk) => {
-            console.log("Chunk-length ", chunk.length);
-          });
-
           await pipeline(driveRes.data, writeStream); // Safe streaming
 
           // Finalize using the same logic as manual uploads
           await finalizeStorageRecord(session, tempPath, "imported");
-          console.log("Google Drive import successful for => ", file.name);
         } catch (err) {
-          console.error(`Import failed for ${file.name}:\n`, err);
+          console.error(`Import failed for ${file.name}: ${err.message}`);
 
           try {
             // Attempt DB update
@@ -147,7 +137,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
           } catch (dbErr) {
             console.error(
               "Critical: Could not update session status to failed",
-              dbErr,
+              dbErr.message,
             );
           }
 
