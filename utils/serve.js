@@ -1,34 +1,36 @@
 import fs from "node:fs";
 import path from "path";
 
-import Directory from "../models/directory.model.js";
-import FileModel from "../models/file.model.js";
+import { Directory } from "../models/directory.model.js";
+import { UserFile } from "../models/user_file.model.js";
 
-async function serve({
+export const serveZip = async ({
   archive,
   userId,
   dirId,
   zipPath,
   visited,
   UPLOAD_ROOT,
-}) {
+}) => {
   const dirIdStr = dirId.toString();
 
   if (visited.has(dirIdStr)) return;
   visited.add(dirIdStr);
 
   //Fetch files in this dir
-  const files = await FileModel.find({
+  const files = await UserFile.find({
     parentId: dirId,
     userId,
     isDeleted: false,
-  }).lean();
+  })
+    .populate({ path: "meta", select: "objectKey" })
+    .lean();
 
   for (const file of files) {
-    const safeName = sanitizeName(file.originalname);
+    const safeName = sanitizeName(file.name);
     const entryPath = zipPath + safeName;
 
-    const absolutePath = path.resolve(UPLOAD_ROOT, file.objectKey);
+    const absolutePath = path.resolve(UPLOAD_ROOT, file.meta.objectKey);
     // console.log({safeName, entryPath, absolutePath})
 
     // Safety check
@@ -58,8 +60,7 @@ async function serve({
       name: zipPath + safeDirName + "/",
     });
 
-    await serve({
-
+    await serveZip({
       archive,
       userId,
       dirId: dir._id,
@@ -68,13 +69,12 @@ async function serve({
       UPLOAD_ROOT,
     });
   }
-}
+};
 
-const sanitizeName = (name) => {
+export const sanitizeName = (name) => {
   return name
     .replace(/[\/\\]/g, "_") // no slashes
     .replace(/\.\./g, "_") // no traversal
     .trim();
 };
 
-export default serve;

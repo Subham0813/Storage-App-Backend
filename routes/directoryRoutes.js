@@ -1,34 +1,41 @@
 import { Router } from "express";
 
 import {
-  handleGetDirectories,
-  handleDownloadDirectory,
-  handleCreateDirectory,
-  handleUpdateDirectory,
-  handleMoveToBinDirectory,
-  handleRestoreDirectory,
-  handleDeleteDirectory
+  getDirectoriesHandler,
+  downloadDirectoryHandler,
+  createDirectoryHandler,
+  moveToBinDirectoryHandler,
+  restoreDirectoryHandler,
+  deleteDirectoryHandler,
+  renameDirectoryHandler,
+  moveDirectoryHandler,
+  getAllFilesHandler,
+  shareDirectoryHandler,
+  getDirectoryInfoHandler,
+  // GetChildrenHandler,
 } from "../controllers/DirectoryControllers.js";
-import { validateParent } from "../middlewares/validate.js";
+import { restrictRootOperations } from "../middlewares/restrictOperations.js";
 
 const router = Router();
 
 //read
-router.get("/:id", handleGetDirectories);
-router.get("/:id/download", handleDownloadDirectory);
+router.get("/:id", getDirectoriesHandler);
+router.get("/all-files/:id", getAllFilesHandler);
+router.get("/download/:id", restrictRootOperations, downloadDirectoryHandler);
+router.get("/info/:id", restrictRootOperations, getDirectoryInfoHandler);
 
 //create
-router.post("/", handleCreateDirectory);
-router.post("/:dirId", validateParent, handleCreateDirectory);
+router.post("/new/:id", createDirectoryHandler);
 
 //update
-router.patch("/:id", handleUpdateDirectory); //rename
-router.patch("/:id/move", validateParent, handleUpdateDirectory); //move
+router.post("/rename/:id", restrictRootOperations, renameDirectoryHandler); //rename
+router.post("/move/:id", restrictRootOperations, moveDirectoryHandler); //move
+router.post("/share/:id", restrictRootOperations, shareDirectoryHandler); //share
 
-router.post("/:id/trash", handleMoveToBinDirectory); //bin
-router.post("/:id/restore", handleRestoreDirectory); //restore
+router.post("/trash/:id", restrictRootOperations, moveToBinDirectoryHandler); //bin
+router.post("/restore/:id", restrictRootOperations, restoreDirectoryHandler); //restore
 
 //delete
-router.delete('/:id/delete', handleDeleteDirectory)
+router.delete("/delete/:id", restrictRootOperations, deleteDirectoryHandler);
 
 export default router;

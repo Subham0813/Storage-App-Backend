@@ -1,6 +1,80 @@
-node_modules
-script.js
-*.txt
-*.model.js
-uploads
+# Node.js & Express production .gitignore
+# Dependency directories
+node_modules/
 
+# Build output
+/dist/
+/build/
+
+# Logs
+logs/
+*.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Coverage
+coverage/
+
+# Uploads & temp files
+uploads/
+uploads/temp/
+
+# Misc
+*.tgz
+
+# Exclude lock files from uploads
+!package-lock.json
+!yarn.lock
+
+# Exclude public assets if generated
+public/
+
+# Exclude excalidraw and text docs
+*.excalidraw.json
+*.txt
+
+# Ignore test output
+*.out
+
+# Ignore backup files
+*.bak
+
+# Ignore error dumps
+*.stackdump
+
+# Ignore npm cache
+.npm/
+
+# Ignore MongoDB data dumps
+*.dump
+
+# Ignore coverage reports
+coverage/
+
+# Ignore temp files
+*.tmp
+*.temp
+
+# Ignore system files
+Desktop.ini
+
+# Ignore other temp folders
+.tmp/
+
+# Ignore old scripts
+z*

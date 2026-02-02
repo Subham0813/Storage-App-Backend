@@ -1,25 +1,23 @@
-import { unlink } from "fs/promises";
-import { ObjectId } from "mongodb";
+import mongoose from "mongoose";
 import path from "path";
+import { unlink } from "fs/promises";
 
-import Directory from "../models/directory.model.js";
-import FileModel from "../models/file.model.js";
+import { Directory } from "../models/directory.model.js";
+import { UserFile } from "../models/user_file.model.js";
+import { File as FileModel } from "../models/file.model.js";
 
 const UPLOAD_ROOT =
   process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
 
-const recursiveRemove = async (dirId, userId, visited) => {
+export const recursiveRemove = async (dir, visited) => {
   try {
-    if (!ObjectId.isValid(dirId)) return;
-    if (visited.has(dirId.toString())) return;
-
-    visited.add(dirId.toString());
+    if (visited.has(dir._id.toString())) return;
+    visited.add(dir._id.toString());
 
     // 1. soft-delete files
-    await FileModel.updateMany(
+    await UserFile.updateMany(
       {
-        parentId: dirId,
-        userId,
+        parentId: dir._id,
         isDeleted: false,
       },
       {
@@ -27,21 +25,21 @@ const recursiveRemove = async (dirId, userId, visited) => {
           isDeleted: true,
           deletedBy: "process",
           updatedAt: new Date(),
+          deletedAt: new Date(),
         },
-      }
+      },
     );
 
-    // 2. get children directories
-    const children = await Directory.find(
-      { parentId: dirId, userId, isDeleted: false },
-      { _id: 1 }
-    ).lean();
+    const children = await Directory.find({
+      parentId: dir._id,
+      isDeleted: false,
+    });
 
-    // 3. depth-first delete
+    // 2. depth-first delete child
     for (const child of children) {
-      await recursiveRemove(child._id, userId, visited);
+      await recursiveRemove(child, visited);
 
-      await Directory.updateOne(
+      await Directory.findOneAndUpdate(
         { _id: child._id },
         {
           $set: {
@@ -50,7 +48,7 @@ const recursiveRemove = async (dirId, userId, visited) => {
             updatedAt: new Date(),
             deletedAt: new Date(),
           },
-        }
+        },
       );
     }
   } catch (err) {
@@ -58,53 +56,53 @@ const recursiveRemove = async (dirId, userId, visited) => {
   }
 };
 
-const recursiveDelete = async (dirId, userId, visited) => {
+export const recursiveDelete = async (dir, visited) => {
   try {
-    if (!ObjectId.isValid(dirId)) return;
-    if (visited.has(dirId.toString())) return;
-
-    visited.add(dirId.toString());
+    if (visited.has(dir._id.toString())) return;
+    visited.add(dir._id.toString());
 
     // 1. unlink all files from storage & delete info from Db
-    const files = await FileModel.find(
-      { parentId: dirId, userId, deletedBy: { $in: ["", "process"] } },
-      { objectKey: 1 }
-    ).lean();
+    const files = await UserFile.find({ parentId: dir._id })
+      .populate({ path: "meta", select: "objectKey" })
+      .lean();
+
+    // console.info(files);
 
     for (const file of files) {
-      const absolutePath = path.join(path.resolve(UPLOAD_ROOT), file.objectKey);
+      const del = await UserFile.deleteOne({ _id: file._id });
+      const updt = await FileModel.findOneAndUpdate(
+        { _id: file.meta._id, refCount: { $gt: 0 } },
+        { $inc: { refCount: -1 } },
+      );
 
-      if (!absolutePath.startsWith(path.resolve(UPLOAD_ROOT))) {
-        console.log(
-          "Error: ",
-          "Invalid path / file not exists in local ",
-          !absolutePath.startsWith(path.resolve(UPLOAD_ROOT))
+      // console.info({ del, updt });
+
+      if (updt && updt.refCount < 1) {
+        //delete from db
+        await FileModel.deleteOne({ _id: updt._id });
+
+        //delete  from local
+        const absolutePath = path.join(
+          path.resolve(UPLOAD_ROOT),
+          file.meta.objectKey,
         );
 
-        return new Error("Error occured during execution!");
-      }
-
-      try {
-        await unlink(absolutePath);
-        console.log("File deleted from local..");
-      } catch (err) {
-        if (err.code !== "ENOENT") {
-          throw err;
+        try {
+          await unlink(absolutePath);
+          console.info(`${file.name} file unlinked.`);
+        } catch (err) {
+          if (err.code !== "ENOENT") {
+            throw err;
+          }
         }
       }
-
-      await FileModel.deleteOne({ _id: file._id });
     }
 
-    // 2. get children
-    const children = await Directory.find(
-      { parentId: dirId, userId, deletedBy: { $in: ["", "process"] } },
-      {  _id: 1 } 
-    ).lean();
+    const children = await Directory.find({ parentId: dir._id });
 
-    // 3. depth-first delete
+    // 2. depth-first delete child
     for (const child of children) {
-      await recursiveDelete(child._id, userId, visited);
+      await recursiveDelete(child, visited);
 
       await Directory.deleteOne({ _id: child._id });
     }
@@ -112,6 +110,3 @@ const recursiveDelete = async (dirId, userId, visited) => {
     throw err;
   }
 };
-
-export { recursiveRemove, recursiveDelete };
- 

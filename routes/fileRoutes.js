@@ -1,57 +1,44 @@
 import { Router } from "express";
-import upload from "../middlewares/upload.js";
 
 import {
-  handleGetFiles,
-  handleCreateFile,
-  handleUpdateFile,
-  handleMoveToBinFile,
-  handleRestoreFile,
-  handleDeleteFile
+  getFileHandler,
+  moveToBinHandler,
+  restoreFileHandler,
+  deleteFileHandler,
+  renameFileHandler,
+  moveFileHandler,
+  copyFileHandler,
+  previewFileHandler,
+  downloadFileHandler,
+  shareFileHandler,
 } from "../controllers/FileControllers.js";
-import { validateParent } from "../middlewares/validate.js";
-import { MulterError } from "multer";
+
 
 const router = Router();
 
-const uploadFile = (req, res, next) => {
-  upload.single("file")(req, res, (err) => {
-    if (err instanceof MulterError) {
-      // A Multer error occurred when uploading.
-      console.error("Multer error", err.name, err.message);
-      return next("Multer Error occurred!!");
-    } else if (err) {
-      // An unknown error occurred when uploading.
-      console.error("Other error", err.name, err.message);
-      return next("Unknown error occured!!");
-    }
-    // Everything went fine.
-    console.log("Upload successfull...", req.file.filename);
-    return next();
-  });
-};
-
-//Create
-router.post("/", uploadFile, handleCreateFile);
-router.post("/:dirId", validateParent, uploadFile, handleCreateFile);
-
 //Read
-router.get("/:id/metadata", handleGetFiles);
-router.get("/:id/preview", handleGetFiles);
-router.get("/:id/download", handleGetFiles);
+router.get("/info/:id", getFileHandler);
+router.get("/preview/:id", previewFileHandler);
+router.get("/download/:id", downloadFileHandler);
 
 //Update
-router.patch("/:id", handleUpdateFile); //rename
-router.patch("/:id/move",validateParent, handleUpdateFile); //move
-router.patch("/:id/copy",validateParent, handleUpdateFile); //copy
-//bulkcopy
+router.patch("/rename/:id", renameFileHandler); //rename
+router.patch("/move/:id", moveFileHandler); //move
+router.patch("/copy/:id", copyFileHandler); //copy
+router.patch("/share/:id", shareFileHandler); //share
 
-router.post("/:id/trash", handleMoveToBinFile); //bin
-router.post("/:id/restore", handleRestoreFile); //restore
+router.post("/trash/:id", moveToBinHandler); //bin
+router.post("/restore/:id", restoreFileHandler); //restore
 
-//delete
-router.delete('/:id/delete', handleDeleteFile)
+router.delete("/delete/:id", deleteFileHandler); //delete
 
-//bulkdelete
+//bulk operations
+// router.patch("/bulk-move", moveHandler);
+// router.patch("/bulk-copy", copyHandler);
+
+// router.post("/bulk-trash", moveToBinHandler);
+// router.post("/bulk-restore", restoreHandler);
+
+// router.delete("/bulk-delete", deleteHandler);
 
 export default router;

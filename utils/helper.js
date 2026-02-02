@@ -1,77 +1,147 @@
-import Directory from "../models/directory.model.js";
-import FileModel from "../models/file.model.js";
+import { createReadStream } from "fs";
+import crypto from "crypto";
 
-const getMetadataHelper = (file) => {
-  if (!file) return {};
-  const metadata = {
-    id: file._id,
-    parentId: file.parentId,
-    name: file.originalname,
-    mimetype: file.detectedMime,
-    size: file.size,
-    isDeleted: file.isDeleted,
-    deletedBy: file.deletedBy,
-    deletedAt: file.deletedAt,
-    createdAt: file.createdAt,
-    updatedAt: file.updatedAt,
-  };
-  return metadata;
+import { Directory } from "../models/directory.model.js";
+import { UserFile } from "../models/user_file.model.js";
+
+export const getFileHash = (
+  filePath,
+  hashAlgo = "sha256",
+  digestArg = "hex",
+) => {
+  return new Promise((resolve, reject) => {
+    //prevent duplication flow
+    // multer upload @ tmp -> stream tempfile -> create hash /w secrete -> check existance -> return response
+
+    const rs = createReadStream(filePath);
+    const hash = crypto.createHash(hashAlgo);
+
+    rs.on("data", (chunk) => hash.update(chunk));
+
+    rs.on("end", async () => {
+      const fileHash = hash.digest(digestArg);
+      return resolve(fileHash);
+    });
+
+    rs.on("error", (err) => reject(err));
+  });
 };
 
-const getFileDocHelper = (file) => ({
-  userId: file.userId || null,
-  parentId: file.parentId || null,
 
-  originalname: file.originalname,
-  filename: file.filename,
+export const getFileDoc = (file) => {
+  if (!file) return {};
+  const fileDoc = {
+    userId: file.userId || null,
+    parentId: file.parentId || null,
+    meta: file.meta || null,
 
-  // storage abstraction
-  storageProvider: "local",
-  objectKey: file.filename, // NOT path
+    name: file.name,
+    mimetype: file.mimetype,
 
-  mimetype: file.mimetype, // informational only
-  detectedMime: file.detectedMime || "",
-  disposition: file.disposition || "",
+    isDeleted: false,
+    deletedBy: "none",
+    deletedAt: null,
+  };
+  return fileDoc;
+};
 
-  size: file.size,
+export const getDbData = ({ dirId, dirName, userId, isDeleted }) => {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const directories = await Directory.find({
+        parentId: dirId,
+        userId,
+        isDeleted,
+      }).lean();
 
-  isDeleted: false,
-  deletedBy: "",
-  deletedAt: null,
+      const files = await UserFile.find({ parentId: dirId, userId, isDeleted })
+        .populate({ path: "meta", select: "size detectedMime -_id" })
+        .lean();
 
-  createdAt: new Date(),
-  updatedAt: new Date(),
-});
+      const flattenedFiles = files.map(({ meta, ...rest }) => ({
+        ...rest,
+        ...meta,
+      }));
 
-const getDbData = async (directory) => {
-  const directories = await Directory.find(
-    { parentId: directory._id, isDeleted: false },
-    { name: 1, createdAt: 1, updatedAt: 1 }
-  ).lean();
-
-  const files = await FileModel.find(
-    { parentId: directory._id, isDeleted: false },
-    {
-      originalname: 1,
-      size: 1,
-      detectedMime: 1,
-      createdAt: 1,
-      updatedAt: 1,
+      return resolve({
+        _id: dirId,
+        name: dirName,
+        directories,
+        files: flattenedFiles,
+      });
+    } catch (err) {
+      reject(err);
     }
-  ).lean();
+  });
+};
+
+export const getUserPayload = (user) => {
+  if (!user) return null;
+
+  const {
+    _id,
+    name,
+    username,
+    email,
+    emailVerified,
+    deviceCount,
+    authProviders:authProvider,
+    theme,
+    allotedStorage,
+    usedStorage,
+    createdAt,
+    updatedAt,
+  } = user;
 
   return {
-    _id: directory._id,
-    name: directory.name,
-    directories,
-    files,
+    _id,
+    name,
+    username,
+    email,
+    emailVerified,
+    deviceCount,
+    authProviders,
+    theme,
+    allotedStorage,
+    usedStorage,
+    createdAt,
+    updatedAt,
   };
 };
 
-const badRequest = (res, message) =>
-  res.status(400).json({ success: false, message: message });
+export const responsePayload = (res, statusCode = 400, message = "", error) => {
+  if (!res)
+    throw new Error(
+      "response object is not present in params. Make sure that `res` object should pass in the params.",
+    );
 
-const notFound = (res, message) =>
-  res.status(404).json({ success: false, message: message });
+  const E = {
+    400: "BAD_REQUEST",
+    401: "UNAUTHORIZED",
+    403: "FORBIDDEN",
+    404: "NOT_FOUND",
+    409: "CONFLICT",
+    413: "LIMIT_EXCEED",
+  };
+  res.status(statusCode).json({
+    success: false,
+    statusCode,
+    message,
+    error: error || E[statusCode],
+  });
+};
 
-export {badRequest, notFound, getDbData, getFileDocHelper, getMetadataHelper}
+export const badRequest = (res, message, error = "BadRequest") =>
+  res.status(400).json({
+    success: false,
+    statusCode: 400,
+    message,
+    error,
+  });
+export const notFound = (res, message, error = "NotFound") =>
+  res.status(404).json({
+    success: false,
+    statusCode: 404,
+    message,
+    error,
+  });
