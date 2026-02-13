@@ -19,30 +19,26 @@ import { loadParentDir } from "../middlewares/loadParentDirectory.js";
 
 const router = Router();
 
-//read
 router.get("/:id", getDirectoriesHandler);
 router.get("/all-files/:id", getAllFilesHandler);
 router.get("/download/:id", restrictRootOperations, downloadDirectoryHandler);
 router.get("/info/:id", restrictRootOperations, getDirectoryInfoHandler);
 
-//create
 router.post("/new", loadParentDir, createDirectoryHandler);
 
-//update
-router.post("/rename/:id", restrictRootOperations, renameDirectoryHandler); //rename
+router.post("/rename/:id", restrictRootOperations, renameDirectoryHandler);
 router.post(
   "/move/:id",
   restrictRootOperations,
   loadParentDir,
   moveDirectoryHandler,
-); //move
-router.post("/share/:id", restrictRootOperations, shareDirectoryHandler); //share
-router.post("/:shareToken/shared", restrictRootOperations, shareDirectoryHandler); //share
+);
 
-router.post("/trash/:id", restrictRootOperations, moveToBinDirectoryHandler); //bin
-router.post("/restore/:id", restrictRootOperations, restoreDirectoryHandler); //restore
+router.post("/trash/:id", restrictRootOperations, moveToBinDirectoryHandler);
+router.post("/restore/:id", restrictRootOperations, restoreDirectoryHandler);
 
-//delete
 router.delete("/delete/:id", restrictRootOperations, deleteDirectoryHandler);
+
+router.post("/share/:id", restrictRootOperations, shareDirectoryHandler); //share
 
 export default router;

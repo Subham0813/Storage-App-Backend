@@ -16,21 +16,20 @@ import { loadParentDir } from "../middlewares/loadParentDirectory.js";
 
 const router = Router();
 
-//Read
 router.get("/info/:id", getFileHandler);
 router.get("/preview/:id", previewFileHandler);
 router.get("/download/:id", downloadFileHandler);
 
-//Update
-router.patch("/rename/:id", renameFileHandler); //rename
-router.patch("/copy/:id", loadParentDir, copyFileHandler); //copy
-router.patch("/move/:id", loadParentDir, moveFileHandler); //move
+router.patch("/rename/:id", renameFileHandler);
+router.patch("/copy/:id", loadParentDir, copyFileHandler);
+router.patch("/move/:id", loadParentDir, moveFileHandler);
+
+router.post("/trash/:id", moveToBinHandler);
+router.post("/restore/:id", restoreFileHandler);
+
+router.delete("/delete/:id", deleteFileHandler);
 
 router.post("/share/:id", shareFileHandler); //share
-router.post("/trash/:id", moveToBinHandler); //bin
-router.post("/restore/:id", restoreFileHandler); //restore
-
-router.delete("/delete/:id", deleteFileHandler); //delete
 
 //bulk operations
 // router.patch("/bulk-move", moveHandler);
