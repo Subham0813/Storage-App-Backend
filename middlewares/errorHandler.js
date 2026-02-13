@@ -2,6 +2,14 @@ import mongoose, { MongooseError } from "mongoose";
 import { MulterError } from "multer";
 import { appendFile } from "node:fs/promises";
 
+/**
+ * Middleware: errorHandler
+ * what it do: Centralized error handler that catches and formats various error types (Multer, Mongoose, MongoDB) and logs them.
+ * requirements:
+ *   - Must be attached as final error-handling middleware in Express app
+ *   - Expects (err, req, res, next) signature for Express error handlers
+ *   - Logs errors to error.log.json file if err.errorResponse exists
+ */
 export const errorHandler = async (err, req, res, next) => {
   // const errmsg =
   //   err?.errInfo?.details?.schemaRulesNotSatisfied[0]
@@ -9,7 +17,16 @@ export const errorHandler = async (err, req, res, next) => {
   //   err.errmsg ||
   //   err.message;
   // console.error(errmsg);
-  // await appendFile("./error.log.json", JSON.stringify(err.errorResponse));
+  if (err.errorResponse)
+    try {
+      await appendFile(
+        "./error.log.json",
+        JSON.stringify(err.errorResponse) + ",\n",
+      );
+    } catch (e) {
+      console.error("Logging failed", e);
+    }
+
   let statusCode;
   let error;
   let errorType;

@@ -12,22 +12,16 @@ export const sharedWithSchema = new Schema({
     required: true,
   },
 
-  permissions: {
+  role: {
     type: String,
-    enum: [
-      "VIEWER",
-      "COMMENTER",
-      "EDITOR",
-    ] /*VIEWER - only read, COMMENTER- read, add comment, EDITOR - read,update, */,
+    enum: ["VIEWER", "EDITOR"] /*VIEWER - only read, EDITOR - read,update, */,
     required: true,
   },
-
-  sharedAt: { type: Date, default: Date.now(), require: true },
 });
 
 const directorySchema = new Schema(
   {
-    name: {
+    dirname: {
       type: String,
       minLength: 1,
       maxLength: 255,
@@ -60,10 +54,12 @@ const directorySchema = new Schema(
 
     publicRole: {
       type: String,
-      enum: ["VIEWER", "COMMENTER", "EDITOR", "OWNER"],
-      default: "OWNER",
+      enum: ["VIEWER", "NONE"],
+      default: "NONE",
     },
     sharedWith: { type: [sharedWithSchema], default: [] },
+    sharedAt: { type: Date, default: null },
+    shareToken: { type: String },
   },
   { strict: "throw", timestamps: true },
 );

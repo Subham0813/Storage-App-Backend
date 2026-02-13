@@ -1,26 +1,24 @@
 import { Session } from "../models/session.model.js";
 import { getUserPayload } from "./helper.js";
 
-const MAX_DEVICE_COUNT = process.env.MAX_DEVICE_COUNT || 2;
-
-const createSession = async (user, res) => {
-  if (!user || !res) return {};
-
+/**
+ * Utility: createSession
+ * what it do: Create a new session record in DB and set secure signed session cookie on response.
+ * requirements:
+ *   - user: User document with _id property
+ *   - res: Express response object to set cookie
+ *   - Creates Session with user._id and returns user payload with cookie set
+ *   - Returns: user payload object for response to client
+ */
+export const createSession = async (user, res) => {
   try {
-    if (user.deviceCount < MAX_DEVICE_COUNT) {
-      user.deviceCount = user.deviceCount + 1;
-      await user.save();
-    } else {
-      await Session.deleteOne({ userId: user._id });
-    }
-
     const { _id: sid, expiry } = await Session.create({ userId: user._id });
 
     const userPayload = getUserPayload(user);
     res.cookie("sid", sid, {
       httpOnly: true,
       sameSite: "strict",
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       signed: true,
       expires: new Date(expiry),
       path: "/",
@@ -32,4 +30,3 @@ const createSession = async (user, res) => {
   }
 };
 
-export { createSession };

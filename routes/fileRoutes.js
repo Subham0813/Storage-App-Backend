@@ -12,7 +12,7 @@ import {
   downloadFileHandler,
   shareFileHandler,
 } from "../controllers/FileControllers.js";
-
+import { loadParentDir } from "../middlewares/loadParentDirectory.js";
 
 const router = Router();
 
@@ -23,10 +23,10 @@ router.get("/download/:id", downloadFileHandler);
 
 //Update
 router.patch("/rename/:id", renameFileHandler); //rename
-router.patch("/move/:id", moveFileHandler); //move
-router.patch("/copy/:id", copyFileHandler); //copy
-router.patch("/share/:id", shareFileHandler); //share
+router.patch("/copy/:id", loadParentDir, copyFileHandler); //copy
+router.patch("/move/:id", loadParentDir, moveFileHandler); //move
 
+router.post("/share/:id", shareFileHandler); //share
 router.post("/trash/:id", moveToBinHandler); //bin
 router.post("/restore/:id", restoreFileHandler); //restore
 

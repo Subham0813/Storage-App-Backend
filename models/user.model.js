@@ -42,7 +42,7 @@ const userSchema = new Schema(
     },
     role: {
       type: String,
-      enum: ["SUPER_ADMIN","ADMIN", "GUEST", "USER"],
+      enum: ["SUPER_ADMIN", "ADMIN", "GUEST", "USER"],
       default: "GUEST",
     },
 
@@ -62,7 +62,7 @@ const userSchema = new Schema(
       default: 0,
     },
 
-    allotedStorage: { type: Number, default: 1024 * 1024 * 1024 * 10 },
+    allotedStorage: { type: Number, default: 1024 * 1024 * 1024 },
     usedStorage: { type: Number, default: 0 },
 
     isLogged: { type: Boolean, default: false },

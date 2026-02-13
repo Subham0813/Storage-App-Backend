@@ -3,6 +3,7 @@ import { mkdir, rename, rm, unlink } from "node:fs/promises";
 
 import { UploadSession } from "../models/uploadSession.model.js";
 import { finalizeStorageRecord, mergeFileChunks } from "../utils/storage.js";
+import { User } from "../models/user.model.js";
 import { badRequest } from "../utils/helper.js";
 
 const CHUNK_SIZE = {
@@ -15,19 +16,39 @@ const CHUNK_SIZE = {
 const TMP_ROOT =
   process.env.TMP_ROOT || path.resolve(process.cwd() + "/uploads/temp");
 
+const UPLOAD_ROOT =
+  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
+
+/**
+ * path: /api/uploads/session/create
+ * what it do: Initialize a new upload session, validating file size and storage quota, determining chunk strategy.
+ * requirements:
+ *   - req.body: { name: string, size: number, mime: string }
+ *   - req.user: authenticated user object provided by `validateSession`
+ *   - req.parentDir: directory object provided by `loadParentDirectory` middleware
+ */
 export const initUpload = async (req, res, next) => {
   try {
     const { name, size, mime } = req.body;
-    const userId = req.user._id;
-    const parentId = req.parentDir._id;
-    const chunkSize = CHUNK_SIZE[req.user.role];
+    const owner = await User.findById(req.parent.userId);
+
+    const storageLeft = owner.allotedStorage - owner.usedStorage;
+    if (storageLeft < size)
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient storage for the file : ${name}`,
+        error: "MAX_STORAGE_LIMIT_REACHED",
+      });
+
+    const { _id: userId, role } = req.user;
+    const chunkSize = CHUNK_SIZE[role];
     const strategy = size > chunkSize ? "chunked" : "direct";
     const totalChunks =
       strategy === "chunked" ? Math.ceil(size / chunkSize) : 1;
 
     const upload = await UploadSession.create({
       userId,
-      parentId,
+      parentId: req.parent._id,
       fileName: name,
       size,
       mime,
@@ -48,21 +69,30 @@ export const initUpload = async (req, res, next) => {
   }
 };
 
+/**
+ * path: /api/uploads/session/:sessionId/chunk
+ * what it do: Receive a single chunk of an upload, rename and store in session temp directory, track uploaded chunks.
+ * requirements:
+ *   - req.params: { sessionId: string }
+ *   - req.headers: { x-chunk-index: number }
+ *   - req.file: multipart form file from upload middleware
+ *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
+ */
 export const uploadChunk = async (req, res, next) => {
   try {
-    const upload = req.uploadSession;
+    const { _id: uid, tempDir } = req.uploadSession;
     const chunkIndex = Number(req.headers["x-chunk-index"]);
     const file = req.file;
 
     if (!file) return badRequest(res, "No chunk received.");
 
-    const tempDir =
-      upload.tempDir || path.join(TMP_ROOT, upload._id.toString());
+    const td = tempDir || path.join(TMP_ROOT, uid.toString());
+
     const updatedUpload = await UploadSession.findOneAndUpdate(
-      { _id: upload._id, uploadedChunks: { $ne: chunkIndex } }, // Only if chunk isn't already there
+      { _id: uid, uploadedChunks: { $ne: chunkIndex } }, // Only if chunk isn't already there
       {
         $addToSet: { uploadedChunks: chunkIndex }, //prevents duplicate indices
-        $set: { status: "uploading", tempDir },
+        $set: { status: "uploading", td },
       },
       { new: true },
     );
@@ -80,13 +110,16 @@ export const uploadChunk = async (req, res, next) => {
       (updatedUpload.uploadedChunks.length / updatedUpload.totalChunks) * 100,
     );
 
-    return res.json({
-      status: updatedUpload.status,
-      progress: `${progress}%`,
-      uploadedChunks: updatedUpload.uploadedChunks,
-      totalChunks: updatedUpload.totalChunks,
-      isComplete:
-        updatedUpload.uploadedChunks.length === updatedUpload.totalChunks,
+    return res.status(200).json({
+      success: true,
+      message: "chunk uploaded.",
+      data: {
+        status: upload.status,
+        progress: `${progress}%`,
+        uploadedChunks: upload.uploadedChunks,
+        totalChunks: upload.totalChunks,
+        isComplete: upload.uploadedChunks.length === upload.totalChunks,
+      },
     });
   } catch (err) {
     // attempt safe cleanup
@@ -99,38 +132,82 @@ export const uploadChunk = async (req, res, next) => {
   }
 };
 
+/**
+ * path: /api/uploads/session/:sessionId/complete
+ * what it do: Verify all chunks uploaded, merge chunks into final file, finalize storage record, deduplicate via hashing.
+ * requirements:
+ *   - req.params: { sessionId: string }
+ *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
+ *   - All chunks must be uploaded (uploadedChunks.length === totalChunks)
+ */
 export const completeUpload = async (req, res, next) => {
   const upload = req.uploadSession;
-  if (upload.uploadedChunks.length !== upload.totalChunks) {
+  const { _id: uid, uploadedChunks, totalChunks, parentId, tempDir } = upload;
+
+  if (uploadedChunks.length !== totalChunks) {
     return res.status(400).json({ message: "Chunks missing." });
   }
 
-  const mergedPath = path.join(TMP_ROOT, `${upload._id}-merged`);
+  const mergedPath = path.join(TMP_ROOT, `${uid.toString()}-merged`);
 
   try {
     // 1. Optimized Merge via Streams
-    await mergeFileChunks(upload, mergedPath);
+    const hash = await mergeFileChunks(upload, mergedPath);
 
-    // 2. Finalize via Shared Service
-    const userFile = await finalizeStorageRecord(upload, mergedPath);
+    //2. Pre-Process
+    const detected = await fileTypeFromFile(mergedPath);
+    const detectedMime =
+      detected?.mime || upload.mime || "application/octet-stream";
+
+    const finalPath = path.join(UPLOAD_ROOT, parentId.userId.toString(), hash);
+    const exist = await FileModel.findOne({ hash }).select("_id refCount");
+
+    await mkdir(path.join(UPLOAD_ROOT, parentId.userId.toString()), {
+      recursive: true,
+    });
+
+    if (exist) await unlink(mergedPath);
+    else await rename(mergedPath, finalPath);
+
+    if (tempDir)
+      rm(tempDir, { recursive: true, force: true }).catch((err) =>
+        console.error("cleanup failed:", err),
+      );
+
+    // 3. Finalize via Shared Service
+    const userFile = await finalizeStorageRecord({
+      upload,
+      hash,
+      exist,
+      detectedMime,
+      status: "uploaded",
+    });
 
     return res.status(201).json({ success: true, file: userFile });
   } catch (err) {
-    upload.status = "failed";
-    await upload.save();
     next(err);
   }
 };
 
+/**
+ * path: /api/uploads/session/:sessionId/cancel
+ * what it do: Delete the upload session and clean up temporary chunks directory.
+ * requirements:
+ *   - req.params: { sessionId: string }
+ *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
+ */
 export const cancelUpload = async (req, res, next) => {
   const upload = req.uploadSession;
 
   try {
+    await UploadSession.deleteOne({ _id: upload._id });
+
     if (upload.tempDir) {
       // Use rm recursive to delete the folder and all its chunks
-      await rm(upload.tempDir, { recursive: true, force: true });
+      rm(upload.tempDir, { recursive: true, force: true }).catch((err) =>
+        console.error("cleanup failed:", err),
+      );
     }
-    await UploadSession.deleteOne({ _id: upload._id });
 
     return res.status(200).json({ message: "Upload cancelled." });
   } catch (err) {
@@ -138,6 +215,13 @@ export const cancelUpload = async (req, res, next) => {
   }
 };
 
+/**
+ * path: /api/uploads/session/:sessionId
+ * what it do: Return current upload progress, uploaded chunk indices, and completion status.
+ * requirements:
+ *   - req.params: { sessionId: string }
+ *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
+ */
 export const getUploadStatus = async (req, res, next) => {
   try {
     const upload = req.uploadSession;
@@ -147,11 +231,14 @@ export const getUploadStatus = async (req, res, next) => {
     );
 
     return res.json({
-      status: upload.status,
-      progress: `${progress}%`,
-      uploadedChunks: upload.uploadedChunks,
-      totalChunks: upload.totalChunks,
-      isComplete: upload.uploadedChunks.length === upload.totalChunks,
+      success: true,
+      data: {
+        status: upload.status,
+        progress: `${progress}%`,
+        uploadedChunks: upload.uploadedChunks,
+        totalChunks: upload.totalChunks,
+        isComplete: upload.uploadedChunks.length === upload.totalChunks,
+      },
     });
   } catch (err) {
     next(err);
