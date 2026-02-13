@@ -6,7 +6,6 @@ const UploadSessionSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      
     },
 
     parentId: {
@@ -15,7 +14,7 @@ const UploadSessionSchema = new Schema(
       required: true,
     },
 
-    fileName: { type: String, required: true },
+    filename: { type: String, required: true },
     size: { type: Number, required: true },
     mime: { type: String, required: true },
 
@@ -39,22 +38,24 @@ const UploadSessionSchema = new Schema(
       ],
       default: "initiated",
     },
+
+    errorMessage: { type: String, default: "" },
     //google-drive specific
-    bytesRead: { type: Number, required: true , default:0},
+    bytesRead: { type: Number, required: true, default: 0 },
 
     // chunk-specific
     chunkSize: { type: Number, required: true },
     totalChunks: { type: Number, required: true },
     uploadedChunks: { type: [Number], default: [] },
 
-    tempDir: { type: String},
+    tempDir: { type: String },
 
     expiresAt: {
       type: Date,
       index: { expireAfterSeconds: 0 },
     },
   },
-  { timestamps: true },
+  { strict: "throw", timestamps: true },
 );
 
 export const UploadSession = model("upload_sessions", UploadSessionSchema);

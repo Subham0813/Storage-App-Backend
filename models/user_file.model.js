@@ -7,9 +7,10 @@ const fileSchema = new Schema(
 
     parentId: { type: Schema.Types.ObjectId, ref: "Directory", required: true },
 
-    meta: { type: Schema.Types.ObjectId, ref: "File", required: true },
+    meta: { type: Schema.Types.ObjectId, ref: "File", default: null },
+    extraMeta: { type: Object },
 
-    name: {
+    filename: {
       type: String,
       minLength: [1, "originalname should be atleast one character long."],
       maxLength: [
@@ -30,7 +31,7 @@ const fileSchema = new Schema(
       default: "attachment",
     },
 
-    size: { type: Number, min: 1, required: true },
+    size: { type: Number, required: true },
 
     inline_preview: { type: Boolean, required: true },
     force_inline_preview: { type: Boolean, required: true },
@@ -53,10 +54,12 @@ const fileSchema = new Schema(
 
     publicRole: {
       type: String,
-      enum: ["VIEWER", "COMMENTER", "EDITOR", "OWNER"],
-      default:"OWNER"
+      enum: ["VIEWER", "NONE"],
+      default: "NONE",
     },
     sharedWith: { type: [sharedWithSchema], default: [] },
+    sharedAt: { type: Date, default: Date.now(), require: true },
+    shareToken: { type: String , default: null},
   },
   { strict: "throw", timestamps: true },
 );

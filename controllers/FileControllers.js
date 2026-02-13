@@ -1,18 +1,22 @@
 import path from "node:path";
 import fs from "node:fs";
 import mongoose from "mongoose";
+import crypto from "node:crypto";
 import { unlink } from "node:fs/promises";
-import { restoreFile } from "../utils/restore.js";
-import {
-  badRequest,
-  notFound,
-  getFileDoc,
-  getMetadata,
-} from "../utils/helper.js";
+import { restoreFileParent } from "../utils/restore.js";
+import { getFileDoc, hasAccess } from "../utils/helper.js";
 
 import { File as FileModel } from "../models/file.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
+import { User } from "../models/user.model.js";
+import { base64URLEncode } from "./oauthControllers.js";
+import {
+  responsePayload,
+  badRequest,
+  forbidden,
+  notFound,
+} from "../utils/helper.js";
 
 //env variables
 const UPLOAD_ROOT =
@@ -20,6 +24,13 @@ const UPLOAD_ROOT =
 
 //API Handlers
 
+/**
+ * path: /api/files/info/:id
+ * what it do: Return metadata for a single file if requester is owner, shared user, or file is public.
+ * requirements:
+ *   - req.params: { id: string } (valid Mongo ObjectId)
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
 export const getFileHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return badRequest(res, "Invalid id.");
@@ -28,11 +39,18 @@ export const getFileHandler = async (req, res, next) => {
   try {
     const file = await UserFile.findOne({
       _id: req.params.id,
-      userId: req.user._id,
       isDeleted: false,
     }).lean();
 
-    if (!file) return notFound(res, "File not found.");
+    if (!file) return badRequest(res, "File not found!");
+
+    const { _id: userId, email } = req.user;
+    const isOwner = file.userId.toString() === userId.toString();
+    const isPublic = file.publicRole === "VIEWER";
+    const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
+
+    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized)
+      return forbidden(res);
 
     return res
       .status(200)
@@ -42,6 +60,14 @@ export const getFileHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * path: /api/files/preview/:id
+ * what it do: Stream an inline preview (audio/video) when allowed by file disposition and permissions.
+ * requirements:
+ *   - req.params: { id: string }
+ *   - req.query or req.body: optional { type: 'video'|'audio', force?: 'true' }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
 export const previewFileHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return badRequest(res, "Invalid id.");
@@ -52,27 +78,30 @@ export const previewFileHandler = async (req, res, next) => {
   try {
     const file = await UserFile.findOne({
       _id: req.params.id,
-      userId: req.user._id,
       isDeleted: false,
     })
-      .populate({ path: "meta", select: "objectKey detectedMime size" })
+      .populate("meta", "objectKey")
       .lean();
 
-    if (!file) {
-      return notFound(res, "File not found.");
-    }
+    if (!file) return badRequest(res, "File not found!");
 
-    const absolutePath = path.join(
+    const { _id: userId, email } = req.user;
+    const isOwner = file.userId.toString() === userId.toString();
+    const isPublic = file.publicRole === "VIEWER";
+    const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
+
+    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized)
+      return forbidden(res);
+
+    const filePath = path.join(
       UPLOAD_ROOT,
-      req.user._id.toString(),
+      file.userId.toString(),
       file.meta.objectKey,
     );
 
-    res.setHeader("Accept-Ranges", "bytes");
-
     // Safety check: ensure inside upload root
-    if (!absolutePath.startsWith(UPLOAD_ROOT) || !fs.existsSync(absolutePath))
-      throw new Error("Error occurred during execution!!");
+    if (!filePath.startsWith(UPLOAD_ROOT) || !fs.existsSync(filePath))
+      return notFound(res, "File missing from server.");
 
     //check preview/forcePreview
     if (
@@ -85,12 +114,15 @@ export const previewFileHandler = async (req, res, next) => {
     ) {
       file.disposition = "inline";
       file.meta.detectedMime = file.mimetype;
-    } else return badRequest(res, "Not available for preview.");
+    } else {
+      return badRequest(res, "Preview not available.");
+    }
 
-    const stat = fs.statSync(absolutePath);
+    const stat = fs.statSync(filePath);
 
     //stream
     const range = req.headers.range;
+    res.setHeader("Accept-Ranges", "bytes");
 
     if (range) {
       const [startStr, endStr] = range.replace(/bytes=/, "")?.split("-");
@@ -98,27 +130,54 @@ export const previewFileHandler = async (req, res, next) => {
       const start = parseInt(startStr, 10);
       const end = endStr ? parseInt(endStr, 10) : stat.size - 1;
 
+      // Ensure range is valid
+      if (start >= stat.size || end >= stat.size) {
+        res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+        return res.end();
+      }
+
       res.writeHead(206, {
         "Content-Range": `bytes ${start}-${end}/${stat.size}`,
         "Content-Length": end - start + 1,
+        "Content-Type": file.meta.detectedMime,
+        "Content-Disposition": `${file.disposition}; filename="${file.filename}"`,
       });
 
-      return fs.createReadStream(absolutePath, { start, end }).pipe(res);
+      const stream = fs.createReadStream(filePath, { start, end });
+
+      stream.on("error", (streamErr) => {
+        console.error("Stream error:", streamErr);
+        if (!res.headersSent) res.status(500).end();
+      });
+
+      return stream.pipe(res);
     }
 
     res.writeHead(200, {
       "Content-Length": stat.size,
       "Content-Type": file.meta.detectedMime,
-      "Content-Disposition": `${file.disposition}; filename="${file.name}"`,
+      "Content-Disposition": `${file.disposition}; filename="${file.filename}"`,
     });
 
-    return fs.createReadStream(absolutePath).pipe(res);
+    const stream = fs.createReadStream(filePath);
+    stream.on("error", (streamErr) => {
+      console.error("Stream error:", streamErr);
+      if (!res.headersSent) res.status(500).end();
+    });
+
+    return stream.pipe(res);
   } catch (err) {
-    console.log(err);
     next(err);
   }
 };
 
+/**
+ * path: /api/files/download/:id
+ * what it do: Stream the file as an attachment if requester has access.
+ * requirements:
+ *   - req.params: { id: string }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
 export const downloadFileHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return badRequest(res, "Invalid id.");
@@ -127,39 +186,58 @@ export const downloadFileHandler = async (req, res, next) => {
   try {
     const file = await UserFile.findOne({
       _id: req.params.id,
-      userId: req.user._id,
       isDeleted: false,
     })
       .populate({ path: "meta", select: "objectKey" })
       .lean();
 
-    if (!file) {
-      return notFound(res, "File not found.");
-    }
+    if (!file) return badRequest(res, "File not found!");
 
-    const absolutePath = path.join(
+    const { _id: userId, email } = req.user;
+    const isOwner = file.userId.toString() === userId.toString();
+    const isPublic = file.publicRole === "VIEWER";
+    const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
+
+    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized)
+      return forbidden(res);
+
+    const filePath = path.join(
       UPLOAD_ROOT,
-      req.user._id.toString(),
+      file.userId.toString(),
       file.meta.objectKey,
     );
 
     // Safety check: ensure inside upload root
-    if (!absolutePath.startsWith(UPLOAD_ROOT) || !fs.existsSync(absolutePath))
-      throw new Error("Error occurred during execution!!");
+    if (!filePath.startsWith(UPLOAD_ROOT) || !fs.existsSync(filePath))
+      return notFound(res, "File missing from server.");
 
     res.writeHead(200, {
-      "Content-Length": fs.statSync(absolutePath).size,
+      "Content-Length": fs.statSync(filePath).size,
       "Content-Type": "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${file.name}"`,
+      "Content-Disposition": `attachment; filename="${file.filename}"`,
     });
 
-    return fs.createReadStream(absolutePath).pipe(res);
+    const stream = fs.createReadStream(filePath);
+
+    stream.on("error", (streamErr) => {
+      console.error("Stream error:", streamErr);
+      if (!res.headersSent) res.status(500).end();
+    });
+
+    stream.pipe(res);
   } catch (err) {
-    console.log(err);
     next(err);
   }
 };
 
+/**
+ * path: /api/files/rename/:id
+ * what it do: Rename a file if requester is owner or has EDITOR access.
+ * requirements:
+ *   - req.params: { id: string }
+ *   - req.body: { newname: string }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
 export const renameFileHandler = async (req, res, next) => {
   let { newname } = req.body;
 
@@ -181,11 +259,16 @@ export const renameFileHandler = async (req, res, next) => {
   try {
     const file = await UserFile.findOne({
       _id: req.params.id,
-      userId: req.user._id,
       isDeleted: false,
     }).lean();
 
-    if (!file) return notFound(res, "File not found.");
+    if (!file) return badRequest(res, "File not found!");
+
+    const { _id: userId, email } = req.user;
+    const isOwner = file.userId.toString() === userId.toString();
+    const isShared = hasAccess(file, ["EDITOR"], email);
+
+    if (!isShared && !isOwner) return forbidden(res);
 
     // const currExt = path.extname(file.name);
     // const reqExt = path.extname(newname);
@@ -197,123 +280,161 @@ export const renameFileHandler = async (req, res, next) => {
 
     const renamed = await UserFile.updateOne(
       { _id: file._id },
-      { $set: { name: newname, updatedAt: new Date() } },
+      { $set: { filename: newname } },
       { new: true },
     );
 
     return res.status(200).json({
       success: true,
       message: "File renamed.",
-      data: { file: renamed },
     });
   } catch (err) {
     next(err);
   }
 };
 
+/**
+ * path: /api/files/copy/:id
+ * what it do: Create a copy of the file into the target directory when permitted.
+ * requirements:
+ *   - req.params: { id: string } (file id)
+ *   - req.body: { targetId: string }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
 export const copyFileHandler = async (req, res, next) => {
-  const { targetId } = req.body;
-
-  if (!targetId) return badRequest(res, "Invalid payload.");
-  if (
-    !mongoose.isValidObjectId(req.params.id) ||
-    !mongoose.isValidObjectId(targetId)
-  ) {
-    return badRequest(res, "Invalid id.");
-  }
-
-  try {
-    const targetDir = await Directory({
-      _id: targetId,
-      userId: req.user._id,
-      isDeleted: false,
-    });
-    if (!targetDir) return notFound(res, "Target not found.");
-
-    const file = await UserFile.findOne({
-      _id: req.params.id,
-      userId: req.user._id,
-      isDeleted: false,
-    }).lean();
-
-    if (!file) return notFound(res, "File not found.");
-
-    const fileDoc = getFileDoc(file);
-
-    fileDoc.name = targetId === file.parentId ? file.name : `Copy-${file.name}`;
-    fileDoc.parentId = targetId ? targetId : file.parentId;
-    fileDoc.meta = file.meta._id;
-
-    const copied = await UserFile.insertOne(fileDoc);
-
-    await FileModel.UpdateOne(
-      { _id: file.meta._id },
-      { $inc: { refCount: 1 } },
-    );
-
-    await Directory.updateOne({ _id: targetId }, { $inc: { size: file.size } });
-
-    return res.status(201).json({
-      success: true,
-      message: "Copied to the target.",
-      data: { file: copied },
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-export const moveFileHandler = async (req, res, next) => {
-  const { targetId } = req.body;
+  const { _id: targetDirId, userId: targetUserId } = req.parent;
 
   if (!mongoose.isValidObjectId(req.params.id)) {
     return badRequest(res, "Invalid id.");
   }
 
   try {
-    const targetDir = await Directory.findOne({
-      _id: targetId,
-      userId: req.user._id,
-      isDeleted: false,
-    });
-    if (!targetDir) return notFound(res, "Target not found.");
-
     const file = await UserFile.findOne({
       _id: req.params.id,
-      userId: req.user._id,
       isDeleted: false,
-    }).lean();
-    if (!file) return notFound(res, "File not found.");
+    });
 
-    if (file.parentId.toString() === targetId.toString()) {
-      return badRequest(res, "File already in the target destination.");
+    if (!file) return badRequest(res, "File not found!");
+
+    const { _id: userId, email } = req.user;
+    const isOwner = file.userId.toString() === userId.toString();
+    const isShared = hasAccess(file, ["EDITOR"], email);
+
+    if (!isShared && !isOwner) return forbidden(res);
+
+    let { filename, parentId, ...rest } = getFileDoc(file);
+
+    if (targetDirId.toString() !== parentId.toString()) parentId = targetDirId;
+    else filename = `Copy-${filename}`;
+
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await Directory.findByIdAndUpdate(
+          targetDirId,
+          { $inc: { size: file.size } },
+          { session },
+        );
+
+        await UserFile.create([{ filename, parentId, ...rest }], { session });
+
+        if (file.meta)
+          await FileModel.findByIdAndUpdate(
+            file.meta._id,
+            { $inc: { refCount: 1 } },
+            { session },
+          );
+      });
+    } finally {
+      session.endSession();
     }
 
-    await Directory.updateOne(
-      { _id: file.parentId },
-      { $inc: { size: -file.size } },
-    );
-
-    const moved = await UserFile.updateOne(
-      { _id: file._id },
-      { $set: { parentId: targetId, updatedAt: new Date() } },
-    );
-
-    await Directory.updateOne(
-      { _id: targetId },
-      { $inc: { size: +file.size } },
-    );
-
-    return res.status(200).json({
+    return res.status(201).json({
       success: true,
-      message: "Moved to target destination.",
-      file: moved,
+      message: "Copied to the target directory.",
     });
   } catch (err) {
+    if (err.statusCode)
+      return responsePayload(res, err.statusCode, err.message);
     next(err);
   }
 };
 
+/**
+ * path: /api/files/move/:id
+ * what it do: Move a file to a different directory when permitted.
+ * requirements:
+ *   - req.params: { id: string } (file id)
+ *   - req.body: { targetId: string }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
+export const moveFileHandler = async (req, res, next) => {
+  const { _id: targetDirId } = req.body;
+
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return badRequest(res, "Invalid id.");
+  }
+
+  try {
+    const file = await UserFile.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+    }).lean();
+
+    if (!file) return badRequest(res, "File not found!");
+    if (file.parentId.toString() === targetDirId.toString())
+      return badRequest(res, "File already in the target destination.");
+
+    const { _id: userId, email } = req.user;
+    const isOwner = file.userId.toString() === userId.toString();
+    const isShared = hasAccess(file, ["EDITOR"], email);
+
+    if (!isShared && !isOwner) return forbidden(res);
+
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await Directory.findByIdAndUpdate(
+          targetDirId,
+          { $inc: { size: +file.size } },
+          { session },
+        );
+
+        await UserFile.findByIdAndUpdate(
+          file._id,
+          { $set: { parentId: targetDirId } },
+          { session },
+        );
+
+        await Directory.findByIdAndUpdate(
+          file.parentId,
+          { $inc: { size: -file.size } },
+          { session },
+        );
+      });
+    } finally {
+      session.endSession();
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Moved to target directory.",
+    });
+  } catch (err) {
+    if (err.statusCode)
+      return responsePayload(res, err.statusCode, err.message);
+
+    next(err);
+  }
+};
+
+/**
+ * path: /api/files/trash/:id
+ * what it do: Move a file to the bin (soft-delete) if requester is owner or has EDITOR access.
+ * requirements:
+ *   - req.params: { id: string }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
 export const moveToBinHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return badRequest(res, "Invalid id.");
@@ -321,115 +442,146 @@ export const moveToBinHandler = async (req, res, next) => {
   try {
     const file = await UserFile.findOne({
       _id: req.params.id,
-      userId: req.user._id,
       isDeleted: false,
       deletedBy: "none",
-    })
-      .populate({ path: "meta", select: "objectKey detectedMime size" })
-      .lean();
+    });
+    if (!file) return badRequest(res, "File not found!");
 
-    if (!file) return badRequest(res, "file not found.");
+    const { _id: userId, email } = req.user;
+    const isOwner = file.userId.toString() === userId.toString();
+    const isShared = hasAccess(file, ["EDITOR"], email);
 
-    const op = await UserFile.findOneAndUpdate(
-      { _id: file._id },
-      {
-        $set: {
-          isDeleted: true,
-          updatedAt: new Date(),
-          deletedAt: new Date(),
-          deletedBy: "user",
-        },
-      },
-      { new: true },
-    );
+    if (!isShared && !isOwner) return forbidden(res);
 
-    return res.status(200).json({ message: "File moved to bin.", data: op });
-  } catch (err) {
-    next(err);
-  }
-};
-
-export const restoreFileHandler = async (req, res, next) => {
-  const userId = req.user._id;
-
-  if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
-
-  try {
-    const file = await UserFile.findOne(
-      {
-        _id: req.params.id,
-        userId,
+    await UserFile.findByIdAndUpdate(file._id, {
+      $set: {
         isDeleted: true,
+        deletedAt: new Date(),
         deletedBy: "user",
       },
-      {
-        $set: {
-          isDeleted: false,
-          deletedBy: "none",
-          updatedAt: new Date(),
-        },
-      },
-    )
-      .populate({ path: "meta", select: "objectKey detectedMime size" })
-      .lean();
+    });
 
-    if (!file) return notFound(res, "file not found.");
-
-    const op = await restoreFile(userId, file, req.user.rootDirId);
-
-    return res.status(200).json({ message: "file restored.", data: op });
+    return res
+      .status(200)
+      .json({ success: true, message: "File moved to bin." });
   } catch (err) {
     next(err);
   }
 };
 
-export const deleteFileHandler = async (req, res, next) => {
+/**
+ * path: /api/files/restore/:id
+ * what it do: Restore a previously soft-deleted file if requester is owner or has EDITOR access.
+ * requirements:
+ *   - req.params: { id: string }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
+export const restoreFileHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return badRequest(res, "Invalid id.");
 
   try {
     const file = await UserFile.findOne({
       _id: req.params.id,
-      userId: req.user._id,
-    })
-      .populate({ path: "meta", select: "objectKey" })
-      .lean();
+      isDeleted: true,
+      deletedBy: "user",
+    });
+    if (!file) return badRequest(res, "File not found!");
 
-    if (!file) return notFound(res, "File not found.");
+    const directory = await Directory.findOne({
+      _id: file.parentId,
+      isDeleted: false,
+    });
 
-    await UserFile.deleteOne({ _id: file._id });
+    if (!directory)
+      return badRequest(
+        res,
+        "Parent directory does not exist. Restore parent first.",
+      );
 
-    const updt = await FileModel.findOneAndUpdate(
-      { _id: file.meta._id, refCount: { $gt: 0 } },
-      { $inc: { refCount: -1 } },
+    const { _id: userId, email } = req.user;
+    const isOwner = file.userId.toString() === userId.toString();
+    const isShared = hasAccess(file, ["EDITOR"], email);
+
+    if (!isShared && !isOwner) return forbidden(res);
+
+    // const { _id: uid, rootDirId } = file.userId;
+    // const rfp = await restoreFileParent(uid, file, rootDirId);
+
+    await UserFile.findByIdAndUpdate(
+      file._id,
+      {
+        $set: {
+          isDeleted: false,
+          deletedAt: null,
+          deletedBy: "none",
+        },
+      },
       { new: true },
     );
 
-    await Directory.findOneAndUpdate(
-      { _id: file.parentId },
-      { $inc: { size: -file.size } },
-    );
+    return res.status(200).json({ message: "file restored." });
+  } catch (err) {
+    next(err);
+  }
+};
 
-    if (updt && updt.refCount <= 0) {
-      //delete from db
-      await FileModel.deleteOne({ _id: updt._id });
+/**
+ * path: /api/files/delete/:id
+ * what it do: Permanently delete a file and decrease reference count; may delete physical file when no refs remain.
+ * requirements:
+ *   - req.params: { id: string }
+ *   - req.user: authenticated user object; typically only owner can delete
+ */
+export const deleteFileHandler = async (req, res, next) => {
+  if (!mongoose.isValidObjectId(req.params.id))
+    return badRequest(res, "Invalid id.");
 
-      //delete  from local
-      const absolutePath = path.join(
-        UPLOAD_ROOT,
-        req.user._id.toString(),
-        file.meta.objectKey,
+  const session = await mongoose.startSession();
+  let filePathToDelete = null;
+  try {
+    await session.withTransaction(async () => {
+      const file = await UserFile.findOneAndDelete({
+        _id: req.params.id,
+        userId: req.user._id,
+      })
+        .populate({ path: "meta", select: "objectKey" })
+        .session(session);
+
+      await Directory.findOneAndUpdate(
+        { _id: file.parentId },
+        { $inc: { size: -file.size } },
+        { session },
       );
 
-      try {
-        await unlink(absolutePath);
-        console.info(`${file.name} file unlinked.`);
-      } catch (err) {
-        if (err.code !== "ENOENT") {
-          throw err;
-        }
+      let updatedFile = null;
+      if (file.meta)
+        updatedFile = await FileModel.findOneAndUpdate(
+          { _id: file.meta._id, refCount: { $gt: 0 } },
+          { $inc: { refCount: -1 } },
+          { session },
+        ).select("_id objectKey refCount");
+
+      if (updatedFile && updatedFile.refCount <= 0) {
+        await FileModel.deleteOne({ _id: updatedFile._id });
+        filePathToDelete = path.join(
+          UPLOAD_ROOT,
+          file.userId.toString(),
+          file.meta.objectKey,
+        );
       }
+    });
+
+    if (filePathToDelete) {
+      unlink(filePathToDelete).catch((err) => {
+        // Ignore "File not found" errors, log everything else
+        if (err.code !== "ENOENT") {
+          console.error(
+            `Failed to delete file physically: ${filePathToDelete}`,
+            err,
+          );
+        }
+      });
     }
 
     return res.status(200).json({
@@ -437,77 +589,109 @@ export const deleteFileHandler = async (req, res, next) => {
     });
   } catch (err) {
     next(err);
+  } finally {
+    if (session) session.endSession();
   }
 };
 
+/**
+ * path: /api/files/share/:id
+ * what it do: Change sharing settings for a file (set publicRole and push individual sharedWith entries).
+ * requirements:
+ *   - req.params: { id: string }
+ *   - req.body: { emailsWithRole?: [{ email, role }], publicRole?: string, notify?: boolean }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
 export const shareFileHandler = async (req, res, next) => {
-  try {
-    if (!mongoose.isValidObjectId(req.params.id))
-      return badRequest(res, "Invalid id.");
+  if (!mongoose.isValidObjectId(req.params.id))
+    return badRequest(res, "Invalid id.");
 
-    //emailWithRole: [{email: "", role:""}], publicRole: "", notify: true
-    const { emailsWithRole, publicRole, notify } = req.body;
+  //emailsWithRole: [{email: "", role:""}], publicRole: "", notify: true
+  const { emailsWithRole, publicRole, notify } = req.body;
+  const allowedRoles = ["VIEWER", "NONE"];
+  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
 
-    if (!emailsWithRole && !publicRole)
-      return badRequest(res, "Invalid payload.");
+  if (!emailsWithRole && !publicRole)
+    return badRequest(res, "Invalid payload.");
 
-    if (
-      publicRole &&
-      !["VIEWER", "COMMENTER", "EDITOR"].includes(role.toUpperCase())
-    )
-      return badRequest(res, "Invalid `publicRole`.");
+  if (!formattedPublicRole || !allowedRoles.includes(formattedPublicRole))
+    return badRequest(res, "Invalid `publicRole`.");
 
-    const file = await UserFile.findOne({
-      _id: req.params.id,
-      userId: req.user._id,
-      isDeleted: false,
-    }).lean();
+  const skipped = [];
+  const validMap = new Map();
 
-    if (!file) return notFound(res, "File not found.");
+  if (emailsWithRole) {
+    emailsWithRole.forEach(({ email, role }) => {
+      const ce = email.toLowerCase().trim();
+      const cr = role.toUpperCase();
 
-    const validEmails = [];
-    const skipped = [];
-
-    for (const { email, role } of emailsWithRole) {
-      if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)) {
-        skipped.push({ email, role, reason: "invalid email." });
-      } else if (
-        role &&
-        !["VIEWER", "COMMENTER", "EDITOR"].includes(role.toUpperCase())
+      if (
+        !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ce) ||
+        !allowedRoles.includes(cr)
       ) {
-        skipped.push({ email, role, reason: "invalid role." });
-      } else
-        validEmails.push({
-          email,
-          role: role.toUpperCase(),
-          sharedAt: Date.now(),
+        skipped.push({
+          email: ce,
+          role: cr,
+          reason: "Invalid `email` or `role`.",
         });
-    }
+      } else {
+        validMap.set(ce, { email: ce, role: cr });
+      }
+    });
+  }
 
-    const shareToken = base64URLEncode(crypto.randomBytes(24)).toString(
-      "base64url",
-    );
+  const shareToken = base64URLEncode(crypto.randomBytes(24)).toString(
+    "base64url",
+  );
+  const validEntries = Array.from(validMap.values());
+  const emailsToUpdate = validEntries.map((v) => v.email);
 
-    await UserFile.findByIdAndUpdate(file._id, {
-      $push: { sharedWith: { $each: validEmails } },
-      updatedAt: Date.now(),
+  const updateQuery = {
+    $set: {
+      sharedAt: new Date(),
+      shareToken,
+    },
+  };
+
+  if (formattedPublicRole) updateQuery.$set.publicRole = formattedPublicRole;
+  if (validEntries.length > 0)
+    updateQuery.$push = { sharedWith: { $each: validEntries } };
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const file = await UserFile.findOne({
+        _id: req.params.id,
+        userId: req.user._id,
+        isDeleted: false,
+      }).session(session);
+
+      if (emailsToUpdate.length > 0) {
+        await UserFile.findByIdAndUpdate(file._id, {
+          $pull: { sharedWith: { email: { $in: emailsToUpdate } } },
+        }).session(session);
+      }
+
+      await UserFile.findByIdAndUpdate(file._id, updateQuery).session(session);
     });
 
+    
     res.status(200).json({
       success: true,
       message: "Permission changed for this file.",
-      skippedEmails: skipped,
-      acceptedEmails: validEmails,
-      shareItemId: file._id.toString(),
+      accepted: validEntries,
+      skipped,
+      shareToken,
     });
 
-    if (notify && validEmails.length > 0) {
-      //send notification to validEmails
+    if (notify) {
+      //send notification to accepted emails
       console.log("emails sent.");
     }
-
-    return res.end();
+    return;
   } catch (err) {
     next(err);
+  } finally {
+    session.endSession();
   }
 };

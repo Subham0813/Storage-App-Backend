@@ -42,6 +42,7 @@ router.get("/all-deleted-users", async (req, res, next) => {
 
 router.get("/user/:id", async (req, res, next) => {
   try {
+    const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) return badRequest(res, "Invalid id.");
 
     const user = User.findById(id).lean();
@@ -56,6 +57,7 @@ router.get("/user/:id", async (req, res, next) => {
 //super-admins can only read super-admins
 router.get("/directory/:id", async (req, res, next) => {
   try {
+    const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) return badRequest(res, "Invalid id.");
 
     const directory = await Directory.findOne({
@@ -63,6 +65,15 @@ router.get("/directory/:id", async (req, res, next) => {
       isDeleted: false,
     }).lean();
     if (!directory) return notFound(res, "directory not found.");
+
+    const user = User.findById(directory.userId).lean();
+    if (user.role === "SUPER_ADMIN" && req.user.role !== "SUPER_ADMIN")
+      return res.status(403).json({
+        success: false,
+        statusCode: 403,
+        message: "You don't have this permission.",
+        error: "ACCESS_DENIED",
+      });
 
     const files = await UserFile.find({
       parentId: directory._id,
@@ -74,71 +85,33 @@ router.get("/directory/:id", async (req, res, next) => {
       userId: directory.userId,
     });
 
-    const user = User.findById(directory.userId).lean();
-    if (user.role === "SUPER_ADMIN" && req.user.role !== "SUPER_ADMIN")
-      return res.status(403).json({
-        success: false,
-        statusCode: 403,
-        message: "You don't have this permission.",
-        error: "ACCESS_DENIED",
-      });
-
-    return res
-      .status(200)
-      .json({
-        success: true,
-        data: { directory, children: { directories, files } },
-      });
-  } catch (err) {
-    next(err);
-  }
-});
-
-//super-admin can only assign new super-admin role
-router.patch("/change-role/:id", async (req, res, next) => {
-  try {
-    let role = req.body || req.query;
-    role = role.toUpperCase();
-
-    const allowdRoles = ["GUEST", "USER", "ADMIN", "SUPER_ADMIN"];
-    if (!role || !allowdRoles.includes(role))
-      return badRequest(res, "Invalid role.");
-
-    if (!mongoose.isValidObjectId(id) || id === req.user._id.toSting())
-      return badRequest(res, "Invalid id.");
-
-    if (role === "SUPER_ADMIN" && req.user.role !== "SUPER_ADMIN")
-      return res.status(403).json({
-        success: false,
-        statusCode: 403,
-        message: "You don't have this permission.",
-        error: "ACCESS_DENIED",
-      });
-
-    const user = await User.findOneAndUpdate(
-      { _id: id, isDeleted: false },
-      { role },
-      { new: true },
-    ).lean();
-    if (!user) return notFound(res, "User not found.");
-
     return res.status(200).json({
       success: true,
-      message: "User permissions changed.",
-      data: { user },
+      data: { directory, children: { directories, files } },
     });
   } catch (err) {
     next(err);
   }
 });
 
-//super-admin can only logout super-admin
-router.post("/logout-user/:id", async (req, res, next) => {
+//super-admin and admin can only promote/demote roles
+router.patch("/change-role/:id", async (req, res, next) => {
   try {
+    const { id } = req.params;
+    let role = req.body || req.query;
+    role = role.toUpperCase();
+
+    const allowedRoles = ["GUEST", "USER", "ADMIN"];
+    if (!role || !allowedRoles.includes(role))
+      return badRequest(res, "Invalid role.");
+
     if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
       return badRequest(res, "Invalid id.");
 
-    if (user.role === "SUPER_ADMIN" && req.user.role !== "SUPER_ADMIN")
+    const user = await User.findOne({ _id: id, isDeleted: false });
+    if (!user) return notFound(res, "User not found.");
+
+    if (user.role === req.user.role)
       return res.status(403).json({
         success: false,
         statusCode: 403,
@@ -146,15 +119,38 @@ router.post("/logout-user/:id", async (req, res, next) => {
         error: "ACCESS_DENIED",
       });
 
-    const user = await User.findOneAndUpdate(
-      { _id: id, isDeleted: false },
-      { isLogged: false },
-      { new: true },
-    );
+    user.role = role;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "User permissions changed.",
+      data: {},
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+//super-admin can only logout admins, admins can only logout guests and users
+router.post("/logout-user/:id", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
+      return badRequest(res, "Invalid id.");
+
+    const user = await User.findOne({ _id: id, isDeleted: false }).lean();
     if (!user) return notFound(res, "User not found.");
 
-    await Session.deleteOne({ userId: id });
+    if (user.role === req.user.role || user.role === "SUPER_ADMIN")
+      return res.status(403).json({
+        success: false,
+        statusCode: 403,
+        message: "You don't have this permission.",
+        error: "ACCESS_DENIED",
+      });
 
+    await Session.deleteMany({ userId: id });
     return res
       .status(200)
       .json({ success: true, message: "User logged out.", data: { user } });
@@ -163,13 +159,11 @@ router.post("/logout-user/:id", async (req, res, next) => {
   }
 });
 
-//super-admin only can temp delete super-admin
+//super-admin only
 router.post("/delete-user/:id", async (req, res, next) => {
   try {
-    if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-      return badRequest(res, "Invalid id.");
-
-    if (user.role === "SUPER_ADMIN" && req.user.role !== "SUPER_ADMIN")
+    const { id } = req.params;
+    if (req.user.role === "SUPER_ADMIN")
       return res.status(403).json({
         success: false,
         statusCode: 403,
@@ -177,18 +171,19 @@ router.post("/delete-user/:id", async (req, res, next) => {
         error: "ACCESS_DENIED",
       });
 
+    if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
+      return badRequest(res, "Invalid id.");
+
     const user = await User.findOneAndUpdate(
       { _id: id, isDeleted: false },
-      { isLogged: false, isDeleted: true },
-      { new: true },
+      { isDeleted: true },
     );
     if (!user) return notFound(res, "User not found.");
-
-    await Session.deleteOne({ userId: id });
+    await Session.deleteMany({ userId: id });
 
     return res
       .status(200)
-      .json({ success: true, message: "User deleted.", data: { user } });
+      .json({ success: true, message: "User deleted.", data: {} });
   } catch (err) {
     next(err);
   }
@@ -226,6 +221,7 @@ router.post("/recover-user/:id", async (req, res, next) => {
 //super-admin only
 router.delete("/remove-user/:id", async (req, res, next) => {
   try {
+    const { id } = req.params;
     if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
       return badRequest(res, "Invalid id.");
 

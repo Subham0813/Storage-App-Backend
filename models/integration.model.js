@@ -39,7 +39,7 @@ const driveIntegrationSchema = new Schema(
       default: Date.now,
     },
   },
-  { timestamps: true },
+  { strict: "throw", timestamps: true },
 );
 
 export const DriveIntegration = model(

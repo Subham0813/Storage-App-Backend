@@ -1,4 +1,3 @@
-// dbSchemaValidation.js
 import connectMongoose from "./connect.js";
 
 const mongoose = await connectMongoose();
@@ -215,7 +214,7 @@ await db.command({
         "userId",
         "parentId",
         "meta",
-        "name",
+        "filename",
         "mimetype",
         "disposition",
         "size",
@@ -223,7 +222,6 @@ await db.command({
         "force_inline_preview",
         "isDeleted",
         "isStarred",
-        "isShared",
         "deletedBy",
         "sharedWith",
         "createdAt",
@@ -242,10 +240,10 @@ await db.command({
           description: "Folder containing this file.",
         },
         meta: {
-          bsonType: "objectId",
+          bsonType: ["null", "objectId"],
           description: "Link to the shared physical file metadata.",
         },
-        name: {
+        filename: {
           bsonType: "string",
           minLength: 1,
           maxLength: 255,
@@ -284,24 +282,24 @@ await db.command({
         },
         publicRole: {
           bsonType: "string",
-          enum: ["VIEWER", "EDITOR"],
+          enum: ["VIEWER", "NONE"],
           description: "Permissions for general audience",
+        },
+        sharedAt: {
+          bsonType: ["null", "date"],
+          description: "Share creation time.",
         },
         sharedWith: {
           bsonType: "array",
           items: {
             bsonType: "object",
-            required: ["email", "permissions", "sharedAt"],
+            required: ["email", "role"],
             properties: {
               email: { bsonType: "string", description: "Recipient email." },
               role: {
                 bsonType: "string",
-                enum: ["VIEWER", "EDITOR"] ,
+                enum: ["VIEWER", "EDITOR"],
                 description: "Permission roles.",
-              },
-              sharedAt: {
-                bsonType: "date",
-                description: "Share creation time.",
               },
             },
           },
@@ -317,7 +315,7 @@ await db.command({
           description: "Time of deletion for TTL purposes.",
         },
         createdAt: { bsonType: "date", description: "Creation timestamp." },
-        updatedAt: { bsonType: "date", description: "Last update timestamp." },
+        updatedAt: { bsonType: "date", description: "Update timestamp." },
         __v: { bsonType: "int", description: "Mongoose versioning key." },
       },
       additionalProperties: false,
@@ -335,13 +333,13 @@ await db.command({
   validator: {
     $jsonSchema: {
       bsonType: "object",
-      required: ["name", "userId", "parentId", "isDeleted", "createdAt"],
+      required: ["dirname", "userId", "parentId", "isDeleted", "createdAt"],
       properties: {
         _id: {
           bsonType: "objectId",
           description: "Unique directory identifier.",
         },
-        name: {
+        dirname: {
           bsonType: "string",
           minLength: 1,
           maxLength: 255,
@@ -363,24 +361,24 @@ await db.command({
         isStarred: { bsonType: "bool", description: "Flag for favorites." },
         publicRole: {
           bsonType: "string",
-          enum: ["VIEWER", "EDITOR"],
+          enum: ["VIEWER", "NONE"],
           description: "Permissions for general audience",
+        },
+        sharedAt: {
+          bsonType: ["null", "date"],
+          description: "Share creation time.",
         },
         sharedWith: {
           bsonType: "array",
           items: {
             bsonType: "object",
-            required: ["email", "permissions", "sharedAt"],
+            required: ["email", "role"],
             properties: {
               email: { bsonType: "string", description: "Recipient email." },
               role: {
                 bsonType: "string",
-                enum: ["VIEWER", "EDITOR"] ,
+                enum: ["VIEWER", "EDITOR"],
                 description: "Permission roles.",
-              },
-              sharedAt: {
-                bsonType: "date",
-                description: "Share creation time.",
               },
             },
           },
@@ -389,11 +387,11 @@ await db.command({
         deletedBy: {
           bsonType: "string",
           enum: ["none", "user", "process"],
-          description: "Deleter entity.",
+          description: "Entity that deleted the file.",
         },
         deletedAt: {
           bsonType: ["null", "date"],
-          description: "Deletion timestamp.",
+          description: "Time of deletion for TTL purposes.",
         },
         createdAt: { bsonType: "date", description: "Creation timestamp." },
         updatedAt: { bsonType: "date", description: "Update timestamp." },
@@ -493,7 +491,7 @@ await db.command({
       required: [
         "userId",
         "parentId",
-        "fileName",
+        "filename",
         "size",
         "strategy",
         "status",
@@ -507,7 +505,7 @@ await db.command({
           bsonType: "objectId",
           description: "User initiating the upload.",
         },
-        fileName: {
+        filename: {
           bsonType: "string",
           description: "Name of the file being uploaded.",
         },
@@ -540,6 +538,7 @@ await db.command({
           ],
           description: "Current state of the upload session.",
         },
+        errorMessage: { type: "string" },
         bytesRead: {
           bsonType: ["int", "long", "double"],
           description: "bytes read of individual chunks (bytes).",

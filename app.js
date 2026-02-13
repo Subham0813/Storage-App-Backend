@@ -10,7 +10,6 @@ import fileRoutes from "./routes/fileRoutes.js";
 import homeRoutes from "./routes/homeRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import importDriveRoutes from "./routes/importDriveRoutes.js";
-import shareRoutes from "./routes/shareRoutes.js";
 
 import { validateSession } from "./middlewares/validateSession.js";
 
@@ -18,18 +17,16 @@ import connectMongoose from "./configs/connect.js";
 import cookieParser from "cookie-parser";
 import { errorHandler } from "./middlewares/errorHandler.js";
 
-const COOKIE_SECRET = process.env.COOKIE_SECRET || "myScrete_Code@138";
-
 try {
   await connectMongoose();
 
   const app = express();
-  const port = 4000;
+  const port = process.env.PORT || 4000;
 
   app.use(serveFavicon(import.meta.dirname + "/public/favicon.ico"));
   app.use(cors({ origin: "http://localhost:5173", credentials: true }));
 
-  app.use(cookieParser(COOKIE_SECRET)); // <= secrete to signed cookie
+  app.use(cookieParser(process.env.COOKIE_SECRET));
 
   app.use("/auth", express.json(), authRoutes);
   app.use("/oauth", express.json(), oauthRoutes);
@@ -44,12 +41,11 @@ try {
 
   // 404 handler
   app.use((req, res) => {
-    
     return res.status(404).json({
       success: false,
       statusCode: 404,
       message: "Route not found.",
-      error: "NotFound",
+      error: "NOTFOUND",
     });
   });
 

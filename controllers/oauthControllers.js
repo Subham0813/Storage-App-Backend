@@ -6,20 +6,17 @@ import { User } from "../models/user.model.js";
 import { Directory } from "../models/directory.model.js";
 import { createSession } from "../utils/createSession.js";
 import { DriveIntegration } from "../models/integration.model.js";
+import { Session } from "../models/session.model.js";
 
 const github_client_id = process.env.GITHUB_CLIENT_ID;
-
 const github_redirect_uri = process.env.GITHUB_REDIRECT_URI;
-
 const github_client_secret = process.env.GITHUB_CLIENT_SECRET;
 
 const google_client_id = process.env.GOOGLE_CLIENT_ID;
-
 const google_redirect_uri = process.env.GOOGLE_REDIRECT_URI;
+const google_client_secret = process.env.GOOGLE_CLIENT_SECRET;
 
 const google_drive_redirect_uri = process.env.GOOGLE_DRIVE_REDIRECT_URI;
-
-const google_client_secret = process.env.GOOGLE_CLIENT_SECRET;
 
 const googleClient = new google.auth.OAuth2(
   google_client_id,
@@ -49,7 +46,14 @@ const generatePKCE = () => {
   return { codeVerifier, codeChallenge };
 };
 
-const fetchTokenIdGithub = async (code, codeVerifier) => {
+/**
+ * path: /api/oauth/google/connect
+ * what it do: Initiate Google OAuth flow by redirecting user to Google's authorization endpoint.
+ * requirements:
+ *   - req.user (optional): if authenticated, will be linked after successful authentication
+ *   - No body parameters required
+ */
+const getGithubAccesToken = async (code, codeVerifier) => {
   if (!code || !codeVerifier) {
     throw new Error("Missing OAuth parameters");
   }
@@ -82,7 +86,7 @@ const fetchTokenIdGithub = async (code, codeVerifier) => {
   return data.access_token;
 };
 
-const fetchUserGithub = async (accessToken) => {
+const getGithubUserPayload = async (accessToken) => {
   if (!accessToken) return null;
   const response = await fetch("https://api.github.com/user", {
     method: "GET",
@@ -97,6 +101,13 @@ const fetchUserGithub = async (accessToken) => {
   return data;
 };
 
+/**
+ * path: /api/oauth/google/connect
+ * what it do: Initiate Google OAuth flow by setting PKCE cookies and redirecting user to Google's authorization endpoint.
+ * requirements:
+ *   - req.user (optional): if authenticated, will be linked after successful authentication
+ *   - No body parameters required
+ */
 export const googleOAuthHandler = async (req, res, next) => {
   try {
     const state = crypto.randomBytes(32).toString("hex");
@@ -116,7 +127,7 @@ export const googleOAuthHandler = async (req, res, next) => {
       maxAge: 10 * 60 * 1000,
     });
 
-    if (req.user?._id) {
+    if (req.user._id) {
       res.cookie("oauth_user_google", req.user._id, {
         httpOnly: true,
         secure: true,
@@ -139,6 +150,14 @@ export const googleOAuthHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * path: /api/oauth/google/callback
+ * what it do: Handle Google OAuth callback, verify id_token, create or update user, and establish session or link account.
+ * requirements:
+ *   - req.query: { code: string, state: string, error?: string }
+ *   - req.cookies: { oauth_state_google, oauth_pkce_google, oauth_user_google? }
+ *   - Must have been initiated via /oauth/google/connect
+ */
 export const googleOAuthCallbackHandler = async (req, res, next) => {
   try {
     const { code, state, error } = req.query;
@@ -146,8 +165,6 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     const savedState = req.cookies.oauth_state_google;
     const codeVerifier = req.cookies.oauth_pkce_google;
     const userId = req.cookies.oauth_user_google;
-
-    console.log({ userId });
 
     if (!code || !state || !savedState || !codeVerifier) {
       return res.status(403).json({ message: "Invalid OAuth request.", error });
@@ -184,7 +201,8 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
 
     const { sub, email, name, picture, email_verified } = payload;
 
-    let user;
+    let user = null;
+
     if (!userId) {
       user = await User.findOne({
         authProvider: { $in: ["google"] },
@@ -194,37 +212,72 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
       if (!user && email) {
         user = await User.findOne({ email });
       }
-    } else {
-      user = await User.findById(userId);
+    } else user = await User.findById(userId);
+
+    const updateQuery = { $set: {} };
+    const session = await mongoose.startSession();
+    let userSession = null;
+
+    try {
+      await session.withTransaction(async () => {
+        if (!user) {
+          [user] = await User.create(
+            [
+              {
+                authProvider: ["google"],
+                googleId: sub,
+                email,
+                username: email.split("@")[0],
+                name,
+                avatar: picture,
+                emailVerified: email_verified,
+              },
+            ],
+            { session },
+          );
+
+          const [root] = await Directory.create(
+            [
+              {
+                dirname: `root-${user.username}`,
+                parentId: new mongoose.Types.ObjectId(),
+                userId: user._id,
+              },
+            ],
+            { session },
+          );
+
+          updateQuery.$set.rootDirId = root._id;
+        } else {
+          if (!user.googleId) updateQuery.$set.googleId = sub;
+          if (!user.authProvider.includes("google"))
+            updateQuery.$push = { authProvider: { $each: ["google"] } };
+        }
+
+        await User.findByIdAndUpdate(user._id, updateQuery, { session });
+
+        if (!userId) {
+          [userSession] = await Session.create([{ userId: user._id }], {
+            session,
+          });
+        }
+      });
+    } finally {
+      session.endSession();
     }
 
-    if (!user) {
-      user = await User.create({
-        authProvider: ["google"],
-        googleId: sub,
-        email,
-        username: email.split("@")[0],
-        name,
-        avatar: picture,
-        emailVerified: email_verified,
-      });
+    if (userSession) {
+      const { _id: sid, expiry } = userSession;
 
-      const root = await Directory.create({
-        name: `root-${user.username}`,
-        parentId: new mongoose.Types.ObjectId(),
-        userId: user._id,
+      res.cookie("sid", sid, {
+        httpOnly: true,
+        sameSite: "strict",
+        secure: process.env.NODE_ENV === "production",
+        signed: true,
+        expires: new Date(expiry),
+        path: "/",
       });
-
-      user.rootDirId = root._id;
-    } else {
-      if (!user.googleId) user.googleId = sub;
-      if (!user.authProvider.includes("google")) {
-        user.authProvider.push("google");
-      }
     }
-
-    await user.save();
-    if (!userId) await createSession(user, res);
 
     return res.redirect(`http://localhost:5173/dashboard?google=connected`);
   } catch (err) {
@@ -232,6 +285,13 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * path: /api/oauth/github/connect
+ * what it do: Initiate GitHub OAuth flow by setting PKCE cookies and redirecting user to GitHub's authorization endpoint.
+ * requirements:
+ *   - req.user (optional): if authenticated, will be linked after successful authentication
+ *   - No body parameters required
+ */
 export const githubOAuthHandler = async (req, res, next) => {
   try {
     const state = crypto.randomBytes(32).toString("hex");
@@ -278,12 +338,21 @@ export const githubOAuthHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * path: /api/oauth/github/callback
+ * what it do: Handle GitHub OAuth callback, exchange code for access token, fetch user profile, and create or update user account.
+ * requirements:
+ *   - req.query: { code: string, state: string, error?: string }
+ *   - req.cookies: { oauth_state_github, oauth_pkce_github, oauth_user_github? }
+ *   - Must have been initiated via /oauth/github/connect
+ */
 export const githubOAuthCallbackHandler = async (req, res, next) => {
   try {
     const { code, state, error } = req.query;
 
     const savedState = req.cookies.oauth_state_github;
     const codeVerifier = req.cookies.oauth_pkce_github;
+    const userId = req.cookies.oauth_user_google;
 
     if (!code || !state || !savedState || !codeVerifier) {
       return res.status(403).json({ message: "Invalid OAuth request.", error });
@@ -298,48 +367,78 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
     // Cleanup
     res.clearCookie("oauth_state_github");
     res.clearCookie("oauth_pkce_github");
+    res.clearCookie("oauth_user_github");
 
-    const accessToken = await fetchTokenIdGithub(code, codeVerifier);
-    const payload = await fetchUserGithub(accessToken);
+    const accessToken = await getGithubAccesToken(code, codeVerifier);
+    const payload = await getGithubUserPayload(accessToken);
 
     const { id, name, email, login, avatar_url } = payload;
 
-    let user = await User.findOne({
-      githubId: id,
-      authProvider: { $in: ["github"] },
-    });
-
-    if (!user && email) {
-      user = await User.findOne({ email });
-    }
-
-    if (!user) {
-      user = await User.create({
-        authProvider: ["github"],
+    let user;
+    if (!userId) {
+      user = await User.findOne({
         githubId: id,
-        username: login,
-        email,
-        name: name.length > 0 ? name : login,
-        avatar: avatar_url,
+        authProvider: { $in: ["github"] },
       });
 
-      const root = await Directory.create({
-        name: `root-${user.username}`,
-        parentId: new mongoose.Types.ObjectId(),
-        userId: user._id,
-      });
-
-      user.rootDirId = root._id;
-    } else {
-      if (!user.githubId) user.githubId = id;
-
-      if (!user.authProvider.includes("github")) {
-        user.authProvider.push("github");
+      if (email && !user) {
+        user = await User.findOne({ email });
       }
+    } else user = await User.findById(userId);
+
+    const updateQuery = { $set: {} };
+    const session = await mongoose.startSession();
+    let userSession = null;
+
+    try {
+      await session.withTransaction(async () => {
+        if (!user) {
+          user = await User.create({
+            authProvider: ["github"],
+            githubId: id,
+            username: login,
+            email,
+            name: name.length > 0 ? name : login,
+            avatar: avatar_url,
+          });
+
+          const root = await Directory.create({
+            dirname: `root-${user.username}`,
+            parentId: new mongoose.Types.ObjectId(),
+            userId: user._id,
+          });
+
+          updateQuery.$set.rootDirId = root._id;
+        } else {
+          if (!user.githubId) updateQuery.$set.githubId = id;
+          if (!user.authProvider.includes("github"))
+            updateQuery.$push = { authProvider: { $each: ["github"] } };
+        }
+
+        await User.findByIdAndUpdate(user._id, updateQuery, { session });
+
+        if (!userId) {
+          [userSession] = await Session.create([{ userId: user._id }], {
+            session,
+          });
+        }
+      });
+    } finally {
+      session.endSession();
     }
 
-    await user.save();
-    await createSession(user, res);
+    if (userSession) {
+      const { _id: sid, expiry } = userSession;
+
+      res.cookie("sid", sid, {
+        httpOnly: true,
+        sameSite: "strict",
+        secure: process.env.NODE_ENV === "production",
+        signed: true,
+        expires: new Date(expiry),
+        path: "/",
+      });
+    }
 
     return res.redirect(`http://localhost:5173/dashboard?github=connected`);
   } catch (err) {
@@ -347,6 +446,13 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * path: /api/oauth/google-drive/connect
+ * what it do: Initiate Google Drive OAuth flow for file backup/import, setting PKCE and state, then redirect to Google's authorization endpoint.
+ * requirements:
+ *   - req.user: authenticated user object provided by `validateSession`
+ *   - User must not already have a Google Drive integration connected
+ */
 export const googleDriveOAuthHandler = async (req, res, next) => {
   try {
     const integration = await DriveIntegration.exists({
@@ -401,6 +507,14 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * path: /api/oauth/google-drive/callback
+ * what it do: Handle Google Drive OAuth callback, exchange code for refresh token, and store integration credentials.
+ * requirements:
+ *   - req.query: { code: string, state: string, error?: string }
+ *   - req.cookies: { oauth_state_google, oauth_pkce_google }
+ *   - Must have been initiated via /oauth/google-drive/connect
+ */
 export const googleDriveCallbackHandler = async (req, res, next) => {
   try {
     const { code, state, error } = req.query;
@@ -438,7 +552,6 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
           expiresIn: new Date(
             Date.now() + tokens.refresh_token_expires_in * 1000,
           ),
-          updatedAt: new Date(),
         },
         $unset: { stateCreatedAt: "" },
       },

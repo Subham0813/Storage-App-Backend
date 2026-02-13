@@ -36,7 +36,7 @@ const otpSchema = Schema(
       index: { expireAfterSeconds: 300 },
     },
   },
-  { timeStamps: true }
+  { strict: "throw", timestamps: true },
 );
 
 otpSchema.pre("save", async function () {
