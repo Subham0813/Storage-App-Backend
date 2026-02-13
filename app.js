@@ -10,6 +10,7 @@ import fileRoutes from "./routes/fileRoutes.js";
 import homeRoutes from "./routes/homeRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import importDriveRoutes from "./routes/importDriveRoutes.js";
+import shareRoutes from "./routes/shareRoutes.js";
 
 import { validateSession } from "./middlewares/validateSession.js";
 
@@ -28,16 +29,17 @@ try {
 
   app.use(cookieParser(process.env.COOKIE_SECRET));
 
-  app.use("/auth", express.json(), authRoutes);
-  app.use("/oauth", express.json(), oauthRoutes);
-  app.use("/uploads", validateSession, uploadRoutes);
+  app.use("/api/auth", express.json(), authRoutes);
+  app.use("/api/oauth", express.json(), oauthRoutes);
+  app.use("/api/uploads", validateSession, uploadRoutes);
 
   app.use(express.json());
-  app.use("/import", validateSession, importDriveRoutes);
-  app.use("/home", validateSession, homeRoutes);
-  app.use("/files", validateSession, fileRoutes);
-  app.use("/directories", validateSession, directoryRoutes);
-  app.use("/admin", validateSession, adminRoutes);
+  app.use("/api/import", validateSession, importDriveRoutes);
+  app.use("/api/home", validateSession, homeRoutes);
+  app.use("/api/files", validateSession, fileRoutes);
+  app.use("/api/directories", validateSession, directoryRoutes);
+  app.use("/api/admin", validateSession, adminRoutes);
+  app.use("/api/shared", shareRoutes);
 
   // 404 handler
   app.use((req, res) => {

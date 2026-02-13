@@ -1,9 +1,10 @@
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
 import { notFound } from "../utils/responseHelper.js";
+import { Router } from "express";
 
 /**
- * url: http://localhost:4000/shared/resolve/:token
+ * path: /api/shared/resolve/:token
  * what it do: Identify if the token belongs to a file or directory and return its ID.
  */
 export const resolveSharedTokenHandler = async (req, res, next) => {
@@ -18,9 +19,7 @@ export const resolveSharedTokenHandler = async (req, res, next) => {
     if (file) {
       return res.status(200).json({
         success: true,
-        type: "file",
-        id: file._id,
-        name: file.filename
+        data: { type: "file", id: file._id, name: file.filename },
       });
     }
 
@@ -32,9 +31,7 @@ export const resolveSharedTokenHandler = async (req, res, next) => {
     if (dir) {
       return res.status(200).json({
         success: true,
-        type: "directory",
-        id: dir._id,
-        name: dir.dirname
+        data: { type: "directory", id: dir._id, name: dir.dirname },
       });
     }
 
@@ -43,3 +40,7 @@ export const resolveSharedTokenHandler = async (req, res, next) => {
     next(err);
   }
 };
+
+const router = Router();
+router.get("/resolve/:token", resolveSharedTokenHandler);
+export default router;
