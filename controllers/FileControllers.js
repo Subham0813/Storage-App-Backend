@@ -1,16 +1,13 @@
 import path from "node:path";
 import fs from "node:fs";
 import mongoose from "mongoose";
-import crypto from "node:crypto";
 import { unlink } from "node:fs/promises";
-import { restoreFileParent } from "../utils/restore.js";
 import { getFileDoc, hasAccess } from "../utils/helper.js";
 
 import { File as FileModel } from "../models/file.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
 import { User } from "../models/user.model.js";
-import { base64URLEncode } from "./oauthControllers.js";
 import {
   responsePayload,
   badRequest,
@@ -596,92 +593,34 @@ export const deleteFileHandler = async (req, res, next) => {
 
 /**
  * path: /api/files/share/:id
- * what it do: Change sharing settings for a file (set publicRole and push individual sharedWith entries).
+ * what it do: Change sharing settings for a file — set `publicRole` and add/update `sharedWith` entries; only the file owner may perform this action.
  * requirements:
- *   - req.params: { id: string }
- *   - req.body: { emailsWithRole?: [{ email, role }], publicRole?: string, notify?: boolean }
- *   - req.user: authenticated user object provided by `validateSession`
+ *   - req.params: { id: string } (directory id)
+ *   - req.body: { emailsWithRole?: [{ email, role }], publicRole?: 'VIEWER'|'NONE', notify?: boolean }
+ *   - req.user: authenticated user object provided by `validateSession` (must be directory owner)
+ *   - When used with `shareHandlerPreProcessor` middleware, expects `req.shareConfig` and responds with `{ accepted, skipped, shareToken }`
  */
 export const shareFileHandler = async (req, res, next) => {
-  if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
-
-  //emailsWithRole: [{email: "", role:""}], publicRole: "", notify: true
-  const { emailsWithRole, publicRole, notify } = req.body;
-  const allowedRoles = ["VIEWER", "NONE"];
-  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
-
-  if (!emailsWithRole && !publicRole)
-    return badRequest(res, "Invalid payload.");
-
-  if (!formattedPublicRole || !allowedRoles.includes(formattedPublicRole))
-    return badRequest(res, "Invalid `publicRole`.");
-
-  const skipped = [];
-  const validMap = new Map();
-
-  if (emailsWithRole) {
-    emailsWithRole.forEach(({ email, role }) => {
-      const ce = email.toLowerCase().trim();
-      const cr = role.toUpperCase();
-
-      if (
-        !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ce) ||
-        !allowedRoles.includes(cr)
-      ) {
-        skipped.push({
-          email: ce,
-          role: cr,
-          reason: "Invalid `email` or `role`.",
-        });
-      } else {
-        validMap.set(ce, { email: ce, role: cr });
-      }
-    });
-  }
-
-  const shareToken = base64URLEncode(crypto.randomBytes(24)).toString(
-    "base64url",
-  );
-  const validEntries = Array.from(validMap.values());
-  const emailsToUpdate = validEntries.map((v) => v.email);
-
-  const updateQuery = {
-    $set: {
-      sharedAt: new Date(),
-      shareToken,
-    },
-  };
-
-  if (formattedPublicRole) updateQuery.$set.publicRole = formattedPublicRole;
-  if (validEntries.length > 0)
-    updateQuery.$push = { sharedWith: { $each: validEntries } };
+  const { notify } = req.body;
+  const { updateQuery, emailsToUpdate, accepted, skipped } = req.shareConfig;
 
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      const file = await UserFile.findOne({
-        _id: req.params.id,
-        userId: req.user._id,
-        isDeleted: false,
-      }).session(session);
-
-      if (emailsToUpdate.length > 0) {
-        await UserFile.findByIdAndUpdate(file._id, {
-          $pull: { sharedWith: { email: { $in: emailsToUpdate } } },
-        }).session(session);
-      }
+      const file = await UserFile.findOneAndUpdate(
+        { _id: req.params.id, userId: req.user._id, isDeleted: false },
+        { $pull: { sharedWith: { email: { $in: emailsToUpdate } } } },
+        { new: true, session },
+      );
 
       await UserFile.findByIdAndUpdate(file._id, updateQuery).session(session);
     });
 
-    
     res.status(200).json({
       success: true,
       message: "Permission changed for this file.",
-      accepted: validEntries,
+      accepted,
       skipped,
-      shareToken,
     });
 
     if (notify) {
@@ -693,5 +632,125 @@ export const shareFileHandler = async (req, res, next) => {
     next(err);
   } finally {
     session.endSession();
+  }
+};
+
+/**
+ * path: /api/files/public-role/:id
+ * what it do: Change the `publicRole` for a file (e.g. make file publicly viewable or revoke public access).
+ * requirements:
+ *   - req.params: { id: string } (file id)
+ *   - req.body: { publicRole?: 'VIEWER'|'NONE' }
+ *   - req.user: authenticated user object provided by `validateSession` (must be file owner)
+ */
+export const filePublicRoleHandler = async (req, res, next) => {
+  const { publicRole } = req.body;
+  const allowedPublicRoles = ["VIEWER", "NONE"];
+
+  if (!mongoose.isValidObjectId(req.params.id))
+    return badRequest(res, "Invalid id.");
+
+  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
+  if (!formattedPublicRole || !allowedPublicRoles.includes(formattedPublicRole))
+    return badRequest(res, "Invalid `publicRole`.");
+
+  try {
+    const file = await UserFile.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id, isDeleted: false },
+      { $set: { publicRole: formattedPublicRole } },
+      { new: true },
+    ).select("_id");
+
+    if (!file) return notFound(res, "File not found.");
+
+    return res.status(200).json({
+      success: true,
+      message: "Permission for this file has changed.",
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * path: /api/files/new-token/:id
+ * what it do: Generate a new `shareToken` for the file and persist it (owner-only). The token is propagated where applicable.
+ * requirements:
+ *   - req.params: { id: string } (file id)
+ *   - req.user: authenticated user object provided by `validateSession` (must be file owner)
+ * returns:
+ *   - 200 with { shareToken, id }
+ */
+export const getFileShareToken = async (req, res, next) => {
+  if (!mongoose.isValidObjectId(req.params.id))
+    return badRequest(res, "Invalid id.");
+
+  const shareToken = base64URLEncode(crypto.randomBytes(32));
+  try {
+    const file = await UserFile.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id, isDeleted: false },
+      { $set: { shareToken } },
+      { new: true },
+    ).select("_id");
+
+    if (!file) return notFound(res, "File not found.");
+
+    return res.status(200).json({
+      success: true,
+      message: "Token created for the file.",
+      data: { shareToken, id: file._id.toString() },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * path: /api/files/revoke-access/:id
+ * what it do: Remove listed emails from a file's `sharedWith`. If no remaining shared users and `publicRole` is `NONE`, clears `shareToken`/`sharedAt`.
+ * requirements:
+ *   - req.params: { id: string } (file id)
+ *   - req.body: { emails: [string] }
+ *   - req.user: authenticated user object provided by `validateSession` (must be file owner)
+ */
+export const revokeAccessFileHandler = async (req, res, next) => {
+  const { emails } = req.body;
+  if (!emails || !Array.isArray(emails))
+    return badRequest(res, "Invalid payload");
+
+  const skipped = [];
+  const emailsToUpdate = [];
+
+  emails.forEach((email) => {
+    const ce = email.toLowerCase().trim();
+    if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ce))
+      skipped.push(ce);
+    else emailsToUpdate.push(ce);
+  });
+
+  if (emailsToUpdate.length < 1) return badRequest(res, "Invalid emails.");
+
+  try {
+    const file = await UserFile.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id, isDeleted: false },
+      { $pull: { sharedWith: { email: { $in: emailsToUpdate } } } },
+      { new: true },
+    ).select("sharedWith publicRole");
+
+    if (!file) return badRequest(res, "File not found!");
+
+    if (file.sharedWith.length < 1 && file.publicRole === "NONE")
+      await UserFile.findByIdAndUpdate(file._id, {
+        $set: { sharedAt: null, shareToken: "" },
+      });
+
+    return res.status(200).json({
+      success: true,
+      message: "Permission changed for this file.",
+      accepted: emailsToUpdate,
+      skipped,
+    });
+  } catch (err) {
+    next(err);
   }
 };

@@ -41,12 +41,14 @@ export const shareDirectoryRecursive = async (
     );
   }
 
-  await UserFile.updateMany({ parentId, isDeleted: false }, updateQuery, {
-    session,
-  });
-  await Directory.updateMany({ parentId, isDeleted: false }, updateQuery, {
-    session,
-  });
+  if (updateQuery) {
+    await UserFile.updateMany({ parentId, isDeleted: false }, updateQuery, {
+      session,
+    });
+    await Directory.updateMany({ parentId, isDeleted: false }, updateQuery, {
+      session,
+    });
+  }
 
   if (depth === maxDepth) return;
 
@@ -59,8 +61,7 @@ export const shareDirectoryRecursive = async (
       child._id,
       session,
       emailsToUpdate,
-      validEntries,
-      publicRole,
+      updateQuery,
       depth + 1,
     );
   }

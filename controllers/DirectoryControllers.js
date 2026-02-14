@@ -2,7 +2,6 @@ import path from "path";
 import archiver from "archiver";
 import mongoose from "mongoose";
 import { unlink } from "fs/promises";
-import crypto from "node:crypto";
 
 import { recursiveDelete, recursiveRemove } from "../utils/remove.js";
 import {
@@ -15,7 +14,6 @@ import { badRequest, forbidden, notFound } from "../utils/helper.js";
 
 import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
-import { base64URLEncode } from "./oauthControllers.js";
 import { shareDirectoryRecursive } from "../utils/share.js";
 
 // API Handlers
@@ -520,7 +518,7 @@ export const restoreDirectoryHandler = async (req, res, next) => {
 
 /**
  * path: /api/directories/delete/:id
- * what it do: Permanently delete a directory and its contents (irreversible).
+ * what it do: Permanently delete a directory and its contents (irreversible). only the directory owner may perform this action.
  * requirements:
  *   - req.params: { id: string } (directory id)
  *   - restrictRootOperations middleware may apply; ensure requester has permissions
@@ -570,77 +568,25 @@ export const deleteDirectoryHandler = async (req, res, next) => {
 
 /**
  * path: /api/directories/share/:id
- * what it do: Change sharing settings for a directory (set publicRole and push individual sharedWith entries).
+ * what it do: Change sharing settings for a directory — set `publicRole` and add/update `sharedWith` entries; only the directory owner may perform this action.
  * requirements:
  *   - req.params: { id: string } (directory id)
- *   - req.body: { emailsWithRole?: [{ email, role }], publicRole?: string, notify?: boolean }
- *   - req.user: authenticated user object provided by `validateSession`
+ *   - req.body: { emailsWithRole?: [{ email, role }], publicRole?: 'VIEWER'|'NONE', notify?: boolean }
+ *   - req.user: authenticated user object provided by `validateSession` (must be directory owner)
+ *   - When used with `shareHandlerPreProcessor` middleware, expects `req.shareConfig` and responds with `{ accepted, skipped, shareToken }`
  */
 export const shareDirectoryHandler = async (req, res, next) => {
-  if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
-
-  //emailsWithRole: [{email: "", role:""}], publicRole: "", notify: true
-  const { emailsWithRole, publicRole, notify } = req.body;
-  const allowedPublicRoles = ["VIEWER", "NONE"];
-  const allowedUserRoles = ["VIEWER", "EDITOR"];
-  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
-
-  if (!emailsWithRole && !publicRole)
-    return badRequest(res, "Invalid payload.");
-
-  if (!formattedPublicRole || !allowedPublicRoles.includes(formattedPublicRole))
-    return badRequest(res, "Invalid `publicRole`.");
-
-  const skipped = [];
-  const validMap = new Map();
-
-  emailsWithRole &&
-    emailsWithRole.forEach(({ email, role }) => {
-      const ce = email.toLowerCase().trim();
-      const cr = role.toUpperCase();
-
-      if (
-        !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ce) ||
-        !allowedUserRoles.includes(cr)
-      ) {
-        skipped.push({
-          email: ce,
-          role: cr,
-          reason: "Invalid `email` or `role`.",
-        });
-      } else validMap.set(ce, { email: ce, role: cr });
-    });
-
-  const shareToken = base64URLEncode(crypto.randomBytes(24)).toString(
-    "base64url",
-  );
-
-  const validEntries = Array.from(validMap.values());
-  const emailsToUpdate = validEntries.map((v) => v.email);
-
-  const updateQuery = {
-    $set: { sharedAt: new Date(), shareToken: shareToken },
-  };
-  if (formattedPublicRole) updateQuery.$set.publicRole = formattedPublicRole;
-  if (validEntries.length > 0)
-    updateQuery.$push = { sharedWith: { $each: validEntries } };
+  const { notify } = req.body;
+  const { updateQuery, emailsToUpdate, accepted, skipped } = req.shareConfig;
 
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      const directory = await Directory.findOne({
-        _id: req.params.id,
-        userId: req.user._id,
-        isDeleted: false,
-      }).select("_id");
-
-      if (emailsToUpdate.length > 0)
-        await Directory.findByIdAndUpdate(
-          directory._id,
-          { $pull: { sharedWith: { email: { $in: emailsToUpdate } } } },
-          { session },
-        );
+      const directory = await Directory.findOneAndUpdate(
+        { _id: req.params.id, userId: req.user._id, isDeleted: false },
+        { $pull: { sharedWith: { email: { $in: emailsToUpdate } } } },
+        { new: true, session },
+      ).select("_id");
 
       await Directory.findByIdAndUpdate(directory._id, updateQuery, {
         session,
@@ -658,7 +604,7 @@ export const shareDirectoryHandler = async (req, res, next) => {
       success: true,
       message: "Permission changed for this directory.",
       depth: 5,
-      accepted: validEntries,
+      accepted,
       skipped,
       shareToken,
     });
@@ -667,6 +613,159 @@ export const shareDirectoryHandler = async (req, res, next) => {
       //send notification to accepted emails
       console.log("emails sent.");
     }
+    return;
+  } catch (err) {
+    next(err);
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
+ * path: /api/directories/public-role/:id
+ * what it do: Change the `publicRole` for a directory (make publicly viewable or revoke). Only the directory owner may perform this action.
+ * requirements:
+ *   - req.params: { id: string } (directory id)
+ *   - req.body: { publicRole?: 'VIEWER'|'NONE' }
+ *   - req.user: authenticated user object provided by `validateSession` (must be directory owner)
+ */
+export const directoryPublicRoleHandler = async (req, res, next) => {
+  const { publicRole } = req.body;
+  const allowedPublicRoles = ["VIEWER", "NONE"];
+
+  if (!mongoose.isValidObjectId(req.params.id))
+    return badRequest(res, "Invalid id.");
+
+  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
+  if (!formattedPublicRole || !allowedPublicRoles.includes(formattedPublicRole))
+    return badRequest(res, "Invalid `publicRole`.");
+
+  const updateQuery = { $set: { publicRole: formattedPublicRole } };
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const directory = await Directory.findOneAndUpdate(
+        { _id: req.params.id, userId: req.user._id, isDeleted: false },
+        updateQuery,
+        { new: true },
+      ).select("_id");
+
+      await shareDirectoryRecursive(directory._id, session, [], updateQuery);
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Permission for this file has changed.",
+    });
+  } catch (err) {
+    next(err);
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
+ * path: /api/directories/new-token/:id
+ * what it do: Generate a new `shareToken` for the directory and persist it (owner-only). Token is propagated to children as needed.
+ * requirements:
+ *   - req.params: { id: string } (directory id)
+ *   - req.user: authenticated user object provided by `validateSession` (must be directory owner)
+ * returns:
+ *   - { shareToken, id }
+ */
+export const getDirectoryShareToken = async (req, res, next) => {
+  if (!mongoose.isValidObjectId(req.params.id))
+    return badRequest(res, "Invalid id.");
+
+  const shareToken = base64URLEncode(crypto.randomBytes(32));
+  const updateQuery = { $set: { shareToken } };
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const directory = await Directory.findOneAndUpdate(
+        { _id: req.params.id, userId: req.user._id, isDeleted: false },
+        updateQuery,
+        { new: true },
+      ).select("_id");
+
+      await shareDirectoryRecursive(directory._id, session, [], updateQuery);
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Token created for the file.",
+      data: { shareToken, id: directory._id.toString() },
+    });
+  } catch (err) {
+    next(err);
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
+ * path: /api/directories/revoke-access/:id
+ * what it do: Remove sharing settings for a directory (set publicRole and pull individual sharedWith entries).
+ * requirements:
+ *   - req.params: { id: string } (directory id)
+ *   - req.body: { emails: [email : string] }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
+export const revokeAccessDirectoryHandler = async (req, res, next) => {
+  const { emails } = req.body;
+  if (!emails || !Array.isArray(emails))
+    return badRequest(res, "Invalid payload");
+
+  const skipped = [];
+  const emailsToUpdate = [];
+
+  emails.forEach((email) => {
+    const ce = email.toLowerCase().trim();
+    if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ce))
+      skipped.push(ce);
+    else emailsToUpdate.push(ce);
+  });
+
+  if (emailsToUpdate.length < 1) return badRequest(res, "Invalid emails.");
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const directory = await Directory.findOneAndUpdate(
+        { _id: req.params.id, userId: req.user._id, isDeleted: false },
+        { $pull: { sharedWith: { email: { $in: emailsToUpdate } } } },
+        { new: true, session },
+      ).select("_id sharedWith, publicRole");
+
+      let updateQuery = null;
+      let emailsToPull = emailsToUpdate;
+      if (directory.sharedWith.length < 1 && directory.publicRole === "NONE") {
+        updateQuery = {
+          $set: {
+            sharedWith: [],
+            sharedAt: null,
+            publicRole: "NONE",
+            shareToken: "",
+          },
+        };
+        emailsToPull = [];
+      }
+
+      await shareDirectoryRecursive(
+        directory._id,
+        session,
+        emailsToPull,
+        updateQuery,
+      );
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Permission changed for this file.",
+      accepted: emailsToUpdate,
+      skipped,
+    });
   } catch (err) {
     next(err);
   } finally {
