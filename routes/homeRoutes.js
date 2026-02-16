@@ -22,20 +22,12 @@ router.get("/recents", getRecentsHandler);
 router.get("/shared", getSharedWithHandler);
 router.get("/user", getUserHandler);
 
-router.post("/logout", LogoutHandler);
-router.post("/logout-all", LogoutAllHandler);
+router.put("/logout", LogoutHandler);
+router.put("/logout-all", LogoutAllHandler);
 router.delete("/delete-profile", DeleteProfileHandler);
 
 //Link with OAUTH
-router.get(
-  "/link-google",
-  checkAuthProviderStatus("google"),
-  googleOAuthHandler,
-);
-router.get(
-  "/link-github",
-  checkAuthProviderStatus("google"),
-  githubOAuthHandler,
-);
+router.get( "/link-google", checkAuthProviderStatus("google"), googleOAuthHandler );
+router.get( "/link-github", checkAuthProviderStatus("google"), githubOAuthHandler );
 
 export default router;

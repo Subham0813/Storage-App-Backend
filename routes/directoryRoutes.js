@@ -29,17 +29,17 @@ router.get("/download/:id", restrictRootOperations, downloadDirectoryHandler);
 router.get("/info/:id", restrictRootOperations, getDirectoryInfoHandler);
 router.get("/new-token/:id", restrictRootOperations, getDirectoryShareToken); 
 
-router.post("/new", loadParentDir, createDirectoryHandler);
-router.post("/rename/:id", restrictRootOperations, renameDirectoryHandler);
-router.post(
+router.post("/new", loadParentDir, createDirectoryHandler); //new-directory
+router.patch("/rename/:id", restrictRootOperations, renameDirectoryHandler); //rename
+router.patch(
   "/move/:id",
   restrictRootOperations,
   loadParentDir,
   moveDirectoryHandler,
-);
+); //move
 
-router.post("/trash/:id", restrictRootOperations, moveToBinDirectoryHandler);
-router.post("/restore/:id", restrictRootOperations, restoreDirectoryHandler);
+router.put("/trash/:id", restrictRootOperations, moveToBinDirectoryHandler); //bin
+router.put("/restore/:id", restrictRootOperations, restoreDirectoryHandler); //recover
 
 router.post(
   "/share/:id",
@@ -48,13 +48,13 @@ router.post(
   shareDirectoryHandler,
 ); //share
 
-router.post(
+router.patch(
   "/public-role/:id",
   restrictRootOperations,
   directoryPublicRoleHandler,
 ); //change public-role
 
-router.post(
+router.patch(
   "/revoke-access/:id",
   restrictRootOperations,
   revokeAccessDirectoryHandler,

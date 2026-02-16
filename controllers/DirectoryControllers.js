@@ -15,6 +15,7 @@ import { badRequest, forbidden, notFound } from "../utils/helper.js";
 import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { shareDirectoryRecursive } from "../utils/share.js";
+import { SUPER_ROLES } from "../routes/adminRoutes.js";
 
 // API Handlers
 /**
@@ -45,7 +46,7 @@ export const getDirectoryInfoHandler = async (req, res, next) => {
       ? hasAccess(directory, ["VIEWER", "EDITOR"], email)
       : false;
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized)
+    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
       return forbidden(res);
 
     return res.status(200).json({ success: true, data: { directory } });
@@ -83,7 +84,7 @@ export const getDirectoriesHandler = async (req, res, next) => {
       ? hasAccess(directory, ["VIEWER", "EDITOR"], email)
       : false;
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized)
+    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
       return forbidden(res);
 
     const directories = await Directory.find({
@@ -125,7 +126,7 @@ export const getAllFilesHandler = async (req, res, next) => {
       ? hasAccess(directory, ["VIEWER", "EDITOR"], email)
       : false;
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized)
+    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
       return forbidden(res);
 
     const files = await UserFile.find({

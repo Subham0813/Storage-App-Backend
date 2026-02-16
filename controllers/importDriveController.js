@@ -21,6 +21,9 @@ const google_client_secret = process.env.GOOGLE_CLIENT_SECRET;
 
 const google_drive_redirect_uri = process.env.GOOGLE_DRIVE_REDIRECT_URI;
 
+const UPLOAD_ROOT =
+  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
+
 const TMP_ROOT =
   process.env.TMP_ROOT || path.resolve(process.cwd() + "/uploads/temp");
 
@@ -223,7 +226,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
           // --- C. Save Stream to Disk ---
           await pipeline(driveRes.data, writeStream);
 
-          // --- D. Update Real Size (CRITICAL FIX) ---
+          // --- D. Update Real Size ---
           // Google Docs started as size 0. We must check the actual exported size.
           const stats = await stat(tempPath);
 

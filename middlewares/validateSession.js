@@ -12,6 +12,7 @@ import { Directory } from "../models/directory.model.js";
  *   - Session must exist in DB and be linked to a valid user
  *   - Sets req.user to authenticated user object from session
  */
+
 // export const validateSession = async (req, res, next) => {
 //   try {
 //     const { sid } = req.signedCookies;
@@ -77,7 +78,7 @@ export const validateSession = async (req, res, next) => {
     //Signed User
     if (sid && mongoose.isValidObjectId(sid)) {
       const session = await Session.findById(sid).populate("userId").lean();
-      if (session?.userId) {
+      if (session?.userId && !session.userId.isDeleted) {
         req.user = session.userId;
         return next();
       }
