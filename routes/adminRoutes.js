@@ -1,255 +1,35 @@
-import mongoose from "mongoose";
 import { Router } from "express";
-import { User } from "../models/user.model.js";
-import { badRequest, notFound } from "../utils/helper.js";
-import { Directory } from "../models/directory.model.js";
-import { Session } from "../models/session.model.js";
-import { UserFile } from "../models/user_file.model.js";
-import { UploadSession } from "../models/uploadSession.model.js";
-import { DriveIntegration } from "../models/integration.model.js";
+import {
+  changeUserRole,
+  deleteUser,
+  getAllDeletedUsers,
+  getAllUsers,
+  getSingleUser,
+  logoutUser,
+  recoverUser,
+  tempRemoveUser,
+} from "../controllers/adminControllers";
 
-export const router = Router();
+const router = Router();
 
-router.get("/all-users", async (req, res, next) => {
-  try {
-    const users = await User.find({ isDeleted: false })
-      .populate("rootDirId")
-      .lean();
-    console.log(users);
+router.get("/users", getAllUsers);
+router.get("/deleted-users", getAllDeletedUsers);
+router.get("/user/:id", getSingleUser);
 
-    const flattenUsers = users.map(({ rootDirId, ...rest }) => ({
-      user: { ...rest },
-      root: rootDirId,
-    }));
+//NOTE: Admin & Super-admins can use GET /api/directories/ routes
+// router.get("/directory/:id", getDirectory);
 
-    return res
-      .status(200)
-      .json({ success: true, data: { users: flattenUsers } });
-  } catch (err) {
-    console.log(err);
-    next(err);
-  }
-});
+// super-admin can promote/demote all users, admins are restricted to user and guests
+router.patch("/change-role/:id", changeUserRole);
 
-router.get("/all-deleted-users", async (req, res, next) => {
-  try {
-    const users = await User.find({ isDeleted: true }).lean();
-    return res.status(200).json({ success: true, data: { users } });
-  } catch (err) {
-    next(err);
-  }
-});
+//super-admin can logout all users, admins are restricted to user and guests
+router.patch("/logout-user/:id", logoutUser);
 
-router.get("/user/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.isValidObjectId(id)) return badRequest(res, "Invalid id.");
-
-    const user = User.findById(id).lean();
-    if (!user) return notFound(res, "User not found.");
-
-    return res.status(200).json({ success: true, data: { user } });
-  } catch (err) {
-    next(err);
-  }
-});
-
-//super-admins can only read super-admins
-router.get("/directory/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.isValidObjectId(id)) return badRequest(res, "Invalid id.");
-
-    const directory = await Directory.findOne({
-      _id: id,
-      isDeleted: false,
-    }).lean();
-    if (!directory) return notFound(res, "directory not found.");
-
-    const user = User.findById(directory.userId).lean();
-    if (user.role === "SUPER_ADMIN" && req.user.role !== "SUPER_ADMIN")
-      return res.status(403).json({
-        success: false,
-        statusCode: 403,
-        message: "You don't have this permission.",
-        error: "ACCESS_DENIED",
-      });
-
-    const files = await UserFile.find({
-      parentId: directory._id,
-      userId: directory.userId,
-    });
-
-    const directories = await Directory.find({
-      parentId: directory._id,
-      userId: directory.userId,
-    });
-
-    return res.status(200).json({
-      success: true,
-      data: { directory, children: { directories, files } },
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-//super-admin and admin can only promote/demote roles
-router.patch("/change-role/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    let role = req.body || req.query;
-    role = role.toUpperCase();
-
-    const allowedRoles = ["GUEST", "USER", "ADMIN"];
-    if (!role || !allowedRoles.includes(role))
-      return badRequest(res, "Invalid role.");
-
-    if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-      return badRequest(res, "Invalid id.");
-
-    const user = await User.findOne({ _id: id, isDeleted: false });
-    if (!user) return notFound(res, "User not found.");
-
-    if (user.role === req.user.role)
-      return res.status(403).json({
-        success: false,
-        statusCode: 403,
-        message: "You don't have this permission.",
-        error: "ACCESS_DENIED",
-      });
-
-    user.role = role;
-    await user.save();
-
-    return res.status(200).json({
-      success: true,
-      message: "User permissions changed.",
-      data: {},
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-//super-admin can only logout admins, admins can only logout guests and users
-router.post("/logout-user/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-      return badRequest(res, "Invalid id.");
-
-    const user = await User.findOne({ _id: id, isDeleted: false }).lean();
-    if (!user) return notFound(res, "User not found.");
-
-    if (user.role === req.user.role || user.role === "SUPER_ADMIN")
-      return res.status(403).json({
-        success: false,
-        statusCode: 403,
-        message: "You don't have this permission.",
-        error: "ACCESS_DENIED",
-      });
-
-    await Session.deleteMany({ userId: id });
-    return res
-      .status(200)
-      .json({ success: true, message: "User logged out.", data: { user } });
-  } catch (err) {
-    next(err);
-  }
-});
+//super-admin can soft-delete all users, admins are restricted to user and guests
+router.patch("/remove-user/:id", tempRemoveUser);
 
 //super-admin only
-router.post("/delete-user/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (req.user.role === "SUPER_ADMIN")
-      return res.status(403).json({
-        success: false,
-        statusCode: 403,
-        message: "You don't have this permission.",
-        error: "ACCESS_DENIED",
-      });
-
-    if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-      return badRequest(res, "Invalid id.");
-
-    const user = await User.findOneAndUpdate(
-      { _id: id, isDeleted: false },
-      { isDeleted: true },
-    );
-    if (!user) return notFound(res, "User not found.");
-    await Session.deleteMany({ userId: id });
-
-    return res
-      .status(200)
-      .json({ success: true, message: "User deleted.", data: {} });
-  } catch (err) {
-    next(err);
-  }
-});
-
-//super-admin only
-router.post("/recover-user/:id", async (req, res, next) => {
-  try {
-    if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-      return badRequest(res, "Invalid id.");
-
-    if (req.user.role !== "SUPER_ADMIN")
-      return res.status(403).json({
-        success: false,
-        statusCode: 403,
-        message: "You don't have this permission.",
-        error: "ACCESS_DENIED",
-      });
-
-    const user = await User.findOneAndUpdate(
-      { _id: id, isDeleted: true },
-      { isDeleted: false },
-      { new: true },
-    );
-    if (!user) return notFound(res, "User not found.");
-
-    return res
-      .status(200)
-      .json({ success: true, message: "User recovered.", data: { user } });
-  } catch (err) {
-    next(err);
-  }
-});
-
-//super-admin only
-router.delete("/remove-user/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-      return badRequest(res, "Invalid id.");
-
-    if (req.user.role !== "SUPER_ADMIN")
-      return res.status(403).json({
-        success: false,
-        statusCode: 403,
-        message: "You don't have this permission.",
-        error: "ACCESS_DENIED",
-      });
-
-    const user = await User.findOneAndDelete({ _id: id });
-    if (!user) return notFound(res, "User not found.");
-
-    await Directory.deleteMany({ userId: id });
-    await DriveIntegration.deleteMany({ userId: id });
-    await Session.deleteMany({ userId: id });
-    await UserFile.deleteMany({ userId: id });
-    await UploadSession.deleteMany({ userId: id });
-
-    return res.status(200).json({
-      success: true,
-      message: "User deleted and can not be recovered anymore.",
-      data: { user },
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+router.patch("/recover-user/:id", recoverUser);
+router.delete("/delete-user/:id", deleteUser);
 
 export default router;

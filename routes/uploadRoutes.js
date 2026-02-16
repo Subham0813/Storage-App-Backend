@@ -9,10 +9,10 @@ import { loadParentDir } from "../middlewares/loadParentDirectory.js";
 
 const router = Router();
 
-router.get( "/session/:sessionId",express.json(),loadUploadSession, getUploadStatus );
-router.post("/session/create", express.json(), loadParentDir, initUpload );
-router.post("/session/:sessionId/chunk", upload.single("file"), loadUploadSession, uploadChunk );
-router.post("/session/:sessionId/complete", express.json(), loadUploadSession, completeUpload );
-router.delete("/session/:sessionId/cancel", express.json(), loadUploadSession, cancelUpload );
+router.get( "/session/:sessionId",express.json(),loadUploadSession, getUploadStatus ); //upload-status
+router.post("/session/create", express.json(), loadParentDir, initUpload ); //init-upload
+router.post("/session/chunk/:sessionId", upload.single("file"), loadUploadSession, uploadChunk ); //upload-chunk
+router.post("/session/complete/:sessionId", express.json(), loadUploadSession, completeUpload ); //complete
+router.delete("/session/cancel/:sessionId", express.json(), loadUploadSession, cancelUpload ); //cance-upload
 
 export default router;

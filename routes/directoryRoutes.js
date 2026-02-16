@@ -29,36 +29,15 @@ router.get("/download/:id", restrictRootOperations, downloadDirectoryHandler);
 router.get("/info/:id", restrictRootOperations, getDirectoryInfoHandler);
 router.get("/new-token/:id", restrictRootOperations, getDirectoryShareToken); 
 
-router.post("/new", loadParentDir, createDirectoryHandler);
-router.post("/rename/:id", restrictRootOperations, renameDirectoryHandler);
-router.post(
-  "/move/:id",
-  restrictRootOperations,
-  loadParentDir,
-  moveDirectoryHandler,
-);
+router.post("/new", loadParentDir, createDirectoryHandler); //new-directory
+router.post( "/share/:id", restrictRootOperations, shareHandlerPreProcessor, shareDirectoryHandler); //share
 
-router.post("/trash/:id", restrictRootOperations, moveToBinDirectoryHandler);
-router.post("/restore/:id", restrictRootOperations, restoreDirectoryHandler);
-
-router.post(
-  "/share/:id",
-  restrictRootOperations,
-  shareHandlerPreProcessor,
-  shareDirectoryHandler,
-); //share
-
-router.post(
-  "/public-role/:id",
-  restrictRootOperations,
-  directoryPublicRoleHandler,
-); //change public-role
-
-router.post(
-  "/revoke-access/:id",
-  restrictRootOperations,
-  revokeAccessDirectoryHandler,
-); //revoke access
+router.patch("/rename/:id", restrictRootOperations, renameDirectoryHandler); //rename
+router.patch("/move/:id", restrictRootOperations, loadParentDir, moveDirectoryHandler); //move
+router.patch("/trash/:id", restrictRootOperations, moveToBinDirectoryHandler); //bin
+router.patch("/restore/:id", restrictRootOperations, restoreDirectoryHandler); //recover
+router.patch("/public-role/:id", restrictRootOperations, directoryPublicRoleHandler); //change public-role
+router.patch("/revoke-access/:id", restrictRootOperations, revokeAccessDirectoryHandler); //revoke access
 
 router.delete("/delete/:id", restrictRootOperations, deleteDirectoryHandler);
 

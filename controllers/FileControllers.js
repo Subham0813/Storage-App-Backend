@@ -7,13 +7,13 @@ import { getFileDoc, hasAccess } from "../utils/helper.js";
 import { File as FileModel } from "../models/file.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
-import { User } from "../models/user.model.js";
 import {
   responsePayload,
   badRequest,
   forbidden,
   notFound,
 } from "../utils/helper.js";
+import { SUPER_ROLES } from "../routes/adminRoutes.js";
 
 //env variables
 const UPLOAD_ROOT =
@@ -28,7 +28,7 @@ const UPLOAD_ROOT =
  *   - req.params: { id: string } (valid Mongo ObjectId)
  *   - req.user: authenticated user object provided by `validateSession`
  */
-export const getFileHandler = async (req, res, next) => {
+export const getFileInfoHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return badRequest(res, "Invalid id.");
   }
@@ -46,7 +46,7 @@ export const getFileHandler = async (req, res, next) => {
     const isPublic = file.publicRole === "VIEWER";
     const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized)
+    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
       return forbidden(res);
 
     return res
@@ -87,7 +87,7 @@ export const previewFileHandler = async (req, res, next) => {
     const isPublic = file.publicRole === "VIEWER";
     const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized)
+    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
       return forbidden(res);
 
     const filePath = path.join(
@@ -195,7 +195,7 @@ export const downloadFileHandler = async (req, res, next) => {
     const isPublic = file.publicRole === "VIEWER";
     const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized)
+    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
       return forbidden(res);
 
     const filePath = path.join(

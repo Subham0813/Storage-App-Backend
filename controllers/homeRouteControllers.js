@@ -5,6 +5,9 @@ import { Session } from "../models/session.model.js";
 import { File as FileModel } from "../models/file.model.js";
 import { getUserPayload } from "../utils/helper.js";
 
+const UPLOAD_ROOT =
+  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
+
 /**
  * path: /api/home/user
  * what it do: Return the authenticated user's public payload.
