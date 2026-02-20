@@ -76,17 +76,8 @@ const restoreParentChain = async (userId, item, visited) => {
 export const restoreChildFiles = async (parentId, session) => {
   try {
     await UserFile.updateMany(
-      {
-        parentId,
-        isDeleted: true,
-        deletedBy: "process", //only deletedby process
-      },
-      {
-        $set: {
-          isDeleted: false,
-          deletedBy: "none",
-        },
-      },
+      { parentId, isDeleted: true, deletedBy: "process" },
+      { $set: { isDeleted: false, deletedBy: "none", deletedAt: null } },
       { session },
     );
   } catch (err) {
@@ -108,11 +99,13 @@ export const restoreChildDirectories = async (parentId, session) => {
       parentId,
       isDeleted: true,
       deletedBy: "process",
-    }).select("_id").session(session);
+    })
+      .select("_id")
+      .session(session);
 
     await Directory.updateMany(
       { parentId, isDeleted: true, deletedBy: "process" },
-      { $set: { isDeleted: false, deletedBy: "none" } },
+      { $set: { isDeleted: false, deletedBy: "none", deletedAt: null } },
       { session },
     );
 

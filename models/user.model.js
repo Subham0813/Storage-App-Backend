@@ -48,7 +48,7 @@ const userSchema = new Schema(
 
     googleId: { type: String },
     githubId: { type: String },
-    authProvider: {
+    authProviders: {
       type: [String],
       enum: ["email", "google", "github"],
       required: true,

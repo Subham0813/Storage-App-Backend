@@ -127,7 +127,7 @@ export const googleOAuthHandler = async (req, res, next) => {
       maxAge: 10 * 60 * 1000,
     });
 
-    if (req.user._id) {
+    if (req.user?._id) {
       res.cookie("oauth_user_google", req.user._id, {
         httpOnly: true,
         secure: true,
@@ -424,7 +424,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
         }
       });
     } finally {
-      session.endSession();
+      await session.endSession();
     }
 
     if (userSession) {

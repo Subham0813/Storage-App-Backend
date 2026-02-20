@@ -1,7 +1,7 @@
 import mongoose, { MongooseError } from "mongoose";
 import { MulterError } from "multer";
 import { appendFile } from "node:fs/promises";
-
+import crypto from "crypto";
 /**
  * Middleware: errorHandler
  * what it do: Centralized error handler that catches and formats various error types (Multer, Mongoose, MongoDB) and logs them.
@@ -11,35 +11,42 @@ import { appendFile } from "node:fs/promises";
  *   - Logs errors to error.log.json file if err.errorResponse exists
  */
 export const errorHandler = async (err, req, res, next) => {
+  // Build a comprehensive error log entry
+  const logEntry = {
+    id: crypto.randomUUID().replaceAll("-", ""),
+    timestamp: new Date().toISOString(),
+    url: req.originalUrl,
+    method: req.method,
+    user: req.user ? req.user.email || req.user._id : undefined,
+    error: {
+      name: err.name,
+      message: err.message,
+      stack: err.stack,
+      code: err.code,
+      details: err?.details || err?.errInfo || undefined,
+      status: err.status || undefined,
+      type: err.constructor ? err.constructor.name : undefined,
+    },
+    requestBody: req.body,
+    query: req.query,
+    params: req.params,
+  };
+  try {
+    await appendFile("./error.log.json", JSON.stringify(logEntry) + ",\n");
+  } catch (e) {
+    console.error("Logging failed", e);
+  }
   // const errmsg =
   //   err?.errInfo?.details?.schemaRulesNotSatisfied[0]
   //     ?.propertiesNotSatisfied[0]?.details[0]?.reason ||
   //   err.errmsg ||
   //   err.message;
   // console.error(errmsg);
-  if (err.errorResponse)
-    try {
-      await appendFile(
-        "./error.log.json",
-        JSON.stringify(err.errorResponse) + ",\n",
-      );
-    } catch (e) {
-      console.error("Logging failed", e);
-    }
 
-  let statusCode;
-  let error;
-  let errorType;
-  let message;
-
+  // Print error to console for debugging
   if (err instanceof MulterError) {
-    // A Multer error occurred when uploading.
-    errorType = "MulterError";
-    console.error("Multer error", err.name, err.message);
-  }
-
-  if (err instanceof MongooseError) {
-    errorType = err.name;
+    console.error("Multer error", err.name, err.message, "\n", err);
+  } else if (err instanceof MongooseError) {
     console.error({
       name: err.name,
       message: err.message,
@@ -48,28 +55,20 @@ export const errorHandler = async (err, req, res, next) => {
         ? Object.values(err.errors).map((e) => e.properties)
         : null,
     });
-    // message = err.message.split(":").pop();
-  }
-
-  if (err instanceof mongoose.mongo.MongoError) {
-    // errorType = err.name || err.code;
-
+  } else if (err instanceof mongoose.mongo.MongoError) {
     if (err.code === 121) {
       console.error({
         name: err.name,
         code: err.code,
         message: err.errmsg,
         notSatisfied: {
-          ...err?.errInfo?.details?.schemaRulesNotSatisfied[0]
-            ?.propertiesNotSatisfied,
+          ...err?.errInfo?.details?.schemaRulesNotSatisfied[0],
         },
-        noSatisfiedDetails:
+        notSatisfiedDetails:
           err?.errInfo?.details?.schemaRulesNotSatisfied[0]
             ?.propertiesNotSatisfied?.[0]?.details,
       });
-    }
-
-    if (err.code === 11000) {
+    } else if (err.code === 11000) {
       console.error({
         name: err.name,
         code: err.code,
@@ -77,32 +76,26 @@ export const errorHandler = async (err, req, res, next) => {
         keyPattern: err.keyPattern,
         keyValue: err.keyValue,
       });
-
-      statusCode = 409;
-      const field = Object.keys(err.keyValue)[0];
-      // message =
-      //   field === "email"
-      //     ? "User already registered."
-      //     : `${field} already exists.`;
+    } else {
+      console.error(err);
     }
-  }
-
-  if (err.code === "ENOENT") {
+  } else if (err.code === "ENOENT") {
     console.error({ ...err });
   } else {
     console.error(err);
   }
 
-  statusCode = 500;
-  error = "ServerError";
+  // statusCode = 500;
+  // error = "ServerError";
   // errorType = err.code || err.name || undefined;
-  message =
-    err.customMessage || "Internal server error. Please try again later.";
+  // message = "Internal server error. Please try again later.";
 
-  return res.status(statusCode).json({
+  // Respond with a generic error message
+  return res.status(500).json({
     success: false,
-    statusCode,
-    message,
-    error,
+    statusCode: 500,
+    message: "Internal server error. Please try again later.",
+    error: logEntry.error.name || "ServerError",
+    errorId: logEntry.id,
   });
 };

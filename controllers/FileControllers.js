@@ -1,5 +1,5 @@
 import path from "node:path";
-import fs from "node:fs";
+import { existsSync, createReadStream, statSync } from "node:fs";
 import mongoose from "mongoose";
 import { unlink } from "node:fs/promises";
 import { getFileDoc, hasAccess } from "../utils/helper.js";
@@ -13,7 +13,7 @@ import {
   forbidden,
   notFound,
 } from "../utils/helper.js";
-import { SUPER_ROLES } from "../routes/adminRoutes.js";
+import { SUPER_ROLES } from "./adminControllers.js";
 
 //env variables
 const UPLOAD_ROOT =
@@ -46,7 +46,13 @@ export const getFileInfoHandler = async (req, res, next) => {
     const isPublic = file.publicRole === "VIEWER";
     const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
+    if (
+      !isPublic &&
+      !isShared &&
+      !isOwner &&
+      !req.isTokenAuthorized &&
+      !SUPER_ROLES.includes(req.user.role)
+    )
       return forbidden(res);
 
     return res
@@ -77,7 +83,7 @@ export const previewFileHandler = async (req, res, next) => {
       _id: req.params.id,
       isDeleted: false,
     })
-      .populate("meta", "objectKey")
+      .populate("meta", "detectedMime objectKey")
       .lean();
 
     if (!file) return badRequest(res, "File not found!");
@@ -87,7 +93,13 @@ export const previewFileHandler = async (req, res, next) => {
     const isPublic = file.publicRole === "VIEWER";
     const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
+    if (
+      !isPublic &&
+      !isShared &&
+      !isOwner &&
+      !req.isTokenAuthorized &&
+      !SUPER_ROLES.includes(req.user.role)
+    )
       return forbidden(res);
 
     const filePath = path.join(
@@ -97,26 +109,26 @@ export const previewFileHandler = async (req, res, next) => {
     );
 
     // Safety check: ensure inside upload root
-    if (!filePath.startsWith(UPLOAD_ROOT) || !fs.existsSync(filePath))
+    if (!existsSync(filePath))
       return notFound(res, "File missing from server.");
 
     //check preview/forcePreview
-    if (
-      file.disposition !== "inline" &&
-      query &&
-      (query.type === "video" || query.type === "audio") &&
-      file.meta.detectedMime.startsWith(query.type) &&
-      file.force_inline_preview &&
-      query.force === "true"
-    ) {
-      file.disposition = "inline";
-      file.meta.detectedMime = file.mimetype;
-    } else {
-      return badRequest(res, "Preview not available.");
+    if (file.disposition !== "inline") {
+      if (
+        query &&
+        (query.type === "video" || query.type === "audio") &&
+        file.meta.detectedMime.startsWith(query.type) &&
+        file.force_inline_preview &&
+        query.force === "true"
+      ) {
+        file.disposition = "inline";
+        file.meta.detectedMime = file.mimetype;
+      } else {
+        return badRequest(res, "Preview not available.");
+      }
     }
 
-    const stat = fs.statSync(filePath);
-
+    const stat = statSync(filePath);
     //stream
     const range = req.headers.range;
     res.setHeader("Accept-Ranges", "bytes");
@@ -140,7 +152,7 @@ export const previewFileHandler = async (req, res, next) => {
         "Content-Disposition": `${file.disposition}; filename="${file.filename}"`,
       });
 
-      const stream = fs.createReadStream(filePath, { start, end });
+      const stream = createReadStream(filePath, { start, end });
 
       stream.on("error", (streamErr) => {
         console.error("Stream error:", streamErr);
@@ -156,7 +168,7 @@ export const previewFileHandler = async (req, res, next) => {
       "Content-Disposition": `${file.disposition}; filename="${file.filename}"`,
     });
 
-    const stream = fs.createReadStream(filePath);
+    const stream = createReadStream(filePath);
     stream.on("error", (streamErr) => {
       console.error("Stream error:", streamErr);
       if (!res.headersSent) res.status(500).end();
@@ -195,7 +207,13 @@ export const downloadFileHandler = async (req, res, next) => {
     const isPublic = file.publicRole === "VIEWER";
     const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
+    if (
+      !isPublic &&
+      !isShared &&
+      !isOwner &&
+      !req.isTokenAuthorized &&
+      !SUPER_ROLES.includes(req.user.role)
+    )
       return forbidden(res);
 
     const filePath = path.join(
@@ -205,16 +223,16 @@ export const downloadFileHandler = async (req, res, next) => {
     );
 
     // Safety check: ensure inside upload root
-    if (!filePath.startsWith(UPLOAD_ROOT) || !fs.existsSync(filePath))
+    if (!existsSync(filePath))
       return notFound(res, "File missing from server.");
 
     res.writeHead(200, {
-      "Content-Length": fs.statSync(filePath).size,
+      "Content-Length": statSync(filePath).size,
       "Content-Type": "application/octet-stream",
       "Content-Disposition": `attachment; filename="${file.filename}"`,
     });
 
-    const stream = fs.createReadStream(filePath);
+    const stream = createReadStream(filePath);
 
     stream.on("error", (streamErr) => {
       console.error("Stream error:", streamErr);
@@ -343,7 +361,7 @@ export const copyFileHandler = async (req, res, next) => {
           );
       });
     } finally {
-      session.endSession();
+      await session.endSession();
     }
 
     return res.status(201).json({
@@ -410,7 +428,7 @@ export const moveFileHandler = async (req, res, next) => {
         );
       });
     } finally {
-      session.endSession();
+      await session.endSession();
     }
 
     return res.status(200).json({
@@ -587,7 +605,7 @@ export const deleteFileHandler = async (req, res, next) => {
   } catch (err) {
     next(err);
   } finally {
-    if (session) session.endSession();
+    if (session) await session.endSession();
   }
 };
 
@@ -605,9 +623,26 @@ export const shareFileHandler = async (req, res, next) => {
   const { updateQuery, emailsToUpdate, accepted, skipped } = req.shareConfig;
 
   const session = await mongoose.startSession();
+  let shareToken = null;
+
   try {
     await session.withTransaction(async () => {
-      const file = await UserFile.findOneAndUpdate(
+      const file = await UserFile.findOne({
+        _id: req.params.id,
+        userId: req.user._id,
+        isDeleted: false,
+      })
+        .select("_id shareToken")
+        .session(session)
+        .lean();
+
+      if (!file) return notFound(res, "File not found.");
+      if (!file.shareToken) {
+        shareToken = base64URLEncode(crypto.randomBytes(32));
+        updateQuery.$set.shareToken = shareToken;
+      } else shareToken = file.shareToken;
+
+      await UserFile.findOneAndUpdate(
         { _id: req.params.id, userId: req.user._id, isDeleted: false },
         { $pull: { sharedWith: { email: { $in: emailsToUpdate } } } },
         { new: true, session },
@@ -631,7 +666,7 @@ export const shareFileHandler = async (req, res, next) => {
   } catch (err) {
     next(err);
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
@@ -654,18 +689,32 @@ export const filePublicRoleHandler = async (req, res, next) => {
   if (!formattedPublicRole || !allowedPublicRoles.includes(formattedPublicRole))
     return badRequest(res, "Invalid `publicRole`.");
 
+  const updateQuery = { $set: { publicRole: formattedPublicRole } };
   try {
-    const file = await UserFile.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id, isDeleted: false },
-      { $set: { publicRole: formattedPublicRole } },
-      { new: true },
-    ).select("_id");
+    const file = await UserFile.findOne({
+      _id: req.params.id,
+      userId: req.user._id,
+      isDeleted: false,
+    })
+      .select("_id shareToken")
+      .lean();
 
     if (!file) return notFound(res, "File not found.");
+    if (!file.shareToken) {
+      shareToken = base64URLEncode(crypto.randomBytes(32));
+      updateQuery.$set.shareToken = shareToken;
+      updateQuery.$set.sharedAt = new Date();
+    } else shareToken = file.shareToken;
+
+    await UserFile.findOneAndUpdate(
+      { _id: file._id, isDeleted: false },
+      updateQuery,
+    );
 
     return res.status(200).json({
       success: true,
       message: "Permission for this file has changed.",
+      data: { token: shareToken },
     });
   } catch (err) {
     next(err);
@@ -685,20 +734,31 @@ export const getFileShareToken = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return badRequest(res, "Invalid id.");
 
-  const shareToken = base64URLEncode(crypto.randomBytes(32));
   try {
-    const file = await UserFile.findOneAndUpdate(
+    const file = await UserFile.findOne({
+      _id: req.params.id,
+      userId: req.user._id,
+      isDeleted: false,
+    });
+    if (!file) return notFound(res, "File not found.");
+    if (file.publicRole !== "VIEWER" && file.sharedWith.length < 1)
+      return responsePayload(
+        res,
+        403,
+        "Cannot perform revoke on a non-shared item.",
+      );
+
+    const shareToken = base64URLEncode(crypto.randomBytes(32));
+    await UserFile.findOneAndUpdate(
       { _id: req.params.id, userId: req.user._id, isDeleted: false },
       { $set: { shareToken } },
       { new: true },
     ).select("_id");
 
-    if (!file) return notFound(res, "File not found.");
-
     return res.status(200).json({
       success: true,
       message: "Token created for the file.",
-      data: { shareToken, id: file._id.toString() },
+      data: { newToken: shareToken },
     });
   } catch (err) {
     next(err);
@@ -714,33 +774,55 @@ export const getFileShareToken = async (req, res, next) => {
  *   - req.user: authenticated user object provided by `validateSession` (must be file owner)
  */
 export const revokeAccessFileHandler = async (req, res, next) => {
-  const { emails } = req.body;
+  const { emails, publicRole } = req.body;
   if (!emails || !Array.isArray(emails))
     return badRequest(res, "Invalid payload");
 
-  const skipped = [];
-  const emailsToUpdate = [];
-
-  emails.forEach((email) => {
-    const ce = email.toLowerCase().trim();
-    if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ce))
-      skipped.push(ce);
-    else emailsToUpdate.push(ce);
-  });
-
-  if (emailsToUpdate.length < 1) return badRequest(res, "Invalid emails.");
+  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
+  if (formattedPublicRole && formattedPublicRole !== "NONE")
+    return badRequest(res, "Invalid `publicRole`.");
 
   try {
-    const file = await UserFile.findOneAndUpdate(
+    const file = await UserFile.findOne({
+      _id: req.params.id,
+      userId: req.user._id,
+      isDeleted: false,
+    })
+      .select("_id sharedWith publicRole")
+      .lean();
+
+    if (!file) return notFound(res, "file not found.");
+    if (file.publicRole !== "VIEWER" && file.sharedWith.length < 1)
+      return responsePayload(
+        res,
+        403,
+        "Cannot perform revoke on a non-shared item.",
+      );
+
+    const skipped = [];
+    const emailsToUpdate = [];
+
+    emails.forEach((email) => {
+      const ce = email.toLowerCase().trim();
+      if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ce))
+        skipped.push(ce);
+      else emailsToUpdate.push(ce);
+    });
+
+    let updateQuery = {};
+    if (emailsToUpdate.length > 0)
+      updateQuery.$pull = { sharedWith: { email: { $in: emailsToUpdate } } };
+    if (formattedPublicRole)
+      updateQuery.$set = { publicRole: formattedPublicRole };
+
+    const updatedFile = await UserFile.findOneAndUpdate(
       { _id: req.params.id, userId: req.user._id, isDeleted: false },
-      { $pull: { sharedWith: { email: { $in: emailsToUpdate } } } },
+      updateQuery,
       { new: true },
     ).select("sharedWith publicRole");
 
-    if (!file) return badRequest(res, "File not found!");
-
-    if (file.sharedWith.length < 1 && file.publicRole === "NONE")
-      await UserFile.findByIdAndUpdate(file._id, {
+    if (updatedFile.sharedWith.length < 1 && updatedFile.publicRole === "NONE")
+      await UserFile.findByIdAndUpdate(updatedFile._id, {
         $set: { sharedAt: null, shareToken: "" },
       });
 

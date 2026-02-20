@@ -14,23 +14,29 @@ export const loadUploadSession = async (req, res, next) => {
   const { sessionId } = req.params;
 
   if (!mongoose.Types.ObjectId.isValid(sessionId)) {
-    return res.status(400).json({ message: "Invalid sessionId" });
+    return res.status(400).json({ message: "Invalid sessionId." });
   }
 
-  const upload = await UploadSession.findById(sessionId).populate(
-    "parentId",
-    "_id userId publicRole sharedWith",
-  );
+  try {
+    const upSession = await UploadSession.findById(sessionId)
+      .populate("parentId", "_id userId publicRole sharedWith")
+      .select("_id userId parentId tempDir uploadedChunks totalChunks status mime")
+      .lean();
 
-  if (!upload) {
-    return res.status(404).json({ message: "Upload session not found" });
+    if (!upSession) {
+      return res.status(404).json({ message: "Upload session not found." });
+    }
+
+    // 🔐 security: ensure ownership
+    if (!upSession.userId.equals(req.user._id)) {
+      return res.status(401).json({ message: "Unauthorized upload session." });
+    }
+
+    console.log({upSession})
+
+    req.uploadSession = upSession;
+    next();
+  } catch (err) {
+    next(err);
   }
-
-  // 🔐 security: ensure ownership
-  if (!upload.userId.equals(req.user._id)) {
-    return res.status(401).json({ message: "Unauthorized upload session" });
-  }
-
-  req.uploadSession = upload;
-  next();
 };

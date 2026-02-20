@@ -1,6 +1,7 @@
 import { Schema, model } from "mongoose";
 
 export const sharedWithSchema = new Schema({
+  _id: { type: Schema.Types.ObjectId, select: false },
   email: {
     type: String,
     match: [

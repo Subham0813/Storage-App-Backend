@@ -1,6 +1,6 @@
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
-import { notFound } from "../utils/responseHelper.js";
+import { notFound } from "../utils/helper.js";
 import { Router } from "express";
 
 /**

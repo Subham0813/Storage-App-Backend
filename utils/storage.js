@@ -12,6 +12,7 @@ import { UploadSession } from "../models/uploadSession.model.js";
 import { Directory } from "../models/directory.model.js";
 import { User } from "../models/user.model.js";
 import mongoose from "mongoose";
+import { createHash } from "node:crypto";
 
 /**
  * Utility: mergeFileChunks
@@ -22,12 +23,13 @@ import mongoose from "mongoose";
  *   - Reads chunks sequentially and pipes to write stream
  *   - Returns: hashStream
  */
-export const mergeFileChunks = async (upload, mergedPath) => {
+export const mergeFileChunks = async (uploadedChunks, tempDir, mergedPath) => {
   const writeStream = createWriteStream(mergedPath);
   const hashStream = createHash("sha256");
 
-  for (let i = 0; i < upload.totalChunks; i++) {
-    const chunkPath = path.join(upload.tempDir, `chunk-${i}`);
+  for (let i = 0; i < uploadedChunks.length; i++) {
+    const idx = uploadedChunks[i];
+    const chunkPath = path.join(tempDir, `chunk-${idx}`);
     const readStream = createReadStream(chunkPath);
 
     readStream.on("data", (chunk) => {
@@ -37,7 +39,7 @@ export const mergeFileChunks = async (upload, mergedPath) => {
 
     // { end: false } keeps writeStream open for the next chunk
     await pipeline(readStream, writeStream, {
-      end: i === upload.totalChunks - 1,
+      end: i === uploadedChunks.length - 1,
     });
   }
 
@@ -64,6 +66,8 @@ export const finalizeStorageRecord = async ({
   status = "uploaded",
 }) => {
   const { _id: parentId, userId, publicRole, sharedWith } = upload.parentId;
+
+  console.log({ upload, hash, existingRecord, detectedMime });
 
   const isInline = INLINE_MIME.has(detectedMime);
   const disposition = isInline ? "inline" : "attachment";
@@ -143,7 +147,7 @@ export const finalizeStorageRecord = async ({
   } catch (err) {
     throw err;
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 

@@ -14,7 +14,7 @@ await db.command({
   validator: {
     $jsonSchema: {
       bsonType: "object",
-      required: ["username", "authProvider"],
+      required: ["username", "authProviders"],
       properties: {
         _id: {
           bsonType: "objectId",
@@ -63,7 +63,7 @@ await db.command({
           bsonType: "string",
           description: "Unique ID from GitHub OAuth integration.",
         },
-        authProvider: {
+        authProviders: {
           bsonType: "array",
           items: {
             bsonType: "string",
@@ -289,6 +289,7 @@ await db.command({
           bsonType: ["null", "date"],
           description: "Share creation time.",
         },
+        shareToken: { bsonType: ["null", "string"] },
         sharedWith: {
           bsonType: "array",
           items: {
@@ -368,6 +369,7 @@ await db.command({
           bsonType: ["null", "date"],
           description: "Share creation time.",
         },
+        shareToken: { bsonType: ["null", "string"] },
         sharedWith: {
           bsonType: "array",
           items: {

@@ -4,6 +4,7 @@ import { UserFile } from "../models/user_file.model.js";
 import { Session } from "../models/session.model.js";
 import { File as FileModel } from "../models/file.model.js";
 import { getUserPayload } from "../utils/helper.js";
+import { User } from "../models/user.model.js";
 
 const UPLOAD_ROOT =
   process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
@@ -42,6 +43,7 @@ export const getRecentsHandler = async (req, res, next) => {
 
     const queryFilter = {
       isDeleted: false,
+      _id: { $ne: req.user.rootDirId },
       updatedAt: { $gte: cutoffDate },
     };
 
@@ -162,7 +164,7 @@ export const LogoutHandler = async (req, res, next) => {
     await session.withTransaction(async () => {
       await User.findOneAndUpdate(
         { _id: req.user._id, deviceCount: { $gt: 0 } },
-        { $inc: { deviceCount: -1 } },
+        { $inc: { deviceCount: -1 }, $set: { isLogged: false } },
         { session },
       );
 
@@ -177,7 +179,7 @@ export const LogoutHandler = async (req, res, next) => {
   } catch (err) {
     next(err);
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
@@ -208,7 +210,7 @@ export const LogoutAllHandler = async (req, res, next) => {
   } catch (err) {
     next(err);
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
@@ -227,6 +229,7 @@ export const DeleteProfileHandler = async (req, res, next) => {
       const files = await FileModel.find({ userId }).select("objectKey");
 
       Promise.all([
+        User.deleteOne({ _id: userId }).session(session),
         Directory.deleteMany({ userId }).session(session),
         UserFile.deleteMany({ userId }).session(session),
         Session.deleteMany({ userId }).session(session),

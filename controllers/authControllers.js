@@ -125,77 +125,87 @@ export const verifyOtpHandler = async (req, res, next) => {
   )
     return badRequest(res, "Invalid payload.");
 
+  let updatedOtpRecord = null;
+  let updatedUserRecord = null;
+  let newUserSession = null;
+
   const _session = await mongoose.startSession();
   try {
-    const { updatedUserRecord, updatedOtpRecord, newUserSession } =
-      await _session.withTransaction(async () => {
-        //check for user exists
-        const user = await User.findOne({
-          email: email.toLowerCase().trim(),
-        }).session(_session);
+    await _session.withTransaction(async () => {
+      //check for user exists
+      const user = await User.findOne({
+        email: email.toLowerCase().trim(),
+      })
+        .session(_session)
+        .lean();
 
-        if (!user) {
-          const error = new Error("Incorrect email address.");
-          error.statusCode = 404;
-          throw error;
-        }
+      if (!user) {
+        const error = new Error("Incorrect email address.");
+        error.statusCode = 404;
+        throw error;
+      }
 
-        if (user.deviceCount >= MAX_DEVICE_COUNT) {
-          if (logoutLastSession) {
-            await Session.deleteOne({ userId: user._id })
-              .sort({ createdAt: 1 })
-              .session(_session);
-            user.deviceCount -= 1;
-          } else {
-            const error = new Error(
-              "Session creation failed. Max.session limit reached.",
-            );
-            error.statusCode = 413;
-            throw error;
-          }
-        }
-
-        const otps = await OTP.find({ email, purpose }).session(_session);
-        if (otps.length < 1) {
-          const error = new Error("OTP expired.");
-          error.statusCode = 400;
-          throw error;
-        }
-
-        let otpRecord = otps[otps.length - 1];
-        const isValid = await otpRecord.compareOTP(otp.toString());
-        if (!isValid) {
-          const error = new Error("Invalid OTP.");
-          error.statusCode = 404;
-          throw error;
-        }
-
-        let updatedOtpRecord = null;
-        let updatedUserRecord = null;
-        let newUserSession = null;
-
-        if (purpose === "forgotPassword") {
-          updatedOtpRecord = await OTP.findByIdAndUpdate(
-            otpRecord._id,
-            { createdAt: new Date() },
-            { new: true },
-          )
-            .select("createdAt")
+      if (user.deviceCount >= MAX_DEVICE_COUNT) {
+        if (logoutLastSession) {
+          await Session.deleteOne({ userId: user._id })
+            .sort({ createdAt: 1 })
             .session(_session);
         } else {
-          updatedUserRecord = await User.findOneAndUpdate(
-            { _id: user._id },
-            { $inc: { deviceCount: 1 } },
-            { new: true },
-          ).session(_session);
-          await OTP.deleteMany({ email, purpose }).session(_session);
-
-          newUserSession = await Session.create([{ userId: user._id }], {
-            session: _session,
-          });
+          const error = new Error(
+            "Session creation failed. Max.session limit reached.",
+          );
+          error.statusCode = 413;
+          throw error;
         }
-        return { updatedUserRecord, updatedOtpRecord, newUserSession };
-      });
+      }
+
+      const otps = await OTP.find({ email, purpose }).session(_session);
+      if (otps.length < 1) {
+        const error = new Error("OTP expired.");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      let otpRecord = otps[otps.length - 1];
+      const isValid = await otpRecord.compareOTP(otp.toString());
+      if (!isValid) {
+        const error = new Error("Invalid OTP.");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const updateQuery = {};
+      if (!user.isLogged) updateQuery["$set"] = { isLogged: true };
+      if (user.deviceCount < MAX_DEVICE_COUNT)
+        updateQuery["$inc"] = { deviceCount: 1 };
+
+      if (purpose === "forgotPassword") {
+        updatedOtpRecord = await OTP.findByIdAndUpdate(
+          otpRecord._id,
+          { createdAt: new Date() },
+          { new: true },
+        )
+          .select("createdAt")
+          .session(_session)
+          .lean();
+      } else {
+        const incr = user.deviceCount < MAX_DEVICE_COUNT ? 1 : 0;
+        updatedUserRecord = await User.findOneAndUpdate(
+          { _id: user._id },
+          { $set: { isLogged: true }, $inc: { deviceCount: incr } },
+          { new: true },
+        )
+          .session(_session)
+          .lean();
+        await OTP.deleteMany({ email, purpose }).session(_session);
+
+        const ns = await Session.create([{ userId: user._id }], {
+          session: _session,
+        });
+
+        newUserSession = ns[0];
+      }
+    });
 
     if (purpose === "forgotPassword") {
       const expires = updatedOtpRecord.createdAt.getTime() + 300 * 1000;
@@ -215,6 +225,7 @@ export const verifyOtpHandler = async (req, res, next) => {
           message: "OTP verified.",
         });
     }
+    // console.log({updatedUserRecord, newUserSession, updatedOtpRecord})
 
     const userPayload = getUserPayload(updatedUserRecord);
     const { _id: sid, expiry } = newUserSession;
@@ -244,7 +255,7 @@ export const verifyOtpHandler = async (req, res, next) => {
       "One Time Password verification failed due to some unavoidable reasons. Try again.";
     next(err);
   } finally {
-    _session.endSession();
+    await _session.endSession();
   }
 };
 
@@ -257,28 +268,20 @@ export const verifyOtpHandler = async (req, res, next) => {
  *   - user must exist and password must match
  */
 export const loginHandler = async (req, res, next) => {
-  const { email, password, username } = req.body;
-  if (!password && (!username || !email))
-    return badRequest(res, "Invalid payload.");
+  const { email, password } = req.body;
+  if (!password || !email) return badRequest(res, "Invalid payload.");
 
-  const session = await mongoose.startSession();
   try {
     const userEmail = email ? email.toLowerCase().trim() : null;
-    const { user } = session.withTransaction(async () => {
-      const user = await User.findOne({
-        $or: [{ email: userEmail }, { username: username }],
-      })
-        .select("+password")
-        .session(session);
 
-      if (!user || !user.password || !(await user.comparePassword(password))) {
-        const error = new Error("User does not exist with these credentials.");
-        error.statusCode = 404;
-        throw error;
-      }
+    // $or: [{ email: userEmail }, { username: username }],
+    const user = await User.findOne({ email: userEmail }).select("+password");
 
-      return { user };
-    });
+    if (!user || !user.password || !(await user.comparePassword(password))) {
+      const error = new Error("User does not exist with these credentials.");
+      error.statusCode = 404;
+      throw error;
+    }
 
     const expires = Date.now() + 600 * 1000;
     return res
@@ -308,8 +311,6 @@ export const loginHandler = async (req, res, next) => {
     err.customMessage =
       "Login process failed due to some unavoidable reasons. Try again.";
     next(err);
-  } finally {
-    session.endSession();
   }
 };
 
@@ -335,22 +336,29 @@ export const registerHandler = async (req, res, next) => {
   const session = await mongoose.startSession();
   try {
     const { user } = await session.withTransaction(async () => {
-      const existingUser = await User.findOne({ email });
+      const existingUser = await User.findOne({ email }).session(session);
       if (existingUser) {
         const error = new Error("User already registered.");
         error.statusCode = 409;
         throw error;
       }
 
-      const user = await User.create({ name, email, password }, { session });
-      const root = await Directory.create(
-        {
-          dirname: `root-${user.username}`,
-          parentId: new mongoose.Types.ObjectId(),
-          userId: user._id,
-        },
+      let [user] = await User.create([{ name, email, password }], { session });
+      const [root] = await Directory.create(
+        [
+          {
+            dirname: `root-${user.username}`,
+            parentId: new mongoose.Types.ObjectId(),
+            userId: user._id,
+          },
+        ],
         { session },
       );
+
+      user = await User.findByIdAndUpdate(user._id, {
+        rootDirId: root._id,
+      }).session(session);
+
       return { user };
     });
 
@@ -383,7 +391,7 @@ export const registerHandler = async (req, res, next) => {
       "Register process failed due to some unavoidable reasons. Try again.";
     next(err);
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
@@ -489,6 +497,6 @@ export const forgotPasswordHandler = async (req, res, next) => {
       "Password reset process failed due to some unavoidable reasons. Try again.";
     next(err);
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };

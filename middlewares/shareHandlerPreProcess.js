@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
-import { base64URLEncode } from "../controllers/oauthControllers";
-import { badRequest } from "../utils/helper";
+import { base64URLEncode } from "../controllers/oauthControllers.js";
+import { badRequest } from "../utils/helper.js";
 import crypto from "node:crypto";
 
 /**

@@ -2,9 +2,12 @@ import path from "node:path";
 import { mkdir, rename, rm, unlink } from "node:fs/promises";
 
 import { UploadSession } from "../models/uploadSession.model.js";
-import { finalizeStorageRecord, mergeFileChunks } from "../utils/storage.js";
+import { File as FileModel } from "../models/file.model.js";
 import { User } from "../models/user.model.js";
+import { finalizeStorageRecord, mergeFileChunks } from "../utils/storage.js";
 import { badRequest } from "../utils/helper.js";
+import { fileTypeFromFile } from "file-type";
+import mongoose from "mongoose";
 
 const CHUNK_SIZE = {
   GUEST: 16 * 1024,
@@ -41,15 +44,15 @@ export const initUpload = async (req, res, next) => {
       });
 
     const { _id: userId, role } = req.user;
-    const chunkSize = CHUNK_SIZE[role];
-    const strategy = size > chunkSize ? "chunked" : "direct";
+    const strategy = size > CHUNK_SIZE[role] ? "chunked" : "direct";
+    const chunkSize = strategy === "chunked" ? CHUNK_SIZE[role] : size;
     const totalChunks =
       strategy === "chunked" ? Math.ceil(size / chunkSize) : 1;
 
     const upload = await UploadSession.create({
       userId,
       parentId: req.parent._id,
-      fileName: name,
+      filename: name,
       size,
       mime,
       strategy,
@@ -58,7 +61,9 @@ export const initUpload = async (req, res, next) => {
       expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
     });
 
-    res.json({
+    res.setHeader("x-chunk-index", 0);
+
+    res.status(200).json({
       uploadId: upload._id,
       strategy,
       chunkSize: chunkSize,
@@ -78,47 +83,69 @@ export const initUpload = async (req, res, next) => {
  *   - req.file: multipart form file from upload middleware
  *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
  */
-export const uploadChunk = async (req, res, next) => {
+export const saveChunk = async (req, res, next) => {
   try {
-    const { _id: uid, tempDir } = req.uploadSession;
+    const { _id, tempDir, uploadedChunks, totalChunks, chunkSize } =
+      req.uploadSession;
     const chunkIndex = Number(req.headers["x-chunk-index"]);
-    const file = req.file;
 
+    const file = req.file;
     if (!file) return badRequest(res, "No chunk received.");
 
-    const td = tempDir || path.join(TMP_ROOT, uid.toString());
+    let error = null;
 
-    const updatedUpload = await UploadSession.findOneAndUpdate(
-      { _id: uid, uploadedChunks: { $ne: chunkIndex } }, // Only if chunk isn't already there
-      {
-        $addToSet: { uploadedChunks: chunkIndex }, //prevents duplicate indices
-        $set: { status: "uploading", td },
-      },
-      { new: true },
-    );
-
-    if (!updatedUpload) {
-      await unlink(file.path); // Clean up Multer temp file
-      return res.json({ skipped: true, message: "Chunk already exists." });
+    if (totalChunks === uploadedChunks.length) {
+      error = { status: 409, message: "All chunks are already uploaded." };
+    } else if (uploadedChunks.includes(chunkIndex)) {
+      error = { status: 409, message: "Chunk already exists." };
+    } else if (uploadedChunks.length !== chunkIndex) {
+      error = {
+        status: 403,
+        message: "Wrong indexed file. Index should always be continuous.",
+      };
+    } else if (file.size !== chunkSize) {
+      error = { status: 403, message: "Chunk size not matched." };
     }
 
-    const chunkPath = path.join(updatedUpload.tempDir, `chunk-${chunkIndex}`);
-    await mkdir(updatedUpload.tempDir, { recursive: true });
+    if (error) {
+      if (file?.path) await unlink(file.path);
+      return res.status(error.status).json({ message: error.message });
+    }
+
+    const status =
+      totalChunks === uploadedChunks.length + 1 ? "uploaded" : "uploading";
+
+    const td = tempDir || path.join(TMP_ROOT, _id.toString());
+
+    const updatedUpload = await UploadSession.findByIdAndUpdate(
+      _id,
+      {
+        $addToSet: { uploadedChunks: chunkIndex }, //prevents duplicate indices
+        $set: { status, tempDir: td },
+      },
+      { new: true },
+    ).select("uploadedChunks");
+
+    await mkdir(td, { recursive: true });
+
+    const chunkPath = path.join(td, `chunk-${chunkIndex}`);
     await rename(file.path, chunkPath);
 
     const progress = Math.round(
-      (updatedUpload.uploadedChunks.length / updatedUpload.totalChunks) * 100,
+      (updatedUpload.uploadedChunks.length / totalChunks) * 100,
     );
+
+    if (status !== "uploaded") res.setHeader("x-chunk-index", chunkIndex + 1);
 
     return res.status(200).json({
       success: true,
       message: "chunk uploaded.",
       data: {
-        status: upload.status,
+        status,
         progress: `${progress}%`,
-        uploadedChunks: upload.uploadedChunks,
-        totalChunks: upload.totalChunks,
-        isComplete: upload.uploadedChunks.length === upload.totalChunks,
+        uploadedChunks: updatedUpload.uploadedChunks,
+        totalChunks: totalChunks,
+        isCompleted: updatedUpload.uploadedChunks.length === totalChunks,
       },
     });
   } catch (err) {
@@ -142,46 +169,61 @@ export const uploadChunk = async (req, res, next) => {
  */
 export const completeUpload = async (req, res, next) => {
   const upload = req.uploadSession;
-  const { _id: uid, uploadedChunks, totalChunks, parentId, tempDir } = upload;
+  const { _id, uploadedChunks, totalChunks, parentId, tempDir } = upload;
 
   if (uploadedChunks.length !== totalChunks) {
     return res.status(400).json({ message: "Chunks missing." });
   }
-
-  const mergedPath = path.join(TMP_ROOT, `${uid.toString()}-merged`);
+  const mergedPath = path.join(TMP_ROOT, `${_id.toString()}-merged`);
 
   try {
     // 1. Optimized Merge via Streams
-    const hash = await mergeFileChunks(upload, mergedPath);
+    const hash = await mergeFileChunks(uploadedChunks, tempDir, mergedPath);
 
     //2. Pre-Process
     const detected = await fileTypeFromFile(mergedPath);
     const detectedMime =
       detected?.mime || upload.mime || "application/octet-stream";
 
-    const finalPath = path.join(UPLOAD_ROOT, parentId.userId.toString(), hash);
-    const exist = await FileModel.findOne({ hash }).select("_id refCount");
-
-    await mkdir(path.join(UPLOAD_ROOT, parentId.userId.toString()), {
-      recursive: true,
-    });
-
-    if (exist) await unlink(mergedPath);
-    else await rename(mergedPath, finalPath);
-
-    if (tempDir)
-      rm(tempDir, { recursive: true, force: true }).catch((err) =>
-        console.error("cleanup failed:", err),
-      );
+    const existingRecord = await FileModel.findOne({ hash })
+      .select("_id refCount")
+      .lean();
 
     // 3. Finalize via Shared Service
     const userFile = await finalizeStorageRecord({
       upload,
       hash,
-      exist,
+      existingRecord,
       detectedMime,
       status: "uploaded",
     });
+
+    //4. Post-Process (storage manage)
+    if (userFile) {
+      await mkdir(path.join(UPLOAD_ROOT, parentId.userId.toString()), {
+        recursive: true,
+      });
+
+      const finalPath = path.join(
+        UPLOAD_ROOT,
+        parentId.userId.toString(),
+        hash,
+      );
+
+      if (existingRecord) {
+        await unlink(mergedPath);
+        console.log("File unlinked...\n", mergedPath);
+      } else {
+        rename(mergedPath, finalPath).catch((err) =>
+          console.error("rename failed:", err),
+        );
+      }
+
+      if (tempDir)
+        rm(tempDir, { recursive: true, force: true }).catch((err) =>
+          console.error("cleanup failed:", err),
+        );
+    }
 
     return res.status(201).json({ success: true, file: userFile });
   } catch (err) {
@@ -197,14 +239,17 @@ export const completeUpload = async (req, res, next) => {
  *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
  */
 export const cancelUpload = async (req, res, next) => {
-  const upload = req.uploadSession;
+  const { _id, tempDir } = req.uploadSession;
 
+  const session = await mongoose.startSession();
   try {
-    await UploadSession.deleteOne({ _id: upload._id });
+    await session.withTransaction(async () => {
+      await UploadSession.deleteOne({ _id }).session(session);
+    });
 
-    if (upload.tempDir) {
+    if (tempDir) {
       // Use rm recursive to delete the folder and all its chunks
-      rm(upload.tempDir, { recursive: true, force: true }).catch((err) =>
+      rm(tempDir, { recursive: true, force: true }).catch((err) =>
         console.error("cleanup failed:", err),
       );
     }
@@ -212,6 +257,8 @@ export const cancelUpload = async (req, res, next) => {
     return res.status(200).json({ message: "Upload cancelled." });
   } catch (err) {
     next(err);
+  } finally {
+    session.endSession();
   }
 };
 
@@ -224,20 +271,18 @@ export const cancelUpload = async (req, res, next) => {
  */
 export const getUploadStatus = async (req, res, next) => {
   try {
-    const upload = req.uploadSession;
+    const { status, uploadedChunks, totalChunks } = req.uploadSession;
 
-    const progress = Math.round(
-      (upload.uploadedChunks.length / upload.totalChunks) * 100,
-    );
+    const progress = Math.round((uploadedChunks.length / totalChunks) * 100);
 
     return res.json({
       success: true,
       data: {
-        status: upload.status,
+        status,
         progress: `${progress}%`,
-        uploadedChunks: upload.uploadedChunks,
-        totalChunks: upload.totalChunks,
-        isComplete: upload.uploadedChunks.length === upload.totalChunks,
+        uploadedChunks: uploadedChunks,
+        totalChunks: totalChunks,
+        isComplete: uploadedChunks.length === totalChunks,
       },
     });
   } catch (err) {

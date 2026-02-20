@@ -281,7 +281,7 @@ export const deleteUser = async (req, res, next) => {
         await UploadSession.deleteMany({ userId: user._id });
       });
     } finally {
-      session.endSession();
+      await session.endSession();
     }
 
     return res.status(200).json({

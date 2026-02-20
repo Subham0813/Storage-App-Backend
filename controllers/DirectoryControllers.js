@@ -2,6 +2,7 @@ import path from "path";
 import archiver from "archiver";
 import mongoose from "mongoose";
 import { unlink } from "fs/promises";
+import crypto from "crypto";
 
 import { recursiveDelete, recursiveRemove } from "../utils/remove.js";
 import {
@@ -9,13 +10,14 @@ import {
   restoreChildFiles,
 } from "../utils/restore.js";
 import { serveZip, sanitizeName } from "../utils/serve.js";
-import { isDescendent, hasAccess } from "../utils/helper.js";
+import { isDescendent, hasAccess, responsePayload } from "../utils/helper.js";
 import { badRequest, forbidden, notFound } from "../utils/helper.js";
 
 import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { shareDirectoryRecursive } from "../utils/share.js";
-import { SUPER_ROLES } from "../routes/adminRoutes.js";
+import { SUPER_ROLES } from "./adminControllers.js";
+import { base64URLEncode } from "./oauthControllers.js";
 
 // API Handlers
 /**
@@ -32,9 +34,9 @@ export const getDirectoryInfoHandler = async (req, res, next) => {
   try {
     const directory = await Directory.findOne({
       _id: req.params.id,
-      isDeleted: false,
+      deletedBy: { $ne: "process" },
     })
-      .select("userId publicRole sharedWith")
+      .select("-__v -deletedBy")
       .lean();
 
     if (!directory) return notFound(res, "Directory not found!");
@@ -46,7 +48,13 @@ export const getDirectoryInfoHandler = async (req, res, next) => {
       ? hasAccess(directory, ["VIEWER", "EDITOR"], email)
       : false;
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
+    if (
+      !isPublic &&
+      !isShared &&
+      !isOwner &&
+      !req.isTokenAuthorized &&
+      !SUPER_ROLES.includes(req.user.role)
+    )
       return forbidden(res);
 
     return res.status(200).json({ success: true, data: { directory } });
@@ -84,7 +92,13 @@ export const getDirectoriesHandler = async (req, res, next) => {
       ? hasAccess(directory, ["VIEWER", "EDITOR"], email)
       : false;
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
+    if (
+      !isPublic &&
+      !isShared &&
+      !isOwner &&
+      !req.isTokenAuthorized &&
+      !SUPER_ROLES.includes(req.user.role)
+    )
       return forbidden(res);
 
     const directories = await Directory.find({
@@ -126,7 +140,13 @@ export const getAllFilesHandler = async (req, res, next) => {
       ? hasAccess(directory, ["VIEWER", "EDITOR"], email)
       : false;
 
-    if (!isPublic && !isShared && !isOwner && !req.isTokenAuthorized && !SUPER_ROLES.includes(req.user.role))
+    if (
+      !isPublic &&
+      !isShared &&
+      !isOwner &&
+      !req.isTokenAuthorized &&
+      !SUPER_ROLES.includes(req.user.role)
+    )
       return forbidden(res);
 
     const files = await UserFile.find({
@@ -167,7 +187,10 @@ export const createDirectoryHandler = async (req, res, next) => {
             deletedAt: null,
             publicRole,
             sharedWith,
-            sharedAt: publicRole || sharedWith.length > 0 ? new Date() : null,
+            sharedAt:
+              publicRole !== "NONE" || sharedWith.length > 0
+                ? new Date()
+                : null,
           },
         ],
         { session },
@@ -183,7 +206,7 @@ export const createDirectoryHandler = async (req, res, next) => {
   } catch (err) {
     next(err);
   } finally {
-    if (session) session.endSession();
+    if (session) await session.endSession();
   }
 };
 
@@ -244,8 +267,7 @@ export const moveDirectoryHandler = async (req, res, next) => {
     const directory = await Directory.findOne({
       _id: req.params.id,
       isDeleted: false,
-    }).select("userId publicRole sharedWith");
-
+    }).lean();
     if (!directory) return notFound(res, "Directory not found!");
 
     const { _id: targetDirId } = req.parent;
@@ -290,7 +312,7 @@ export const moveDirectoryHandler = async (req, res, next) => {
         );
       });
     } finally {
-      session.endSession();
+      await session.endSession();
     }
 
     return res.status(200).json({
@@ -386,6 +408,7 @@ export const downloadDirectoryHandler = async (req, res, next) => {
       zipPath: `${directory.dirname}/`,
       visited,
       userEmail: email,
+      userId,
     });
 
     // Finalize ZIP
@@ -440,7 +463,7 @@ export const moveToBinDirectoryHandler = async (req, res, next) => {
         await recursiveRemove(directory._id, session, new Set());
       });
     } finally {
-      session.endSession();
+      await session.endSession();
     }
 
     res.status(200).json({ success: true, message: "Directory moved to bin." });
@@ -468,17 +491,16 @@ export const restoreDirectoryHandler = async (req, res, next) => {
     })
       .select("userId publicRole sharedWith parentId")
       .lean();
-
     if (!directory) return badRequest(res, "Directory not found!");
 
     const parent = await Directory.findOne({
       _id: directory.parentId,
       isDeleted: false,
-    }).select("_id");
-
-    if (!parent) {
+    })
+      .select("_id")
+      .lean();
+    if (!parent)
       return badRequest(res, "Parent folder is deleted. Restore parent first.");
-    }
 
     const { _id: userId, email } = req.user;
     const isOwner = directory.userId.toString() === userId.toString();
@@ -490,7 +512,7 @@ export const restoreDirectoryHandler = async (req, res, next) => {
 
     try {
       await session.withTransaction(async () => {
-        const updatedDir = await Directory.findByIdAndUpdate(
+        await Directory.findByIdAndUpdate(
           directory._id,
           {
             $set: {
@@ -506,7 +528,7 @@ export const restoreDirectoryHandler = async (req, res, next) => {
         await restoreChildDirectories(directory._id, session);
       });
     } finally {
-      session.endSession();
+      await session.endSession();
     }
 
     return res
@@ -563,7 +585,7 @@ export const deleteDirectoryHandler = async (req, res, next) => {
   } catch (err) {
     next(err);
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
@@ -581,12 +603,28 @@ export const shareDirectoryHandler = async (req, res, next) => {
   const { updateQuery, emailsToUpdate, accepted, skipped } = req.shareConfig;
 
   const session = await mongoose.startSession();
+  let shareToken = null;
+
   try {
     await session.withTransaction(async () => {
-      const directory = await Directory.findOneAndUpdate(
+      const directory = await Directory.findOne({
+        _id: req.params.id,
+        userId: req.user._id,
+        isDeleted: false,
+      })
+        .select("_id shareToken")
+        .session(session)
+        .lean();
+
+      if (!directory.shareToken) {
+        shareToken = base64URLEncode(crypto.randomBytes(32));
+        updateQuery.$set.shareToken = shareToken;
+      } else shareToken = directory.shareToken;
+
+      await Directory.findOneAndUpdate(
         { _id: req.params.id, userId: req.user._id, isDeleted: false },
         { $pull: { sharedWith: { email: { $in: emailsToUpdate } } } },
-        { new: true, session },
+        { session },
       ).select("_id");
 
       await Directory.findByIdAndUpdate(directory._id, updateQuery, {
@@ -607,7 +645,7 @@ export const shareDirectoryHandler = async (req, res, next) => {
       depth: 5,
       accepted,
       skipped,
-      shareToken,
+      token: shareToken,
     });
 
     if (notify) {
@@ -618,7 +656,7 @@ export const shareDirectoryHandler = async (req, res, next) => {
   } catch (err) {
     next(err);
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
@@ -643,13 +681,27 @@ export const directoryPublicRoleHandler = async (req, res, next) => {
 
   const updateQuery = { $set: { publicRole: formattedPublicRole } };
   const session = await mongoose.startSession();
+  let shareToken = null;
   try {
     await session.withTransaction(async () => {
-      const directory = await Directory.findOneAndUpdate(
-        { _id: req.params.id, userId: req.user._id, isDeleted: false },
-        updateQuery,
-        { new: true },
-      ).select("_id");
+      const directory = await Directory.findOne({
+        _id: req.params.id,
+        userId: req.user._id,
+        isDeleted: false,
+      })
+        .select("_id shareToken")
+        .session(session)
+        .lean();
+
+      if (!directory.shareToken) {
+        shareToken = base64URLEncode(crypto.randomBytes(32));
+        updateQuery.$set.shareToken = shareToken;
+        updateQuery.$set.sharedAt = new Date();
+      } else shareToken = directory.shareToken;
+
+      await Directory.findByIdAndUpdate(directory._id, updateQuery, {
+        session,
+      });
 
       await shareDirectoryRecursive(directory._id, session, [], updateQuery);
     });
@@ -657,11 +709,12 @@ export const directoryPublicRoleHandler = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "Permission for this file has changed.",
+      data: { token: shareToken },
     });
   } catch (err) {
     next(err);
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
@@ -678,17 +731,38 @@ export const getDirectoryShareToken = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return badRequest(res, "Invalid id.");
 
-  const shareToken = base64URLEncode(crypto.randomBytes(32));
-  const updateQuery = { $set: { shareToken } };
-
   const session = await mongoose.startSession();
+  let shareToken = null;
   try {
     await session.withTransaction(async () => {
-      const directory = await Directory.findOneAndUpdate(
-        { _id: req.params.id, userId: req.user._id, isDeleted: false },
-        updateQuery,
-        { new: true },
-      ).select("_id");
+      const directory = await Directory.findOne({
+        _id: req.params.id,
+        userId: req.user._id,
+        isDeleted: false,
+      })
+        .select("_id publicRole sharedWith")
+        .session(session);
+
+      if (!directory) {
+        const error = new Error("Directory not found.");
+        error.statusCode = 404;
+        throw error;
+      }
+      if (
+        directory.publicRole !== "VIEWER" &&
+        directory.sharedWith.length < 1
+      ) {
+        const error = new Error("Cannot create a token on a non-shared item.");
+        error.statusCode = 403;
+        throw error;
+      }
+
+      shareToken = base64URLEncode(crypto.randomBytes(32));
+      const updateQuery = { $set: { shareToken } };
+
+      await Directory.findByIdAndUpdate(directory._id, updateQuery, {
+        session,
+      });
 
       await shareDirectoryRecursive(directory._id, session, [], updateQuery);
     });
@@ -696,12 +770,14 @@ export const getDirectoryShareToken = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "Token created for the file.",
-      data: { shareToken, id: directory._id.toString() },
+      data: { newToken: shareToken },
     });
   } catch (err) {
+    if (err.statusCode)
+      return responsePayload(res, err.statusCode, err.message);
     next(err);
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
@@ -714,62 +790,92 @@ export const getDirectoryShareToken = async (req, res, next) => {
  *   - req.user: authenticated user object provided by `validateSession`
  */
 export const revokeAccessDirectoryHandler = async (req, res, next) => {
-  const { emails } = req.body;
+  const { emails, publicRole } = req.body;
+
   if (!emails || !Array.isArray(emails))
     return badRequest(res, "Invalid payload");
 
-  const skipped = [];
-  const emailsToUpdate = [];
+  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
+  if (formattedPublicRole && formattedPublicRole !== "NONE")
+    return badRequest(res, "Invalid `publicRole`.");
 
-  emails.forEach((email) => {
-    const ce = email.toLowerCase().trim();
-    if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ce))
-      skipped.push(ce);
-    else emailsToUpdate.push(ce);
-  });
-
-  if (emailsToUpdate.length < 1) return badRequest(res, "Invalid emails.");
-
-  const session = await mongoose.startSession();
   try {
-    await session.withTransaction(async () => {
-      const directory = await Directory.findOneAndUpdate(
-        { _id: req.params.id, userId: req.user._id, isDeleted: false },
-        { $pull: { sharedWith: { email: { $in: emailsToUpdate } } } },
-        { new: true, session },
-      ).select("_id sharedWith, publicRole");
+    const directory = await Directory.findOne({
+      _id: req.params.id,
+      userId: req.user._id,
+      isDeleted: false,
+    })
+      .select("_id sharedWith publicRole")
+      .lean();
 
-      let updateQuery = null;
-      let emailsToPull = emailsToUpdate;
-      if (directory.sharedWith.length < 1 && directory.publicRole === "NONE") {
-        updateQuery = {
-          $set: {
-            sharedWith: [],
-            sharedAt: null,
-            publicRole: "NONE",
-            shareToken: "",
-          },
-        };
-        emailsToPull = [];
-      }
-
-      await shareDirectoryRecursive(
-        directory._id,
-        session,
-        emailsToPull,
-        updateQuery,
+    if (!directory) return notFound(res, "directory not found.");
+    if (directory.publicRole !== "VIEWER" && directory.sharedWith.length < 1)
+      return responsePayload(
+        res,
+        403,
+        "Cannot perform revoke on a non-shared item.",
       );
+
+    const skipped = [];
+    const emailsToUpdate = [];
+
+    emails.forEach((email) => {
+      const ce = email.toLowerCase().trim();
+      if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ce))
+        skipped.push(ce);
+      else emailsToUpdate.push(ce);
     });
+
+    let updateQuery = {};
+    if (emailsToUpdate.length > 0)
+      updateQuery.$pull = { sharedWith: { email: { $in: emailsToUpdate } } };
+    if (formattedPublicRole)
+      updateQuery.$set = { publicRole: formattedPublicRole };
+
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const dir = await Directory.findOneAndUpdate(
+          { _id: req.params.id, userId: req.user._id, isDeleted: false },
+          updateQuery,
+          { new: true, session },
+        )
+          .select("_id sharedWith publicRole")
+          .lean();
+
+        let emailsToPull = emailsToUpdate;
+        if (dir.sharedWith.length < 1 && dir.publicRole === "NONE") {
+          updateQuery = {
+            $set: {
+              sharedWith: [],
+              publicRole: "NONE",
+              sharedAt: null,
+            },
+            $unset: { shareToken: "" },
+          };
+          
+          await Directory.findByIdAndUpdate(dir._id, updateQuery, { session });
+          emailsToPull = [];
+        }
+
+        await shareDirectoryRecursive(
+          dir._id,
+          session,
+          emailsToPull,
+          updateQuery,
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
 
     return res.status(200).json({
       success: true,
-      message: "Permission changed for this file.",
+      message: "Permission changed for this directory.",
       accepted: emailsToUpdate,
       skipped,
     });
   } catch (err) {
     next(err);
-  } finally {
-    session.endSession();
   }
 };

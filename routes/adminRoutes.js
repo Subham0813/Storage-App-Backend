@@ -8,7 +8,7 @@ import {
   logoutUser,
   recoverUser,
   tempRemoveUser,
-} from "../controllers/adminControllers";
+} from "../controllers/adminControllers.js";
 
 const router = Router();
 

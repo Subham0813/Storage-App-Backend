@@ -34,12 +34,12 @@ try {
   app.use("/api/uploads", validateSession, uploadRoutes);
 
   app.use(express.json());
+  app.use("/api/shared", shareRoutes);
   app.use("/api/import", validateSession, importDriveRoutes);
   app.use("/api/home", validateSession, homeRoutes);
   app.use("/api/files", validateSession, fileRoutes);
   app.use("/api/directories", validateSession, directoryRoutes);
   app.use("/api/admin", validateSession, adminRoutes);
-  app.use("/api/shared", shareRoutes);
 
   // 404 handler
   app.use((req, res) => {

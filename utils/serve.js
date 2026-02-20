@@ -24,6 +24,7 @@ export const serveZip = async ({
   zipPath,
   visited,
   userEmail,
+  userId,
   depth = 0, // Current depth level
 }) => {
   const dirIdStr = dirId.toString();
@@ -41,7 +42,8 @@ export const serveZip = async ({
     parentId: dirId,
     isDeleted: false,
     $or: [
-      { publicRole: { $in: ["VIEWER", "EDITOR"] } },
+      { userId: userId },
+      { publicRole: "VIEWER" },
       {
         sharedWith: {
           $elemMatch: {
@@ -80,6 +82,7 @@ export const serveZip = async ({
       parentId: dirId,
       isDeleted: false,
       $or: [
+        { userId: userId },
         { publicRole: "VIEWER" },
         {
           sharedWith: {
@@ -109,6 +112,7 @@ export const serveZip = async ({
       zipPath: zipPath + safeDirName + "/",
       visited,
       userEmail,
+      userId,
       depth: depth + 1,
     });
   }
