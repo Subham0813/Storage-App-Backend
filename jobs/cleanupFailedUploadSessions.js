@@ -1,5 +1,6 @@
 import { UploadSession } from "../models/uploadSession.model.js";
 import connectMongoose from "../configs/connect.js";
+import { TIME } from "../misc/constants.js";
 
 export async function cleanupFailedUploadSessions() {
   try {
@@ -9,7 +10,7 @@ export async function cleanupFailedUploadSessions() {
       `.....${mongoose.connection.db.databaseName} connected for cleanupFailedUploadSessions.....\n`
     );
 
-    const MAX_AGE_MS = new Date(Date.now() - 15 * 60 * 1000);
+    const MAX_AGE_MS = new Date(Date.now() - TIME.FIFTEEN_MINUTES);
     const failedSessions = await UploadSession.deleteMany({
       status: "failed",
       createdAt: MAX_AGE_MS,

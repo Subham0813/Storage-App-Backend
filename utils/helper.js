@@ -43,27 +43,35 @@ export const getFileHash = (
  *   - file: UserFile document with properties to extract
  *   - Returns: object with properties { userId, parentId, meta, name, mimetype, size, ... }
  */
-export const getFileDoc = (file) => {
-  const filedoc = ({
-    userId,
-    parentId,
-    meta,
-    extraMeta,
-    filename,
-    mimetype,
-    size,
-    inline_preview,
-    force_inline_preview,
-    isDeleted,
-    isStarred,
-    deletedAt,
-    publicRole,
-    sharedWith,
-    sharedAt,
-  } = file);
-
-  return filedoc;
-};
+export const getFileDoc = ({
+  userId,
+  parentId,
+  meta,
+  linkMeta,
+  filename,
+  mimetype,
+  disposition,
+  size,
+  inline_preview,
+  force_inline_preview,
+  isDeleted,
+  isStarred,
+  deletedAt,
+}) => ({
+  userId,
+  parentId,
+  meta,
+  linkMeta,
+  filename,
+  mimetype,
+  disposition,
+  size,
+  inline_preview,
+  force_inline_preview,
+  isDeleted,
+  isStarred,
+  deletedAt,
+});
 
 /**
  * Utility: getDbData
@@ -118,15 +126,18 @@ export const getUserPayload = (user) => {
     name,
     username,
     email,
-    emailVerified,
+    isEmailVerified,
+    isDriveConnected,
     deviceCount,
     authProviders,
     theme,
     allotedStorage,
     usedStorage,
-    rootDirId,
+    root,
     createdAt,
     updatedAt,
+    role,
+    avatar
   } = user;
 
   return {
@@ -134,15 +145,18 @@ export const getUserPayload = (user) => {
     name,
     username,
     email,
-    emailVerified,
+    isEmailVerified,
+    isDriveConnected,
     deviceCount,
     authProviders,
     theme,
     allotedStorage,
     usedStorage,
-    rootDirId,
+    root,
     createdAt,
     updatedAt,
+    role,
+    avatar
   };
 };
 
@@ -211,9 +225,9 @@ export const responsePayload = (res, statusCode = 400, message = "", error) => {
   };
   res.status(statusCode).json({
     success: false,
-    statusCode,
+    // statusCode,
     message,
-    error: error || E[statusCode],
+    // error: error || E[statusCode],
   });
 };
 
@@ -228,9 +242,9 @@ export const responsePayload = (res, statusCode = 400, message = "", error) => {
 export const badRequest = (res, message) =>
   res.status(400).json({
     success: false,
-    statusCode: 400,
+    // statusCode: 400,
     message,
-    error: "BADREQUEST",
+    // error: "BADREQUEST",
   });
 
 /**
@@ -244,9 +258,9 @@ export const badRequest = (res, message) =>
 export const notFound = (res, message) =>
   res.status(404).json({
     success: false,
-    statusCode: 404,
+    // statusCode: 404,
     message,
-    error: "NOTFOUND",
+    // error: "NOTFOUND",
   });
 
 /**
@@ -259,7 +273,7 @@ export const notFound = (res, message) =>
 export const forbidden = (res) =>
   res.status(403).json({
     success: false,
-    statusCode: 403,
+    // statusCode: 403,
     message: "You don't have this permission.",
-    error: "FORBIDDEN",
+    // error: "FORBIDDEN",
   });

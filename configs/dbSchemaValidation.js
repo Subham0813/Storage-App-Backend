@@ -4,7 +4,8 @@ const mongoose = await connectMongoose();
 const client = mongoose.connection.getClient();
 const db = mongoose.connection.db;
 
-const command = "collMod"; //or "create"
+// const command = "create";
+const command = "collMod";
 
 /**
  * 1. USERS COLLECTION
@@ -20,7 +21,7 @@ await db.command({
           bsonType: "objectId",
           description: "Unique identifier for the user record.",
         },
-        rootDirId: {
+        root: {
           bsonType: "objectId",
           description: "Reference to the user's root directory.",
         },
@@ -38,7 +39,7 @@ await db.command({
           pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
           description: "Unique email address for user identification.",
         },
-        emailVerified: {
+        isEmailVerified: {
           bsonType: "bool",
           description: "Flag indicating if the user's email is verified.",
         },
@@ -243,6 +244,9 @@ await db.command({
           bsonType: ["null", "objectId"],
           description: "Link to the shared physical file metadata.",
         },
+        linkMeta: {
+          bsonType: "object",
+        },
         filename: {
           bsonType: "string",
           minLength: 1,
@@ -305,6 +309,11 @@ await db.command({
             },
           },
           description: "List of collaboration permissions.",
+        },
+        sharedBy: {
+          bsonType: "string",
+          enum: ["none", "user", "process"],
+          description: "Entity that deleted the file.",
         },
         deletedBy: {
           bsonType: "string",
@@ -386,6 +395,11 @@ await db.command({
           },
           description: "List of collaboration permissions.",
         },
+        sharedBy: {
+          bsonType: "string",
+          enum: ["none", "user", "process"],
+          description: "Entity that deleted the file.",
+        },
         deletedBy: {
           bsonType: "string",
           enum: ["none", "user", "process"],
@@ -447,9 +461,13 @@ await db.command({
   validator: {
     $jsonSchema: {
       bsonType: "object",
-      required: ["email", "otp", "purpose", "createdAt"],
+      required: ["userId", "email", "otp", "purpose", "createdAt"],
       properties: {
         _id: { bsonType: "objectId", description: "Unique OTP identifier." },
+        userId: {
+          bsonType: "objectId",
+          description: "Owner who uploaded the physical file.",
+        },
         email: {
           bsonType: "string",
           pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+.[a-zA-Z]{2,}$",
@@ -457,7 +475,7 @@ await db.command({
         },
         purpose: {
           bsonType: "string",
-          enum: ["login", "register", "forgotPassword"],
+          enum: ["login", "register", "forgot-password"],
           description: "Intent of the generated OTP.",
         },
         otp: { bsonType: "string", description: "Hashed/encrypted OTP value." },

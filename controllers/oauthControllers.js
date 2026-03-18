@@ -1,12 +1,14 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
 
+import { TIME } from "../misc/constants.js";
 import { google } from "googleapis";
 import { User } from "../models/user.model.js";
 import { Directory } from "../models/directory.model.js";
 import { createSession } from "../utils/createSession.js";
 import { DriveIntegration } from "../models/integration.model.js";
 import { Session } from "../models/session.model.js";
+import { responsePayload } from "../utils/helper.js";
 
 const github_client_id = process.env.GITHUB_CLIENT_ID;
 const github_redirect_uri = process.env.GITHUB_REDIRECT_URI;
@@ -115,24 +117,24 @@ export const googleOAuthHandler = async (req, res, next) => {
 
     res.cookie("oauth_state_google", state, {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 10 * 60 * 1000,
+      maxAge: TIME.TEN_MINUTES,
     });
 
     res.cookie("oauth_pkce_google", codeVerifier, {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 10 * 60 * 1000,
+      maxAge: TIME.TEN_MINUTES,
     });
 
     if (req.user?._id) {
       res.cookie("oauth_user_google", req.user._id, {
         httpOnly: true,
-        secure: true,
+        secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
-        maxAge: 10 * 60 * 1000,
+        maxAge: TIME.TEN_MINUTES,
       });
     }
 
@@ -205,7 +207,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
 
     if (!userId) {
       user = await User.findOne({
-        authProvider: { $in: ["google"] },
+        authProviders: { $in: ["google"] },
         authId: sub,
       });
 
@@ -224,13 +226,13 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
           [user] = await User.create(
             [
               {
-                authProvider: ["google"],
+                authProviders: ["google"],
                 googleId: sub,
                 email,
                 username: email.split("@")[0],
                 name,
                 avatar: picture,
-                emailVerified: email_verified,
+                isEmailVerified: email_verified,
               },
             ],
             { session },
@@ -247,13 +249,14 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
             { session },
           );
 
-          updateQuery.$set.rootDirId = root._id;
+          updateQuery.$set.root = root._id;
         } else {
           if (!user.googleId) updateQuery.$set.googleId = sub;
-          if (!user.authProvider.includes("google"))
-            updateQuery.$push = { authProvider: { $each: ["google"] } };
+          if (!user.authProviders.includes("google"))
+            updateQuery.$push = { authProviders: { $each: ["google"] } };
         }
 
+        updateQuery.$set.isLogged = true
         await User.findByIdAndUpdate(user._id, updateQuery, { session });
 
         if (!userId) {
@@ -279,7 +282,9 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
       });
     }
 
-    return res.redirect(`http://localhost:5173/dashboard?google=connected`);
+    return res.redirect(
+      `http://localhost:5173/auth/callback/google?google=connected`,
+    );
   } catch (err) {
     next(err);
   }
@@ -300,26 +305,26 @@ export const githubOAuthHandler = async (req, res, next) => {
     // CSRF state
     res.cookie("oauth_state_github", state, {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 10 * 60 * 1000,
+      maxAge: TIME.TEN_MINUTES,
     });
 
     // PKCE verifier
     res.cookie("oauth_pkce_github", codeVerifier, {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 10 * 60 * 1000,
+      maxAge: TIME.TEN_MINUTES,
     });
 
     if (req.user?._id) {
       console.log("userId found....");
       res.cookie("oauth_user_github", req.user._id, {
         httpOnly: true,
-        secure: true,
+        secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
-        maxAge: 10 * 60 * 1000,
+        maxAge: TIME.TEN_MINUTES,
       });
     }
 
@@ -378,7 +383,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
     if (!userId) {
       user = await User.findOne({
         githubId: id,
-        authProvider: { $in: ["github"] },
+        authProviders: { $in: ["github"] },
       });
 
       if (email && !user) {
@@ -394,7 +399,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
       await session.withTransaction(async () => {
         if (!user) {
           user = await User.create({
-            authProvider: ["github"],
+            authProviders: ["github"],
             githubId: id,
             username: login,
             email,
@@ -408,13 +413,14 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
             userId: user._id,
           });
 
-          updateQuery.$set.rootDirId = root._id;
+          updateQuery.$set.root = root._id;
         } else {
           if (!user.githubId) updateQuery.$set.githubId = id;
-          if (!user.authProvider.includes("github"))
-            updateQuery.$push = { authProvider: { $each: ["github"] } };
+          if (!user.authProviders.includes("github"))
+            updateQuery.$push = { authProviders: { $each: ["github"] } };
         }
 
+        updateQuery.$set.isLogged = true
         await User.findByIdAndUpdate(user._id, updateQuery, { session });
 
         if (!userId) {
@@ -440,7 +446,9 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
       });
     }
 
-    return res.redirect(`http://localhost:5173/dashboard?github=connected`);
+    return res.redirect(
+      `http://localhost:5173/auth/callback/github?github=connected`,
+    );
   } catch (err) {
     next(err);
   }
@@ -461,28 +469,25 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
     });
 
     if (integration)
-      return res.status(409).json({
-        success: false,
-        statusCode: 409,
-        error: "CONFLICT",
-        message: "Drive already connected.",
-      });
+      return res.redirect(
+        "http://localhost:5173/auth/callback/google-drive?google-drive=connected",
+      );
 
     const state = crypto.randomBytes(32).toString("hex");
     const { codeVerifier, codeChallenge } = generatePKCE();
 
     res.cookie("oauth_state_google", state, {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 10 * 60 * 1000,
+      maxAge: TIME.TEN_MINUTES,
     });
 
     res.cookie("oauth_pkce_google", codeVerifier, {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 10 * 60 * 1000,
+      maxAge: TIME.TEN_MINUTES,
     });
 
     const authUrl = googleDriveClient.generateAuthUrl({
@@ -533,7 +538,7 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
     res.clearCookie("oauth_state_google");
     res.clearCookie("oauth_pkce_google");
 
-    const { tokens } = await googleDriveClient.getToken({
+    const { tokens, ...rest } = await googleDriveClient.getToken({
       code,
       codeVerifier,
     });
@@ -542,26 +547,42 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
       throw new Error("No refresh token received");
     }
 
-    await DriveIntegration.updateOne(
-      { provider: "google-drive", state },
-      {
-        $set: {
-          scope: tokens.scope,
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-          expiresIn: new Date(
-            Date.now() + tokens.refresh_token_expires_in * 1000,
-          ),
-        },
-        $unset: { stateCreatedAt: "" },
-      },
-      { upsert: true },
-    );
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const drive = await DriveIntegration.findOneAndUpdate(
+          { provider: "google-drive", state },
+          {
+            $set: {
+              scope: tokens.scope,
+              accessToken: tokens.access_token,
+              refreshToken: tokens.refresh_token,
+              expiresIn: new Date(
+                Date.now() + tokens.refresh_token_expires_in * 1000,
+              ),
+            },
+            $unset: { stateCreatedAt: "" },
+          },
+          { upsert: true , new: true},
+        )
+          .lean();
+
+        if (!drive) {
+          const error = new Error("Drive intregation failed.");
+          error.statusCode = 500;
+          throw error;
+        }
+      });
+    } finally {
+      session.endSession();
+    }
 
     return res.redirect(
-      "http://localhost:5173/dashboard?google-drive=connected",
+      `http://localhost:5173/auth/callback/google-drive?google-drive=connected`,
     );
   } catch (err) {
+    if (err.statusCode)
+      return responsePayload(res, err.statusCode, err.message);
     next(err);
   }
 };

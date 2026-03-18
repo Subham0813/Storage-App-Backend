@@ -25,7 +25,7 @@ export const shareDirectoryRecursive = async (
   updateQuery,
   depth = 0,
 ) => {
-  if (depth > maxDepth) return;
+  if (depth < 0 || depth > maxDepth) return -1;
 
   if (emailsToUpdate.length > 0) {
     await UserFile.updateMany(
@@ -50,14 +50,15 @@ export const shareDirectoryRecursive = async (
     });
   }
 
-  if (depth === maxDepth) return;
+  if (depth + 1 === maxDepth) return depth + 1;
 
   const children = await Directory.find({ parentId, isDeleted: false })
     .select("_id")
-    .session(session);
+    .session(session)
+    .lean();
 
   for (const child of children) {
-    await shareDirectoryRecursive(
+    depth = await shareDirectoryRecursive(
       child._id,
       session,
       emailsToUpdate,
@@ -65,4 +66,5 @@ export const shareDirectoryRecursive = async (
       depth + 1,
     );
   }
+  return depth;
 };

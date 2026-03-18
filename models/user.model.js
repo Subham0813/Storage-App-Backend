@@ -3,7 +3,7 @@ import * as bcrypt from "bcrypt";
 
 const userSchema = new Schema(
   {
-    rootDirId: { type: Schema.Types.ObjectId, ref: "Directory" },
+    root: { type: Schema.Types.ObjectId, ref: "Directory" },
 
     name: {
       type: String,
@@ -54,7 +54,8 @@ const userSchema = new Schema(
       required: true,
       default: ["email"],
     },
-    emailVerified: { type: Boolean, default: false },
+
+    isEmailVerified: { type: Boolean, default: false },
     theme: { type: String, default: "Light" },
 
     deviceCount: {
@@ -64,7 +65,7 @@ const userSchema = new Schema(
 
     allotedStorage: { type: Number, default: 1024 * 1024 * 1024 },
     usedStorage: { type: Number, default: 0 },
-
+    
     isLogged: { type: Boolean, default: false },
     isDeleted: { type: Boolean, default: false },
   },

@@ -2,8 +2,8 @@ import mongoose from "mongoose";
 import { Session } from "../models/session.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
-import { SUPER_ROLES } from "../controllers/adminControllers.js";
-// import { DriveIntegration } from "../models/integration.model.js";
+import { SUPER_ROLES } from "../misc/constants.js";
+import { DriveIntegration } from "../models/integration.model.js";
 
 /**
  * Middleware: validateSession
@@ -14,15 +14,33 @@ import { SUPER_ROLES } from "../controllers/adminControllers.js";
  *   - Sets req.user to authenticated user object from session
  */
 
+const ALLOWED_ORIGINS = new Set([
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://10.114.2.153:5173",
+]);
+
+const MUTATING_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 
 export const validateSession = async (req, res, next) => {
   try {
+    //preventing CSRF
+    if (MUTATING_METHODS.has(req.method)) {
+      const origin = req.headers["origin"];
+      const referer = req.headers["referer"];
+      const source = origin ?? (referer ? new URL(referer).origin : null);
+      if (!source || !ALLOWED_ORIGINS.has(source))
+        return res.status(403).json({ success: false, message: "Forbidden: invalid request origin." });
+    }
+
     const { sid } = req.signedCookies;
     const { token } = req.query;
 
     //Signed User
     if (sid && mongoose.isValidObjectId(sid)) {
-      const session = await Session.findById(sid).populate("userId").lean();
+      const session = await Session.findById(sid)
+        .populate("userId", "-__v -createdAt -updatedAt")
+        .lean();
 
       if (session?.userId && !session.userId.isDeleted) {
         //check Admin for admin route

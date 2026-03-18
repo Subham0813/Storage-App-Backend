@@ -93,9 +93,9 @@ export const errorHandler = async (err, req, res, next) => {
   // Respond with a generic error message
   return res.status(500).json({
     success: false,
-    statusCode: 500,
+    // statusCode: 500,
     message: "Internal server error. Please try again later.",
-    error: logEntry.error.name || "ServerError",
-    errorId: logEntry.id,
+    // error: logEntry.error.name || "ServerError",
+    // errorId: logEntry.id,
   });
 };

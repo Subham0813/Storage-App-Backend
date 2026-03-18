@@ -2,12 +2,11 @@ import mongoose from "mongoose";
 import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Session } from "../models/session.model.js";
-import { File as FileModel } from "../models/file.model.js";
+import { File } from "../models/file.model.js";
 import { getUserPayload } from "../utils/helper.js";
 import { User } from "../models/user.model.js";
-
-const UPLOAD_ROOT =
-  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
+import { DriveIntegration } from "../models/integration.model.js";
+import {UPLOAD_ROOT} from "../misc/constants.js"
 
 /**
  * path: /api/home/user
@@ -15,9 +14,13 @@ const UPLOAD_ROOT =
  * requirements:
  *   - req.user: authenticated user object provided by `validateSession`
  */
-export const getUserHandler = async (req, res) => {
+export const getUserHandler = async (req, res, next) => {
   try {
     const user = getUserPayload(req.user);
+    const integration = await DriveIntegration.findOne({ userId: user._id })
+      .select("provider -_id")
+      .lean();
+    user.integrations = [integration?.provider || null];
     return res.status(200).json({ success: true, data: { user } });
   } catch (err) {
     next(err);
@@ -34,28 +37,57 @@ export const getUserHandler = async (req, res) => {
 export const getRecentsHandler = async (req, res, next) => {
   try {
     const userId = req.user._id;
-    const userEmail = req.user.email;
 
     // Calculate the cutoff date
     // If req.body.days is 3, we go back 3 days. Default is 7.
     const days = req.body.days || 7;
     const cutoffDate = new Date(Date.now() - days * 24 * 3600 * 1000);
 
-    const queryFilter = {
+    const filter = {
+      _id: { $ne: req.user.root },
+      userId,
       isDeleted: false,
-      _id: { $ne: req.user.rootDirId },
       updatedAt: { $gte: cutoffDate },
     };
+    const projectionStr =
+      "-__v -sharedBy -deletedBy -deletedAt -shareToken -sharedAt -sharedWith -publicRole -meta -isDeleted";
 
-    // 1. Fetch Owner Data (Parallel execution is faster)
-    const [directories, files] = await Promise.all([
-      Directory.find({ ...queryFilter, userId }).lean(),
-      UserFile.find({ ...queryFilter, userId }).lean(),
+    const [files] = await Promise.all([
+      // Directory.find(filter).select(projectionStr).lean(),
+      UserFile.find(filter).select(`${projectionStr}`).lean(),
+    ]);
+
+    return res.status(200).json({ success: true, data: { files } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * path: /api/home/starred
+ * what it do: Return starred directories and files for the authenticated user.
+ * requirements:
+ *   - req.user: authenticated user object
+ */
+export const getStarredItems = async (req, res, next) => {
+  try {
+    const userId = req.user._id;
+    const filter = {
+      userId,
+      isDeleted: false,
+      isStarred: true,
+    };
+    const projectionStr =
+      "-__v -sharedBy -deletedBy -deletedAt -shareToken -sharedAt -sharedWith -publicRole -isDeleted";
+
+    const [dirs, files] = await Promise.all([
+      Directory.find(filter).select(projectionStr).lean(),
+      UserFile.find(filter).select(`${projectionStr} -meta`).lean(),
     ]);
 
     return res
       .status(200)
-      .json({ success: true, data: { directories, files } });
+      .json({ success: true, data: { directories: dirs, files } });
   } catch (err) {
     next(err);
   }
@@ -71,9 +103,16 @@ export const getBinDirectoryHandler = async (req, res, next) => {
   try {
     const userId = req.user._id;
     const userEmail = req.user.email;
+    const projectionStr =
+      "-__v -sharedBy -deletedBy -deletedAt -shareToken -sharedAt -sharedWith -publicRole -isDeleted";
+
     const [directories, files] = await Promise.all([
-      Directory.find({ deletedBy: "user", userId }).lean(),
-      UserFile.find({ deletedBy: "user", userId }).lean(),
+      Directory.find({ deletedBy: "user", userId })
+        .select(projectionStr)
+        .lean(),
+      UserFile.find({ deletedBy: "user", userId })
+        .select(`${projectionStr} -meta`)
+        .lean(),
     ]);
 
     let sharedDirs = [];
@@ -81,6 +120,8 @@ export const getBinDirectoryHandler = async (req, res, next) => {
 
     if (userEmail) {
       const sharedFilter = {
+        isDeleted: true,
+        deletedBy: "user",
         userId: { $ne: userId },
         sharedWith: {
           $elemMatch: {
@@ -91,8 +132,8 @@ export const getBinDirectoryHandler = async (req, res, next) => {
       };
 
       [sharedDirs, sharedFiles] = await Promise.all([
-        Directory.find({ ...sharedFilter, userId }).lean(),
-        UserFile.find({ ...sharedFilter, userId }).lean(),
+        Directory.find(sharedFilter).select(projectionStr).lean(),
+        UserFile.find(sharedFilter).select(`${projectionStr} -meta`).lean(),
       ]);
     }
 
@@ -100,9 +141,7 @@ export const getBinDirectoryHandler = async (req, res, next) => {
       success: true,
       data: {
         user: { directories, files },
-        shared: userEmail
-          ? { directories: sharedDirs, files: sharedFiles }
-          : {},
+        shared: { directories: sharedDirs, files: sharedFiles },
       },
     });
   } catch (err) {
@@ -119,33 +158,60 @@ export const getBinDirectoryHandler = async (req, res, next) => {
 export const getSharedWithHandler = async (req, res, next) => {
   const userId = req.user._id;
   const userEmail = req.user.email;
-  let sharedFiles = [];
-  let sharedDirs = [];
 
-  if (userEmail) {
-    const sharedCriteria = {
-      isDeleted: false,
-      userId: { $ne: userId }, // Don't include own files in "Shared"
-      sharedWith: {
-        $elemMatch: {
-          email: userEmail,
-          role: { $in: ["EDITOR", "VIEWER"] },
-        },
+  const limit = parseInt(req.query.limit) || 50;
+  const skip = parseInt(req.query.skip) || 0;
+
+  const sharedCriteria = {
+    isDeleted: false,
+    sharedBy: "user",
+    userId: { $ne: userId },
+    sharedWith: {
+      $elemMatch: {
+        email: userEmail,
+        role: { $in: ["EDITOR", "VIEWER"] },
       },
-    };
+    },
+  };
 
-    [sharedFiles, sharedDirs] = await Promise.all([
-      UserFile.find(sharedCriteria).lean(),
-      Directory.find(sharedCriteria).lean(),
-    ]);
-  }
+  const ownedCriteria = { isDeleted: false, sharedBy: "user", userId };
+  const projectionStr =
+    "-__v -sharedBy -deletedBy -deletedAt -shareToken -sharedAt -sharedWith -publicRole -isDeleted";
+
+  const [withMeFiles, withMeDirs, byMeFiles, byMeDirs] = await Promise.all([
+    UserFile.find(sharedCriteria)
+      .select(`${projectionStr} -meta`)
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    Directory.find(sharedCriteria)
+      .select(projectionStr)
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+
+    UserFile.find(ownedCriteria)
+      .select(projectionStr)
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    Directory.find(ownedCriteria)
+      .select(`${projectionStr} -meta`)
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+  ]);
 
   return res.status(200).json({
     success: true,
     data: {
-      sharedData: {
-        directories: sharedDirs,
-        files: sharedFiles,
+      sharedWithMe: {
+        directories: withMeDirs,
+        files: withMeFiles,
+      },
+      sharedByMe: {
+        directories: byMeDirs,
+        files: byMeFiles,
       },
     },
   });
@@ -162,7 +228,7 @@ export const LogoutHandler = async (req, res, next) => {
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      await User.findOneAndUpdate(
+      await User.updateOne(
         { _id: req.user._id, deviceCount: { $gt: 0 } },
         { $inc: { deviceCount: -1 }, $set: { isLogged: false } },
         { session },
@@ -173,7 +239,6 @@ export const LogoutHandler = async (req, res, next) => {
 
     return res.status(200).clearCookie("sid").json({
       success: true,
-      statusCode: 200,
       message: "Logout Successful.",
     });
   } catch (err) {
@@ -199,12 +264,11 @@ export const LogoutAllHandler = async (req, res, next) => {
         { session },
       );
 
-      await Session.deleteMany({ userId: user._id }).session(session);
+      await Session.deleteMany({ userId: req.user._id }).session(session);
     });
 
     return res.status(200).clearCookie("sid").json({
       success: true,
-      statusCode: 200,
       message: "Logout Successful from all devices.",
     });
   } catch (err) {
@@ -220,30 +284,30 @@ export const LogoutAllHandler = async (req, res, next) => {
  * requirements:
  *   - req.user: authenticated user object provided by `validateSession`
  */
-export const DeleteProfileHandler = async (req, res, next) => {
+export const deleteProfileHandler = async (req, res, next) => {
   const userId = req.user._id;
   const filesToDelete = [];
   const session = await mongoose.startSession();
   try {
-    const userFiles = await session.withTransaction(async () => {
-      const files = await FileModel.find({ userId }).select("objectKey");
+    const files = await File.find({ userId }).select("objectKey").lean();
 
-      Promise.all([
-        User.deleteOne({ _id: userId }).session(session),
-        Directory.deleteMany({ userId }).session(session),
-        UserFile.deleteMany({ userId }).session(session),
-        Session.deleteMany({ userId }).session(session),
-        FileModel.deleteMany({ userId }).session(session),
-      ]);
+    try {
+      await session.withTransaction(async () => {
+        await User.deleteOne({ _id: userId }).session(session);
+        await Directory.deleteMany({ userId }).session(session);
+        await UserFile.deleteMany({ userId }).session(session);
+        await Session.deleteMany({ userId }).session(session);
+        await File.deleteMany({ userId }).session(session);
+      });
+    } finally {
+      await session.endSession();
+    }
 
-      return files;
-    });
-
-    userFiles.forEach((file) => {
+    files.forEach((file) => {
       const filePath = path.join(
         path.resolve(UPLOAD_ROOT),
         userId.toString(),
-        file.meta.objectKey,
+        file.objectKey,
       );
       filesToDelete.push(filePath);
     });
@@ -263,10 +327,28 @@ export const DeleteProfileHandler = async (req, res, next) => {
 
     return res.status(200).clearCookie("sid").json({
       success: true,
-      statusCode: 200,
       message: "Account deleted successfully.",
     });
   } catch (err) {
     next(err);
+  }
+};
+
+/**
+ * path: /api/home/revoke-drive-integration
+ * what it do: Delete the authenticated user's google drive integration.
+ * requirements:
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
+export const deleteDriveIntegration = async (req, res, next) => {
+  try {
+    await DriveIntegration.deleteOne({ userId: req.user._id });
+
+    return res.status(200).json({
+      success: true,
+      message: "Drive integration deleted.",
+    });
+  } catch (error) {
+    next(error);
   }
 };

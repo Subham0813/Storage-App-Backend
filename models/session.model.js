@@ -1,5 +1,4 @@
 import { Schema, model } from "mongoose";
-
 const expiryInSeconds = 15 * 24 * 3600;
 
 // const deviceSchema = new Schema({

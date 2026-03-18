@@ -12,7 +12,7 @@ const fileSchema = new Schema(
       type: String,
       // match: [/^[a-f0-9]{64}$/, "hash pattern mismatched. "],
       required: true,
-      unique: true,
+      // unique: true,
     },
 
     hashAlgo: {

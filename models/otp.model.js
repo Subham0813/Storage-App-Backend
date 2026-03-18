@@ -1,8 +1,10 @@
 import { Schema, model } from "mongoose";
 import * as bcrypt from "bcrypt";
+import { TIME } from "../misc/constants.js";
 
 const otpSchema = Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
     email: {
       type: String,
       required: true,
@@ -22,7 +24,7 @@ const otpSchema = Schema(
     purpose: {
       type: String,
       required: true,
-      enum: ["login", "register", "forgotPassword"],
+      enum: ["login", "register", "forgot-password"],
     },
 
     isVerified: {
@@ -33,7 +35,7 @@ const otpSchema = Schema(
     createdAt: {
       type: Date,
       default: Date.now,
-      index: { expireAfterSeconds: 300 },
+      index: { expireAfterSeconds: TIME.FIVE_MINUTES / 1000 },
     },
   },
   { strict: "throw", timestamps: true },

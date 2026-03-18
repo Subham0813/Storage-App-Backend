@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import * as bcrypt from "bcrypt";
 
+import { TIME, EMAIL_REGEX, MAX_DEVICE_COUNT } from "../misc/constants.js";
 import { User } from "../models/user.model.js";
 import { Directory } from "../models/directory.model.js";
 import { OTP } from "../models/otp.model.js";
@@ -12,8 +13,6 @@ import {
 } from "../utils/helper.js";
 import { createSession } from "../utils/createSession.js";
 import { Session } from "../models/session.model.js";
-
-const MAX_DEVICE_COUNT = process.env.MAX_DEVICE_COUNT || 2;
 
 /**
  * path: /api/auth/request-otp
@@ -27,69 +26,66 @@ export const requestOtpHandler = async (req, res, next) => {
   const { email, purpose } = req.body;
   const { authToken } = req.signedCookies;
 
-  if (!email || !purpose) return badRequest(res, "Invalid payload.");
-
   if (
+    !email ||
+    !purpose ||
+    !EMAIL_REGEX.test(email) ||
     !authToken ||
     !mongoose.isValidObjectId(authToken.id) ||
     authToken.expires < Date.now() ||
     authToken.purpose !== purpose
   )
-    return badRequest(res, "Invalid token.");
+    return badRequest(res, "Invalid payload or cookies mismatch.");
 
   const session = await mongoose.startSession();
-
   try {
-    const { user, otp, otpRecord } = await session.withTransaction(async () => {
-      //check for user exists
-      const user = await User.findOne({ email })
-        .select("emailVerified deviceCount")
-        .session(session);
+    const { otp, expiresAt, deviceLoggedCount } = await session.withTransaction(
+      async () => {
+        const user = await User.findOne({ _id: authToken.id, email })
+          .select("isEmailVerified deviceCount")
+          .session(session);
 
-      if (!user || user._id.toString() !== authToken.id) {
-        const error = new Error("Incorrect email address.");
-        error.statusCode = 404;
-        throw error;
-      }
+        if (!user) {
+          const error = new Error("Invalid email address or token.");
+          error.statusCode = 404;
+          throw error;
+        }
 
-      //create & send otp to email
-      const otp = await new Promise((resolve) =>
-        setTimeout(
-          () => resolve(Math.floor(100000 + Math.random() * 900000)),
-          1000,
-        ),
-      );
+        let existingOtps = await OTP.find({
+          email,
+          userId: authToken.id,
+          purpose: authToken.purpose,
+        })
+          .session(session)
+          .select("_id")
+          .lean();
+        if (existingOtps.length >= 3) {
+          const error = new Error("Limit exceeds for OTP request.");
+          error.statusCode = 429;
+          throw error;
+        }
 
-      //await sendEmail({email, purpose, otp})
-      //user.emailVerified = true; await user.save();
+        const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+        const [newOtpRecord] = await OTP.create(
+          [{ userId: user._id, email, otp: newOtp, purpose }],
+          { session },
+        );
 
-      let existingOtps = await OTP.find({ email, purpose }).session(session);
-      if (existingOtps.length >= 3) {
-        const error = new Error("Limit exceeds for OTP request.");
-        error.statusCode = 429;
-        throw error;
-      }
+        return {
+          otp: newOtp,
+          expiresAt: newOtpRecord.createdAt.getTime() + TIME.FIVE_MINUTES,
+          deviceLoggedCount: user.deviceCount,
+        };
+      },
+    );
 
-      const newOtpRecord = await OTP.create([{ email, otp, purpose }], {
-        session,
-      });
-
-      return {
-        otp,
-        otpRecord: newOtpRecord[0], // .create returns an array
-        user,
-      };
-    });
+    //await sendEmail({email, purpose, otp})
 
     return res.status(201).json({
       success: true,
       statusCode: 201,
       message: "An One Time Password has been sent to your Email address.",
-      data: {
-        otp,
-        expiresAt: otpRecord.createdAt.getTime() + 300 * 1000,
-        deviceLoggedCount: user.deviceCount,
-      },
+      data: { otp, expiresAt, deviceLoggedCount },
     });
   } catch (err) {
     if (err.statusCode) {
@@ -113,17 +109,25 @@ export const requestOtpHandler = async (req, res, next) => {
  *   - matching OTP record must exist in DB
  */
 export const verifyOtpHandler = async (req, res, next) => {
-  const { email, otp, purpose, logoutLastSession } = req.body;
-  const allowedPurpose = ["login", "register", "forgotPassword"];
+  const { email, otp, logoutLastSession } = req.body;
+  const { authToken } = req.signedCookies;
+  const allowedPurpose = ["login", "register", "forgot-password"];
+
   if (
+    !authToken ||
+    !authToken.id ||
+    !mongoose.isValidObjectId(authToken.id) ||
+    !authToken.purpose ||
+    !allowedPurpose.includes(authToken.purpose.toString()) ||
+    !authToken.expires ||
+    authToken.expires < Date.now() ||
     !email ||
+    !EMAIL_REGEX.test(email) ||
     !otp ||
-    !purpose ||
-    typeof purpose !== "string" ||
-    !allowedPurpose.includes(purpose) ||
-    (purpose === "login" && typeof logoutLastSession !== "boolean")
+    isNaN(otp) ||
+    (authToken.purpose === "login" && typeof logoutLastSession !== "boolean")
   )
-    return badRequest(res, "Invalid payload.");
+    return badRequest(res, "Invalid payload or cookies mismatch.");
 
   let updatedOtpRecord = null;
   let updatedUserRecord = null;
@@ -134,8 +138,10 @@ export const verifyOtpHandler = async (req, res, next) => {
     await _session.withTransaction(async () => {
       //check for user exists
       const user = await User.findOne({
+        _id: authToken.id,
         email: email.toLowerCase().trim(),
       })
+        .select("isLogged deviceCount")
         .session(_session)
         .lean();
 
@@ -145,7 +151,10 @@ export const verifyOtpHandler = async (req, res, next) => {
         throw error;
       }
 
-      if (user.deviceCount >= MAX_DEVICE_COUNT) {
+      if (
+        authToken.purpose !== "forgot-password" &&
+        user.deviceCount >= MAX_DEVICE_COUNT
+      ) {
         if (logoutLastSession) {
           await Session.deleteOne({ userId: user._id })
             .sort({ createdAt: 1 })
@@ -159,10 +168,14 @@ export const verifyOtpHandler = async (req, res, next) => {
         }
       }
 
-      const otps = await OTP.find({ email, purpose }).session(_session);
+      const otps = await OTP.find({
+        userId: authToken.id,
+        email,
+        purpose: authToken.purpose,
+      }).session(_session);
       if (otps.length < 1) {
         const error = new Error("OTP expired.");
-        error.statusCode = 400;
+        error.statusCode = 410;
         throw error;
       }
 
@@ -179,7 +192,7 @@ export const verifyOtpHandler = async (req, res, next) => {
       if (user.deviceCount < MAX_DEVICE_COUNT)
         updateQuery["$inc"] = { deviceCount: 1 };
 
-      if (purpose === "forgotPassword") {
+      if (authToken.purpose === "forgot-password") {
         updatedOtpRecord = await OTP.findByIdAndUpdate(
           otpRecord._id,
           { createdAt: new Date() },
@@ -197,18 +210,20 @@ export const verifyOtpHandler = async (req, res, next) => {
         )
           .session(_session)
           .lean();
-        await OTP.deleteMany({ email, purpose }).session(_session);
+        await OTP.deleteMany({
+          userId: user._id,
+          email,
+          purpose: authToken.purpose,
+        }).session(_session);
 
-        const ns = await Session.create([{ userId: user._id }], {
+        [newUserSession] = await Session.create([{ userId: user._id }], {
           session: _session,
         });
-
-        newUserSession = ns[0];
       }
     });
 
-    if (purpose === "forgotPassword") {
-      const expires = updatedOtpRecord.createdAt.getTime() + 300 * 1000;
+    if (authToken.purpose === "forgot-password") {
+      const expires = updatedOtpRecord.createdAt.getTime() + TIME.FIVE_MINUTES;
       return res
         .cookie("oid", updatedOtpRecord._id, {
           httpOnly: true,
@@ -229,9 +244,9 @@ export const verifyOtpHandler = async (req, res, next) => {
 
     const userPayload = getUserPayload(updatedUserRecord);
     const { _id: sid, expiry } = newUserSession;
+    res.clearCookie("authToken");
 
     return res
-      .clearCookie("authToken")
       .cookie("sid", sid, {
         httpOnly: true,
         sameSite: "strict",
@@ -269,7 +284,8 @@ export const verifyOtpHandler = async (req, res, next) => {
  */
 export const loginHandler = async (req, res, next) => {
   const { email, password } = req.body;
-  if (!password || !email) return badRequest(res, "Invalid payload.");
+  if (!password || !email || !EMAIL_REGEX.test(email))
+    return badRequest(res, "Invalid payload.");
 
   try {
     const userEmail = email ? email.toLowerCase().trim() : null;
@@ -278,12 +294,12 @@ export const loginHandler = async (req, res, next) => {
     const user = await User.findOne({ email: userEmail }).select("+password");
 
     if (!user || !user.password || !(await user.comparePassword(password))) {
-      const error = new Error("User does not exist with these credentials.");
+      const error = new Error("Incorrect email or password.");
       error.statusCode = 404;
       throw error;
     }
 
-    const expires = Date.now() + 600 * 1000;
+    const expires = Date.now() + TIME.TEN_MINUTES;
     return res
       .cookie(
         "authToken",
@@ -301,8 +317,7 @@ export const loginHandler = async (req, res, next) => {
       .json({
         success: true,
         statusCode: 200,
-        message:
-          "Login token created. Request otp and verify to create session.",
+        message: "Login token created.",
       });
   } catch (err) {
     if (err.statusCode) {
@@ -323,14 +338,9 @@ export const loginHandler = async (req, res, next) => {
  *   - email must not already exist in the database
  */
 export const registerHandler = async (req, res, next) => {
-  const { name, email, password } = req.body;
+  const { fullname, email, password } = req.body;
 
-  if (
-    !name ||
-    !email ||
-    !password ||
-    !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)
-  )
+  if (!fullname || !email || !password || !EMAIL_REGEX.test(email))
     return badRequest(res, "Invalid payload.");
 
   const session = await mongoose.startSession();
@@ -343,7 +353,9 @@ export const registerHandler = async (req, res, next) => {
         throw error;
       }
 
-      let [user] = await User.create([{ name, email, password }], { session });
+      let [user] = await User.create([{ name: fullname, email, password }], {
+        session,
+      });
       const [root] = await Directory.create(
         [
           {
@@ -356,13 +368,13 @@ export const registerHandler = async (req, res, next) => {
       );
 
       user = await User.findByIdAndUpdate(user._id, {
-        rootDirId: root._id,
+        root: root._id,
       }).session(session);
 
       return { user };
     });
 
-    const expires = Date.now() + 600 * 1000;
+    const expires = Date.now() + TIME.TEN_MINUTES;
     return res
       .cookie(
         "authToken",
@@ -380,8 +392,7 @@ export const registerHandler = async (req, res, next) => {
       .json({
         success: true,
         statusCode: 201,
-        message:
-          "Register token created. Request otp and verify to create session.",
+        message: "Register token created.",
       });
   } catch (err) {
     if (err.statusCode) {
@@ -410,11 +421,11 @@ export const forgotPasswordInitHandler = async (req, res, next) => {
     const user = await User.findOne({ email });
     if (!user) return notFound(res, "Incorrect email address.");
 
-    const expires = new Date(Date.now() + 600 * 1000);
+    const expires = new Date(Date.now() + TIME.TEN_MINUTES);
     return res
       .cookie(
         "authToken",
-        { purpose: "forgotPassword", id: user._id, expires },
+        { purpose: "forgot-password", id: user._id, expires },
         {
           httpOnly: true,
           sameSite: "strict",
@@ -459,7 +470,7 @@ export const forgotPasswordHandler = async (req, res, next) => {
     await session.withTransaction(async () => {
       const otpRecord = await OTP.findOne({
         _id: oid,
-        purpose: "forgotPassword",
+        purpose: "forgot-password",
       })
         .select("email")
         .session(session);

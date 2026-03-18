@@ -1,8 +1,9 @@
 import { stat ,readdir} from "fs/promises";
 import path from "path";
+import { TIME } from "../misc/constants.js";
 
 const TEMP_ROOT = path.resolve(process.cwd(), "uploads/temp");
-const MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
+const MAX_AGE_MS = TIME.TWO_HOURS;
 
 export async function cleanupTempUploads() {
   console.log("....Running cleanupTempUploads....\n")

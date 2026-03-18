@@ -4,7 +4,7 @@ import { pipeline } from "node:stream/promises"; // Optimized streaming
 import { rename, unlink, rm, mkdir } from "node:fs/promises";
 
 import { fileTypeFromFile } from "file-type";
-import { getFileHash } from "./helper.js";
+import { getFileDoc, getFileHash } from "./helper.js";
 import { INLINE_MIME } from "../configs/mimeSet.js";
 import { File as FileModel } from "../models/file.model.js";
 import { UserFile } from "../models/user_file.model.js";
@@ -23,25 +23,63 @@ import { createHash } from "node:crypto";
  *   - Reads chunks sequentially and pipes to write stream
  *   - Returns: hashStream
  */
+// export const mergeFileChunks = async (uploadedChunks, tempDir, mergedPath) => {
+//   const writeStream = createWriteStream(mergedPath);
+//   const hashStream = createHash("sha256");
+
+//   for (let i = 0; i < uploadedChunks.length; i++) {
+//     const idx = uploadedChunks[i];
+//     const chunkPath = path.join(tempDir, `chunk-${idx}`);
+//     const readStream = createReadStream(chunkPath);
+
+//     readStream.on("data", (chunk) => {
+//       hashStream.update(chunk);
+//     });
+//     // readStream.pipe(hashStream, { end: false });
+
+//     // { end: false } keeps writeStream open for the next chunk
+//     await pipeline(readStream, writeStream, {
+//       end: i === uploadedChunks.length - 1,
+//     });
+//   }
+
+//   return hashStream.digest("base64url");
+// };
+
 export const mergeFileChunks = async (uploadedChunks, tempDir, mergedPath) => {
   const writeStream = createWriteStream(mergedPath);
   const hashStream = createHash("sha256");
+
+  writeStream.setMaxListeners(0);
 
   for (let i = 0; i < uploadedChunks.length; i++) {
     const idx = uploadedChunks[i];
     const chunkPath = path.join(tempDir, `chunk-${idx}`);
     const readStream = createReadStream(chunkPath);
 
-    readStream.on("data", (chunk) => {
-      hashStream.update(chunk);
-    });
-    // readStream.pipe(hashStream, { end: false });
+    // Stream the chunk to both the hash calculator and the final file
+    await new Promise((resolve, reject) => {
+      readStream.on("data", (chunk) => {
+        hashStream.update(chunk); // Update hash on the fly
+      });
 
-    // { end: false } keeps writeStream open for the next chunk
-    await pipeline(readStream, writeStream, {
-      end: i === uploadedChunks.length - 1,
+      // Pipe to the writeStream, but tell it not to close when this chunk finishes
+      readStream.pipe(writeStream, { end: false });
+
+      // When the chunk finishes reading, resolve the promise to move to the next loop iteration
+      readStream.on("end", resolve);
+
+      // Catch any file system errors safely
+      readStream.on("error", reject);
+      writeStream.on("error", reject);
     });
   }
+
+  // Once the loop is done, manually close the final merged file
+  writeStream.end();
+
+  // Wait for the OS to finish flushing the final bytes to the hard drive
+  await new Promise((resolve) => writeStream.on("finish", resolve));
 
   return hashStream.digest("base64url");
 };
@@ -67,15 +105,14 @@ export const finalizeStorageRecord = async ({
 }) => {
   const { _id: parentId, userId, publicRole, sharedWith } = upload.parentId;
 
-  console.log({ upload, hash, existingRecord, detectedMime });
-
   const isInline = INLINE_MIME.has(detectedMime);
+  // const isForceInline = detectedMime.startsWith("video") || detectedMime.startsWith("audio");
   const disposition = isInline ? "inline" : "attachment";
 
   let metaId = null;
   let userFile = null;
   const session = await mongoose.startSession();
-
+  let user = null;
   try {
     await session.withTransaction(async () => {
       if (!existingRecord) {
@@ -128,22 +165,24 @@ export const finalizeStorageRecord = async ({
 
       await UploadSession.findByIdAndUpdate(
         upload._id,
-        { status, expiresAt: new Date(Date.now() + 60 * 1000) },
+        { status, expiresAt: new Date(Date.now() + 60000) },
         { session },
       );
 
-      await User.findByIdAndUpdate(
+      user = await User.findByIdAndUpdate(
         userId,
         { $inc: { usedStorage: upload.size } },
-        { session },
-      );
+        { session, new: true },
+      ).select("-_id usedStorage");
 
       const visited = new Set();
       const updateQuery = { $inc: { size: upload.size } };
       await updateAncestors(parentId, session, updateQuery, visited);
     });
 
-    return userFile;
+    const fileDoc = getFileDoc(userFile);
+    fileDoc.user = { usedStorage: user.usedStorage };
+    return fileDoc;
   } catch (err) {
     throw err;
   } finally {

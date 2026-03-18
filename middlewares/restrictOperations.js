@@ -3,18 +3,18 @@ import { forbidden } from "../utils/helper.js";
 
 /**
  * Middleware: restrictRootOperations
- * what it do: Prevent operations on user's root directory by checking if req.params.id matches user's rootDirId.
+ * what it do: Prevent operations on user's root directory by checking if req.params.id matches user's root.
  * requirements:
  *   - req.params.id: directory id to check (Mongo ObjectId)
- *   - req.user.rootDirId: authenticated user's root directory id
- *   - Blocks if id matches rootDirId or id is invalid
+ *   - req.user.root: authenticated user's root directory id
+ *   - Blocks if id matches root or id is invalid
  */
 export const restrictRootOperations = async (req, res, next) => {
   try {
-    const rootId = req.user.rootDirId?.toString();
-    const id = req.params?.id;
+    const rootId = req.user?.root?.toString();
+    const paramId = req.params?.id;
 
-    if ((id && !mongoose.isValidObjectId(id)) || rootId === id) {
+    if ((paramId && !mongoose.isValidObjectId(paramId)) || rootId === paramId) {
       return forbidden(res);
     }
 

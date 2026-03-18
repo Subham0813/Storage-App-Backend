@@ -1,7 +1,8 @@
 import multer from "multer";
 import { existsSync, mkdirSync } from "fs";
 import { badRequest } from "../utils/helper.js";
-
+import path from "path";
+import { TEMP_ROOT } from "../misc/constants.js";
 /**
  * Multer config: diskStorage + upload instance
  * what it do: Handles single file chunk upload with per-session dynamic size limit.
@@ -15,14 +16,13 @@ import { badRequest } from "../utils/helper.js";
  *   - Export: uploadChunk middleware for multer single file upload (fieldname: "file")
  */
 
-const TMP_ROOT = process.env.TMP_ROOT;
-
 const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    if (!existsSync(TMP_ROOT)) {
-      mkdirSync(TMP_ROOT, { recursive: true });
-    }
-    cb(null, TMP_ROOT);
+    const dest = path.resolve(TEMP_ROOT);
+    if (!dest.startsWith(TEMP_ROOT))
+      return cb(new Error("Invalid upload destination."));
+    if (!existsSync(dest)) mkdirSync(dest, { recursive: true });
+    cb(null, dest);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
