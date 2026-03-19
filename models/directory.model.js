@@ -1,7 +1,7 @@
 import { Schema, model } from "mongoose";
 
 export const sharedWithSchema = new Schema({
-  _id: { type: Schema.Types.ObjectId, select: false },
+  _id: { type: Schema.Types.ObjectId },
   email: {
     type: String,
     match: [
@@ -31,16 +31,12 @@ const directorySchema = new Schema(
       required: true,
       trim: true,
     },
-
     parentId: { type: Schema.Types.ObjectId, ref: "Directory", required: true },
-
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
-
     size: { type: Number, default: 0 },
-
-    isDeleted: { type: Boolean, default: false },
     isStarred: { type: Boolean, default: false },
 
+    isDeleted: { type: Boolean, default: false },
     deletedBy: {
       type: String,
       enum: ["none", "user", "process"],
@@ -57,6 +53,11 @@ const directorySchema = new Schema(
       type: String,
       enum: ["VIEWER", "NONE"],
       default: "NONE",
+    },
+    sharedBy: {
+      type: String,
+      enum: ["none", "user", "process"],
+      default: "none",
     },
     sharedWith: { type: [sharedWithSchema], default: [] },
     sharedAt: { type: Date, default: null },

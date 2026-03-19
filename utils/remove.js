@@ -3,6 +3,7 @@ import path from "path";
 import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { File as FileModel } from "../models/file.model.js";
+import { User } from "../models/user.model.js";
 
 const UPLOAD_ROOT =
   process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
@@ -74,6 +75,7 @@ export const recursiveDelete = async (
   visited,
   session,
   filesToDelete,
+  userId
 ) => {
   try {
     if (visited.has(parentId.toString())) return;
@@ -81,7 +83,7 @@ export const recursiveDelete = async (
 
     // 1. unlink all files from storage & delete info from Db
     const files = await UserFile.find({ parentId })
-      .select("meta")
+      .select("userId meta size")
       .populate({ path: "meta", select: "objectKey refCount" })
       .session(session);
 
@@ -94,9 +96,11 @@ export const recursiveDelete = async (
       await recursiveDelete(child._id, visited, session, filesToDelete);
     }
 
+    let total = 0;
     for (const file of files) {
       if (!file.meta) continue;
 
+      total += file.size;
       const updt = await FileModel.findOneAndUpdate(
         { _id: file.meta._id, refCount: { $gt: 0 } },
         { $inc: { refCount: -1 } },
@@ -112,6 +116,11 @@ export const recursiveDelete = async (
       }
     }
 
+    await User.findOneAndUpdate(
+      { _id: userId },
+      { $inc: { usedStorage: -total } },
+      { session },
+    );
     await Directory.deleteMany({ parentId }).session(session);
     await UserFile.deleteMany({ parentId }).session(session);
   } catch (err) {

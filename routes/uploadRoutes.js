@@ -18,6 +18,6 @@ router.get( "/session/:sessionId",express.json(),loadUploadSession, getUploadSta
 router.post("/session/create", express.json(), loadParentDir, initUpload); //init-upload
 router.post("/session/chunk/:sessionId", loadUploadSession, uploadChunk, saveChunk); //upload-chunk
 router.post("/session/complete/:sessionId", express.json(), loadUploadSession, completeUpload); //complete
-router.delete("/session/cancel/:sessionId", express.json(), loadUploadSession, cancelUpload); //cance-upload
+router.delete("/session/cancel/:sessionId", express.json(), loadUploadSession, cancelUpload); //cancel-upload
 
 export default router;

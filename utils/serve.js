@@ -94,7 +94,7 @@ export const serveZip = async ({
         },
       ],
     },
-    { name: 1 }, // Only fetch name to save bandwidth
+    { name: 1 }, //projection
   ).lean();
 
   for (const dir of dirs) {

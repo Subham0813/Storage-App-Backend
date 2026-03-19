@@ -6,8 +6,7 @@ import { Session } from "../models/session.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { UploadSession } from "../models/uploadSession.model.js";
 import { DriveIntegration } from "../models/integration.model.js";
-
-export const SUPER_ROLES = ["ADMIN", "SUPER_ADMIN"];
+import { File } from "../models/file.model.js";
 
 /**
  * path: /api/admin/users
@@ -18,18 +17,8 @@ export const SUPER_ROLES = ["ADMIN", "SUPER_ADMIN"];
  */
 export const getAllUsers = async (req, res, next) => {
   try {
-    const users = await User.find({ isDeleted: false })
-      .populate("rootDirId")
-      .lean();
-
-    const flattenUsers = users.map(({ rootDirId, ...rest }) => ({
-      user: { ...rest },
-      root: rootDirId,
-    }));
-
-    return res
-      .status(200)
-      .json({ success: true, data: { users: flattenUsers } });
+    const users = await User.find({ isDeleted: false }).select("-__v").lean();
+    return res.status(200).json({ success: true, data: { users } });
   } catch (err) {
     console.log(err);
     next(err);
@@ -45,7 +34,7 @@ export const getAllUsers = async (req, res, next) => {
  */
 export const getAllDeletedUsers = async (req, res, next) => {
   try {
-    const users = await User.find({ isDeleted: true }).lean();
+    const users = await User.find({ isDeleted: true }).select("-__v").lean();
     return res.status(200).json({ success: true, data: { users } });
   } catch (err) {
     next(err);
@@ -65,9 +54,8 @@ export const getSingleUser = async (req, res, next) => {
     const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) return badRequest(res, "Invalid id.");
 
-    const user = User.findById(id).lean();
+    const user = await User.findById(id).select("-__v").lean();
     if (!user) return notFound(res, "User not found.");
-
     return res.status(200).json({ success: true, data: { user } });
   } catch (err) {
     next(err);
@@ -145,7 +133,7 @@ export const changeUserRole = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "User permissions changed.",
-      data: {},
+      data: { user: { _id: user._id, role: requestedRole } },
     });
   } catch (err) {
     next(err);
@@ -205,13 +193,18 @@ export const tempRemoveUser = async (req, res, next) => {
 
     if (!user) return notFound(res, "User not found.");
     if (user.role === "SUPER_ADMIN") return forbidden(res);
-    const session = await mongoose.startSession();
 
+    const session = await mongoose.startSession();
+    let updated = null;
     try {
       await session.withTransaction(async () => {
-        await User.updateOne({ _id: user._id }, { isDeleted: true }).session(
-          session,
-        );
+        updated = await User.findOneAndUpdate(
+          { _id: user._id },
+          { isDeleted: true },
+          { session, new: true },
+        )
+          .select("_id isDeleted")
+          .lean();
         await Session.deleteMany({ userId: user._id }).session(session);
       });
     } finally {
@@ -220,7 +213,7 @@ export const tempRemoveUser = async (req, res, next) => {
 
     return res
       .status(200)
-      .json({ success: true, message: "User deleted.", data: {} });
+      .json({ success: true, message: "User deleted.", data: { updated } });
   } catch (err) {
     next(err);
   }
@@ -234,6 +227,7 @@ export const tempRemoveUser = async (req, res, next) => {
  *   - req.user: authenticated SUPER_ADMIN user
  */
 export const recoverUser = async (req, res, next) => {
+  const { id } = req.params;
   if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
     return badRequest(res, "Invalid id.");
   if (req.user.role !== "SUPER_ADMIN") return forbidden(res);
@@ -243,7 +237,7 @@ export const recoverUser = async (req, res, next) => {
       { _id: id, isDeleted: true },
       { isDeleted: false },
       { new: true },
-    );
+    ).select("_id isDeleted");
     if (!user) return notFound(res, "User not found.");
 
     return res
@@ -268,9 +262,12 @@ export const deleteUser = async (req, res, next) => {
   if (req.user.role !== "SUPER_ADMIN") return forbidden(res);
 
   try {
-    const user = await User.findOneAndDelete({ _id: id }).select("_id").lean();
+    const user = await User.find({ _id: id }).select("_id").lean();
     if (!user) return notFound(res, "User not found.");
 
+    const files = await File.find({ userId: user._id })
+      .select("objectKey")
+      .lean();
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
@@ -279,10 +276,34 @@ export const deleteUser = async (req, res, next) => {
         await Session.deleteMany({ userId: user._id });
         await UserFile.deleteMany({ userId: user._id });
         await UploadSession.deleteMany({ userId: user._id });
+        await File.deleteMany({ userId: user._id });
       });
     } finally {
       await session.endSession();
     }
+
+    const filesToDelete = [];
+    files.forEach((file) => {
+      const filePath = path.join(
+        path.resolve(UPLOAD_ROOT),
+        user._id.toString(),
+        file.objectKey,
+      );
+      filesToDelete.push(filePath);
+    });
+
+    Promise.allSettled(filesToDelete.map((filePath) => unlink(filePath))).then(
+      (results) => {
+        results.forEach((result, index) => {
+          if (result.status === "rejected") {
+            console.error(
+              `Failed to delete file: ${filesToDelete[index]}`,
+              result.reason,
+            );
+          }
+        });
+      },
+    );
 
     return res.status(200).json({
       success: true,

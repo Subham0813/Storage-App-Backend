@@ -20,7 +20,7 @@ export const loadUploadSession = async (req, res, next) => {
   try {
     const upSession = await UploadSession.findById(sessionId)
       .populate("parentId", "_id userId publicRole sharedWith")
-      .select("_id userId parentId tempDir uploadedChunks totalChunks status mime")
+      .select("-__v -createdAt -updatedAt")
       .lean();
 
     if (!upSession) {
@@ -31,8 +31,6 @@ export const loadUploadSession = async (req, res, next) => {
     if (!upSession.userId.equals(req.user._id)) {
       return res.status(401).json({ message: "Unauthorized upload session." });
     }
-
-    console.log({upSession})
 
     req.uploadSession = upSession;
     next();

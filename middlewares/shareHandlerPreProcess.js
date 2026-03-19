@@ -32,7 +32,8 @@ export const shareHandlerPreProcessor = async (req, res, next) => {
     const cr = role.toUpperCase();
     if (
       !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ce) ||
-      !allowedRoles.includes(cr)
+      !allowedRoles.includes(cr) ||
+      ce === req.user.email.toLowerCase().trim()
     ) {
       skipped.push({
         email: ce,

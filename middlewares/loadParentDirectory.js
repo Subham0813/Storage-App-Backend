@@ -14,8 +14,6 @@ import { badRequest, forbidden, notFound } from "../utils/helper.js";
  */
 export const loadParentDir = async (req, res, next) => {
   const { targetId } = req.body;
-  const { _id: userId, email } = req.user;
-
   if (!mongoose.isValidObjectId(targetId)) {
     return badRequest(res, "Invalid id.");
   }
@@ -23,15 +21,11 @@ export const loadParentDir = async (req, res, next) => {
     const target = await Directory.findOne({
       _id: targetId,
       isDeleted: false,
-    }).lean();
-
+    }).populate("userId", "allotedStorage usedStorage").lean();
     if (!target) return notFound("Target directory not exists.");
-
-    const isOwner = target.userId.toString() === userId.toString();
-    const isShared = email ? hasAccess(target, ["EDITOR"], email) : false;
-
+    const isOwner = target.userId._id.toString() ===  req.user._id.toString();
+    const isShared =  req.user.email ? hasAccess(target, ["EDITOR"],  req.user.email) : false;
     if (!isShared && !isOwner) return forbidden(res);
-
     req.parent = target;
     next();
   } catch (err) {

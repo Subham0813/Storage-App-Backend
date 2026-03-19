@@ -2,6 +2,9 @@ import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
 import { notFound } from "../utils/helper.js";
 import { Router } from "express";
+import { restrictRootOperations } from "../middlewares/restrictOperations.js";
+import { getShareInfo } from "../middlewares/getShareInfo.js";
+import { validateSession } from "../middlewares/validateSession.js";
 
 /**
  * path: /api/shared/resolve/:token
@@ -13,25 +16,25 @@ export const resolveSharedTokenHandler = async (req, res, next) => {
   try {
     // 1. Try to find a File
     const file = await UserFile.findOne({ shareToken: token, isDeleted: false })
-      .select("_id filename")
+      .select("_id filename sharedWith sharedAt publicRole")
       .lean();
 
     if (file) {
       return res.status(200).json({
         success: true,
-        data: { type: "file", id: file._id, name: file.filename },
+        data: { type: "file", file },
       });
     }
 
     // 2. Try to find a Directory
-    const dir = await Directory.findOne({ shareToken: token, isDeleted: false })
-      .select("_id dirname")
+    const directory = await Directory.findOne({ shareToken: token, isDeleted: false })
+      .select("_id dirname sharedWith sharedAt publicRole")
       .lean();
 
-    if (dir) {
+    if (directory) {
       return res.status(200).json({
         success: true,
-        data: { type: "directory", id: dir._id, name: dir.dirname },
+        data: { type: "directory", directory },
       });
     }
 
@@ -43,4 +46,6 @@ export const resolveSharedTokenHandler = async (req, res, next) => {
 
 const router = Router();
 router.get("/resolve/:token", resolveSharedTokenHandler);
+router.get("/share-info/file/:id",validateSession, getShareInfo("file"));
+router.get("/share-info/directory/:id", validateSession, restrictRootOperations, getShareInfo("dir"));
 export default router;

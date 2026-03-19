@@ -2,8 +2,8 @@ import mongoose from "mongoose";
 import { Session } from "../models/session.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
-import { SUPER_ROLES } from "../controllers/adminControllers.js";
-// import { DriveIntegration } from "../models/integration.model.js";
+import { SUPER_ROLES } from "../controllers/constants.js";
+import { DriveIntegration } from "../models/integration.model.js";
 
 /**
  * Middleware: validateSession
@@ -14,7 +14,6 @@ import { SUPER_ROLES } from "../controllers/adminControllers.js";
  *   - Sets req.user to authenticated user object from session
  */
 
-
 export const validateSession = async (req, res, next) => {
   try {
     const { sid } = req.signedCookies;
@@ -22,7 +21,9 @@ export const validateSession = async (req, res, next) => {
 
     //Signed User
     if (sid && mongoose.isValidObjectId(sid)) {
-      const session = await Session.findById(sid).populate("userId").lean();
+      const session = await Session.findById(sid)
+        .populate("userId", "-__v -createdAt -updatedAt")
+        .lean();
 
       if (session?.userId && !session.userId.isDeleted) {
         //check Admin for admin route

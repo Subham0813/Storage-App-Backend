@@ -30,13 +30,10 @@ const driveIntegrationSchema = new Schema(
       type: [String],
       required: true,
     },
-    connectedAt: {
-      type: Date,
-      default: Date.now,
-    },
     expiresIn: {
       type: Date,
       default: Date.now,
+      index: { expireAfterSeconds: 0 }
     },
   },
   { strict: "throw", timestamps: true },

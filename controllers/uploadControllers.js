@@ -8,19 +8,7 @@ import { finalizeStorageRecord, mergeFileChunks } from "../utils/storage.js";
 import { badRequest } from "../utils/helper.js";
 import { fileTypeFromFile } from "file-type";
 import mongoose from "mongoose";
-
-const CHUNK_SIZE = {
-  GUEST: 16 * 1024,
-  USER: 1024 * 1024,
-  ADMIN: 10 * 1024 * 1024,
-  SUPER_ADMIN: 10 * 1024 * 1024,
-};
-
-const TMP_ROOT =
-  process.env.TMP_ROOT || path.resolve(process.cwd() + "/uploads/temp");
-
-const UPLOAD_ROOT =
-  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
+import { TIME, CHUNK_SIZE, TEMP_ROOT, UPLOAD_ROOT} from "../misc/constants.js";
 
 /**
  * path: /api/uploads/session/create
@@ -33,10 +21,15 @@ const UPLOAD_ROOT =
 export const initUpload = async (req, res, next) => {
   try {
     const { name, size, mime } = req.body;
-    const owner = await User.findById(req.parent.userId);
+    const { allotedStorage, usedStorage } = await User.findById(
+      req.parent.userId,
+    )
+      .select("allotedStorage usedStorage")
+      .lean();
 
-    const storageLeft = owner.allotedStorage - owner.usedStorage;
-    if (storageLeft < size)
+    const parsedSize = parseInt(size);
+    const remaining = allotedStorage - usedStorage;
+    if (remaining < parsedSize)
       return res.status(400).json({
         success: false,
         message: `Insufficient storage for the file : ${name}`,
@@ -44,29 +37,28 @@ export const initUpload = async (req, res, next) => {
       });
 
     const { _id: userId, role } = req.user;
-    const strategy = size > CHUNK_SIZE[role] ? "chunked" : "direct";
-    const chunkSize = strategy === "chunked" ? CHUNK_SIZE[role] : size;
+    const strategy = parsedSize > CHUNK_SIZE[role] ? "chunked" : "direct";
+    const chunkSize = strategy === "chunked" ? CHUNK_SIZE[role] : parsedSize;
     const totalChunks =
-      strategy === "chunked" ? Math.ceil(size / chunkSize) : 1;
+      strategy === "chunked" ? Math.ceil(parsedSize / chunkSize) : 1;
 
     const upload = await UploadSession.create({
       userId,
       parentId: req.parent._id,
       filename: name,
-      size,
+      size: parsedSize,
       mime,
       strategy,
       chunkSize,
       totalChunks,
-      expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+      expiresAt: new Date(Date.now() + TIME.ONE_DAY),
     });
 
-    res.setHeader("x-chunk-index", 0);
-
+    // res.setHeader("x-chunk-index", 0);
     res.status(200).json({
       uploadId: upload._id,
       strategy,
-      chunkSize: chunkSize,
+      expectedChunkSize: chunkSize,
       totalChunks,
     });
   } catch (err) {
@@ -88,13 +80,24 @@ export const saveChunk = async (req, res, next) => {
     const { _id, tempDir, uploadedChunks, totalChunks, chunkSize } =
       req.uploadSession;
     const chunkIndex = Number(req.headers["x-chunk-index"]);
+    if (
+      chunkIndex === undefined ||
+      !Number.isInteger(chunkIndex) ||
+      chunkIndex < 0
+    )
+      return badRequest(res, "Wrong chunk indexing.");
 
     const file = req.file;
-    if (!file) return badRequest(res, "No chunk received.");
+    if (!file || file.size === 0) return badRequest(res, "No chunk received.");
 
     let error = null;
 
-    if (totalChunks === uploadedChunks.length) {
+    if (chunkIndex == 0) {
+      const detected = await fileTypeFromFile(file.path);
+      if (detected && detected.mime !== req.uploadSession.mime) {
+        error = { status: 403, message: "Chunk MIME type mismatch." };
+      }
+    } else if (totalChunks === uploadedChunks.length) {
       error = { status: 409, message: "All chunks are already uploaded." };
     } else if (uploadedChunks.includes(chunkIndex)) {
       error = { status: 409, message: "Chunk already exists." };
@@ -103,7 +106,7 @@ export const saveChunk = async (req, res, next) => {
         status: 403,
         message: "Wrong indexed file. Index should always be continuous.",
       };
-    } else if (file.size !== chunkSize) {
+    } else if (file.size > chunkSize) {
       error = { status: 403, message: "Chunk size not matched." };
     }
 
@@ -114,8 +117,7 @@ export const saveChunk = async (req, res, next) => {
 
     const status =
       totalChunks === uploadedChunks.length + 1 ? "uploaded" : "uploading";
-
-    const td = tempDir || path.join(TMP_ROOT, _id.toString());
+    const td = tempDir || path.join(TEMP_ROOT, _id.toString());
 
     const updatedUpload = await UploadSession.findByIdAndUpdate(
       _id,
@@ -124,7 +126,9 @@ export const saveChunk = async (req, res, next) => {
         $set: { status, tempDir: td },
       },
       { new: true },
-    ).select("uploadedChunks");
+    )
+      .select("uploadedChunks")
+      .lean();
 
     await mkdir(td, { recursive: true });
 
@@ -135,16 +139,13 @@ export const saveChunk = async (req, res, next) => {
       (updatedUpload.uploadedChunks.length / totalChunks) * 100,
     );
 
-    if (status !== "uploaded") res.setHeader("x-chunk-index", chunkIndex + 1);
-
+    // if (status !== "uploaded") res.setHeader("x-chunk-index", chunkIndex + 1);
     return res.status(200).json({
       success: true,
       message: "chunk uploaded.",
       data: {
         status,
-        progress: `${progress}%`,
-        uploadedChunks: updatedUpload.uploadedChunks,
-        totalChunks: totalChunks,
+        progress,
         isCompleted: updatedUpload.uploadedChunks.length === totalChunks,
       },
     });
@@ -174,7 +175,10 @@ export const completeUpload = async (req, res, next) => {
   if (uploadedChunks.length !== totalChunks) {
     return res.status(400).json({ message: "Chunks missing." });
   }
-  const mergedPath = path.join(TMP_ROOT, `${_id.toString()}-merged`);
+  const mergedPath = path.join(
+    TEMP_ROOT,
+    `${_id.toString()}-merged`,
+  );
 
   try {
     // 1. Optimized Merge via Streams
@@ -190,7 +194,7 @@ export const completeUpload = async (req, res, next) => {
       .lean();
 
     // 3. Finalize via Shared Service
-    const userFile = await finalizeStorageRecord({
+    const finalRec = await finalizeStorageRecord({
       upload,
       hash,
       existingRecord,
@@ -199,10 +203,13 @@ export const completeUpload = async (req, res, next) => {
     });
 
     //4. Post-Process (storage manage)
-    if (userFile) {
-      await mkdir(path.join(UPLOAD_ROOT, parentId.userId.toString()), {
-        recursive: true,
-      });
+    if (finalRec) {
+      await mkdir(
+        path.join(UPLOAD_ROOT, parentId.userId.toString()),
+        {
+          recursive: true,
+        },
+      );
 
       const finalPath = path.join(
         UPLOAD_ROOT,
@@ -212,7 +219,7 @@ export const completeUpload = async (req, res, next) => {
 
       if (existingRecord) {
         await unlink(mergedPath);
-        console.log("File unlinked...\n", mergedPath);
+        // console.log("File unlinked...\n", mergedPath);
       } else {
         rename(mergedPath, finalPath).catch((err) =>
           console.error("rename failed:", err),
@@ -225,7 +232,16 @@ export const completeUpload = async (req, res, next) => {
         );
     }
 
-    return res.status(201).json({ success: true, file: userFile });
+    const { meta, isDeleted, deletedAt, ...file } = finalRec;
+    return res.status(201).json({
+      success: true,
+      message: "File uploaded.",
+      data: {
+        status: "uploaded",
+        progress: 100,
+        file,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -254,7 +270,9 @@ export const cancelUpload = async (req, res, next) => {
       );
     }
 
-    return res.status(200).json({ message: "Upload cancelled." });
+    return res
+      .status(200)
+      .json({ success: true, message: "Upload cancelled." });
   } catch (err) {
     next(err);
   } finally {
@@ -271,19 +289,18 @@ export const cancelUpload = async (req, res, next) => {
  */
 export const getUploadStatus = async (req, res, next) => {
   try {
-    const { status, uploadedChunks, totalChunks } = req.uploadSession;
-
-    const progress = Math.round((uploadedChunks.length / totalChunks) * 100);
+    const { status, uploadedChunks, totalChunks, strategy, size, bytesRead } =
+      req.uploadSession;
+    const isCompleted = status === "uploaded" || status === "imported";
+    const progress = isCompleted
+      ? 100
+      : strategy === "google-drive"
+        ? Math.round((bytesRead / size) * 100) || 0
+        : Math.round((uploadedChunks.length / totalChunks) * 100);
 
     return res.json({
       success: true,
-      data: {
-        status,
-        progress: `${progress}%`,
-        uploadedChunks: uploadedChunks,
-        totalChunks: totalChunks,
-        isComplete: uploadedChunks.length === totalChunks,
-      },
+      data: { status, progress, isCompleted },
     });
   } catch (err) {
     next(err);
