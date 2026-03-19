@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import { Session } from "../models/session.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
-import { SUPER_ROLES } from "../controllers/constants.js";
+import { SUPER_ROLES } from "../misc/constants.js";
 import { DriveIntegration } from "../models/integration.model.js";
 
 /**
