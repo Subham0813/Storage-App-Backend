@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import * as bcrypt from "bcrypt";
+import { z } from "zod/v4";
 
 import { TIME, EMAIL_REGEX, MAX_DEVICE_COUNT } from "../misc/constants.js";
 import { User } from "../models/user.model.js";
@@ -11,8 +12,14 @@ import {
   notFound,
   responsePayload,
 } from "../utils/helper.js";
-import { createSession } from "../utils/createSession.js";
 import { Session } from "../models/session.model.js";
+import {
+  authTokenSchema,
+  loginSchema,
+  registerSchema,
+  requestOtpSchema,
+  verifyOtpSchema,
+} from "../Schemas/authSchema.js";
 
 /**
  * path: /api/auth/request-otp
@@ -23,25 +30,45 @@ import { Session } from "../models/session.model.js";
  *   - user with matching email and id must exist
  */
 export const requestOtpHandler = async (req, res, next) => {
-  const { email, purpose } = req.body;
-  const { authToken } = req.signedCookies;
-
-  if (
-    !email ||
-    !purpose ||
-    !EMAIL_REGEX.test(email) ||
-    !authToken ||
-    !mongoose.isValidObjectId(authToken.id) ||
-    authToken.expires < Date.now() ||
-    authToken.purpose !== purpose
-  )
-    return badRequest(res, "Invalid payload or cookies mismatch.");
-
-  const session = await mongoose.startSession();
   try {
-    const { otp, expiresAt, deviceLoggedCount } = await session.withTransaction(
-      async () => {
-        const user = await User.findOne({ _id: authToken.id, email })
+    const { authToken } = req.signedCookies;
+    if (!authToken) return badRequest(res, "Invalid cookies");
+    const { success, data, error } = await requestOtpSchema.safeParseAsync(
+      req.body,
+    );
+    const {
+      success: authSuccess,
+      data: authData,
+      error: authError,
+    } = await authTokenSchema.safeParseAsync(authToken);
+
+    let errorMessage = !success
+      ? error.issues.map((err) => err.message).join(", ")
+      : !authSuccess
+        ? authError.issues.map((err) => err.message).join(", ")
+        : "";
+
+    console.log(error, authError);
+    if (errorMessage.length > 0) {
+      return responsePayload(res, 400, errorMessage);
+    }
+
+    const { id: authId, purpose: authPurpose } = authData;
+    const { email, purpose } = data;
+    if (purpose !== authPurpose)
+      return responsePayload(
+        res,
+        400,
+        "Purpose mismatch between payload and auth token.",
+      );
+
+    const session = await mongoose.startSession();
+    let newOtp, expiresAt, deviceLoggedCount;
+    newOtp = expiresAt = deviceLoggedCount = null;
+
+    try {
+      await session.withTransaction(async () => {
+        const user = await User.findOne({ _id: authId, email })
           .select("isEmailVerified deviceCount")
           .session(session);
 
@@ -51,11 +78,7 @@ export const requestOtpHandler = async (req, res, next) => {
           throw error;
         }
 
-        let existingOtps = await OTP.find({
-          email,
-          userId: authToken.id,
-          purpose: authToken.purpose,
-        })
+        let existingOtps = await OTP.find({ email, purpose, userId: user._id })
           .session(session)
           .select("_id")
           .lean();
@@ -65,19 +88,20 @@ export const requestOtpHandler = async (req, res, next) => {
           throw error;
         }
 
-        const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+        newOtp = Math.floor(100000 + Math.random() * 900000).toString();
         const [newOtpRecord] = await OTP.create(
           [{ userId: user._id, email, otp: newOtp, purpose }],
           { session },
         );
 
-        return {
-          otp: newOtp,
-          expiresAt: newOtpRecord.createdAt.getTime() + TIME.FIVE_MINUTES,
-          deviceLoggedCount: user.deviceCount,
-        };
-      },
-    );
+        expiresAt = new Date(
+          newOtpRecord.createdAt.getTime() + TIME.FIVE_MINUTES,
+        );
+        deviceLoggedCount = user.deviceCount;
+      });
+    } finally {
+      session.endSession();
+    }
 
     //await sendEmail({email, purpose, otp})
 
@@ -85,7 +109,7 @@ export const requestOtpHandler = async (req, res, next) => {
       success: true,
       statusCode: 201,
       message: "An One Time Password has been sent to your Email address.",
-      data: { otp, expiresAt, deviceLoggedCount },
+      data: { newOtp, expiresAt, deviceLoggedCount },
     });
   } catch (err) {
     if (err.statusCode) {
@@ -94,8 +118,6 @@ export const requestOtpHandler = async (req, res, next) => {
     err.customMessage =
       "One Time Password request failed due to some unavoidable reasons. Try again.";
     next(err);
-  } finally {
-    session.endSession();
   }
 };
 
@@ -109,118 +131,126 @@ export const requestOtpHandler = async (req, res, next) => {
  *   - matching OTP record must exist in DB
  */
 export const verifyOtpHandler = async (req, res, next) => {
-  const { email, otp, logoutLastSession } = req.body;
-  const { authToken } = req.signedCookies;
-  const allowedPurpose = ["login", "register", "forgot-password"];
-
-  if (
-    !authToken ||
-    !authToken.id ||
-    !mongoose.isValidObjectId(authToken.id) ||
-    !authToken.purpose ||
-    !allowedPurpose.includes(authToken.purpose.toString()) ||
-    !authToken.expires ||
-    authToken.expires < Date.now() ||
-    !email ||
-    !EMAIL_REGEX.test(email) ||
-    !otp ||
-    isNaN(otp) ||
-    (authToken.purpose === "login" && typeof logoutLastSession !== "boolean")
-  )
-    return badRequest(res, "Invalid payload or cookies mismatch.");
-
-  let updatedOtpRecord = null;
-  let updatedUserRecord = null;
-  let newUserSession = null;
-
-  const _session = await mongoose.startSession();
   try {
-    await _session.withTransaction(async () => {
-      //check for user exists
-      const user = await User.findOne({
-        _id: authToken.id,
-        email: email.toLowerCase().trim(),
-      })
-        .select("isLogged deviceCount")
-        .session(_session)
-        .lean();
+    const { authToken } = req.signedCookies;
+    if (!authToken) return badRequest(res, "Invalid cookies.");
 
-      if (!user) {
-        const error = new Error("Incorrect email address.");
-        error.statusCode = 404;
-        throw error;
-      }
+    const { success, data, error } = await verifyOtpSchema.safeParseAsync(
+      req.body,
+    );
+    const {
+      success: authSuccess,
+      data: authData,
+      error: authError,
+    } = await authTokenSchema.safeParseAsync(authToken);
 
-      if (
-        authToken.purpose !== "forgot-password" &&
-        user.deviceCount >= MAX_DEVICE_COUNT
-      ) {
-        if (logoutLastSession) {
-          await Session.deleteOne({ userId: user._id })
-            .sort({ createdAt: 1 })
-            .session(_session);
-        } else {
-          const error = new Error(
-            "Session creation failed. Max.session limit reached.",
-          );
-          error.statusCode = 413;
+    let errorMessage = !success
+      ? error.issues.map((err) => err.message).join(", ")
+      : !authSuccess
+        ? authError.issues.map((err) => err.message).join(", ")
+        : "";
+
+    if (errorMessage.length > 0) {
+      return responsePayload(res, 400, errorMessage);
+    }
+
+    const { id: authId, purpose: authPurpose } = authData;
+    const { email, otp, logoutLastSession } = data;
+
+    let updatedOtpRecord, updatedUserRecord, newUserSession;
+    updatedOtpRecord = updatedUserRecord = newUserSession = null;
+
+    const _session = await mongoose.startSession();
+    try {
+      await _session.withTransaction(async () => {
+        //check for user exists
+        const user = await User.findOne({
+          _id: authId,
+          email: email.toLowerCase().trim(),
+        })
+          .select("isLogged deviceCount")
+          .session(_session)
+          .lean();
+
+        if (!user) {
+          const error = new Error("User does not exists.");
+          error.statusCode = 404;
           throw error;
         }
-      }
 
-      const otps = await OTP.find({
-        userId: authToken.id,
-        email,
-        purpose: authToken.purpose,
-      }).session(_session);
-      if (otps.length < 1) {
-        const error = new Error("OTP expired.");
-        error.statusCode = 410;
-        throw error;
-      }
+        if (
+          authPurpose !== "forgot-password" &&
+          user.deviceCount >= MAX_DEVICE_COUNT
+        ) {
+          if (logoutLastSession) {
+            await Session.deleteOne({ userId: user._id })
+              .session(_session);
+          } else {
+            const error = new Error(
+              "Session creation failed. Max.session limit reached.",
+            );
+            error.statusCode = 413;
+            throw error;
+          }
+        }
 
-      let otpRecord = otps[otps.length - 1];
-      const isValid = await otpRecord.compareOTP(otp.toString());
-      if (!isValid) {
-        const error = new Error("Invalid OTP.");
-        error.statusCode = 404;
-        throw error;
-      }
-
-      const updateQuery = {};
-      if (!user.isLogged) updateQuery["$set"] = { isLogged: true };
-      if (user.deviceCount < MAX_DEVICE_COUNT)
-        updateQuery["$inc"] = { deviceCount: 1 };
-
-      if (authToken.purpose === "forgot-password") {
-        updatedOtpRecord = await OTP.findByIdAndUpdate(
-          otpRecord._id,
-          { createdAt: new Date() },
-          { new: true },
-        )
-          .select("createdAt")
-          .session(_session)
-          .lean();
-      } else {
-        const incr = user.deviceCount < MAX_DEVICE_COUNT ? 1 : 0;
-        updatedUserRecord = await User.findOneAndUpdate(
-          { _id: user._id },
-          { $set: { isLogged: true }, $inc: { deviceCount: incr } },
-          { new: true },
-        )
-          .session(_session)
-          .lean();
-        await OTP.deleteMany({
+        const otpRecord = await OTP.findOne({
           userId: user._id,
           email,
-          purpose: authToken.purpose,
-        }).session(_session);
+          purpose: authPurpose,
+        })
+          .sort({createdAt: -1})
+          .session(_session);
+        if (!otpRecord) {
+          const error = new Error("OTP expired.");
+          error.statusCode = 410;
+          throw error;
+        }
 
-        [newUserSession] = await Session.create([{ userId: user._id }], {
-          session: _session,
-        });
-      }
-    });
+        const isValid = await otpRecord.compareOTP(otp.toString());
+        if (!isValid) {
+          const error = new Error("Invalid OTP.");
+          error.statusCode = 404;
+          throw error;
+        }
+
+        const updateQuery = {};
+        if (!user.isLogged) updateQuery["$set"] = { isLogged: true };
+        if (user.deviceCount < MAX_DEVICE_COUNT)
+          updateQuery["$inc"] = { deviceCount: 1 };
+
+        if (authPurpose === "forgot-password") {
+          updatedOtpRecord = await OTP.findByIdAndUpdate(
+            otpRecord._id,
+            { createdAt: new Date() },
+            { new: true },
+          )
+            .select("createdAt")
+            .session(_session)
+            .lean();
+        } else {
+          const incr = user.deviceCount < MAX_DEVICE_COUNT ? 1 : 0;
+          updatedUserRecord = await User.findOneAndUpdate(
+            { _id: user._id },
+            { $set: { isLogged: true }, $inc: { deviceCount: incr } },
+            { new: true },
+          )
+            .session(_session)
+            .lean();
+          await OTP.deleteMany({
+            userId: user._id,
+            email,
+            purpose: authToken.purpose,
+          }).session(_session);
+
+          [newUserSession] = await Session.create([{ userId: user._id }], {
+            session: _session,
+          });
+        }
+      });
+    } finally {
+      await _session.endSession();
+    }
 
     if (authToken.purpose === "forgot-password") {
       const expires = updatedOtpRecord.createdAt.getTime() + TIME.FIVE_MINUTES;
@@ -269,8 +299,6 @@ export const verifyOtpHandler = async (req, res, next) => {
     err.customMessage =
       "One Time Password verification failed due to some unavoidable reasons. Try again.";
     next(err);
-  } finally {
-    await _session.endSession();
   }
 };
 
@@ -283,11 +311,14 @@ export const verifyOtpHandler = async (req, res, next) => {
  *   - user must exist and password must match
  */
 export const loginHandler = async (req, res, next) => {
-  const { email, password } = req.body;
-  if (!password || !email || !EMAIL_REGEX.test(email))
-    return badRequest(res, "Invalid payload.");
-
   try {
+    const { success, data, error } = await loginSchema.safeParseAsync(req.body);
+    if (!success) {
+      const errorMessage = error.issues.map((err) => err.message).join(", ");
+      return responsePayload(res, 400, errorMessage);
+    }
+
+    const { email, password } = data;
     const userEmail = email ? email.toLowerCase().trim() : null;
 
     // $or: [{ email: userEmail }, { username: username }],
@@ -338,47 +369,56 @@ export const loginHandler = async (req, res, next) => {
  *   - email must not already exist in the database
  */
 export const registerHandler = async (req, res, next) => {
-  const { fullname, email, password } = req.body;
-
-  if (!fullname || !email || !password || !EMAIL_REGEX.test(email))
-    return badRequest(res, "Invalid payload.");
-
-  const session = await mongoose.startSession();
   try {
-    const { user } = await session.withTransaction(async () => {
-      const existingUser = await User.findOne({ email }).session(session);
-      if (existingUser) {
-        const error = new Error("User already registered.");
-        error.statusCode = 409;
-        throw error;
-      }
+    const { success, data, error } = await registerSchema.safeParseAsync(
+      req.body,
+    );
+    if (!success) {
+      const errorMessage = error.issues.map((err) => err.message).join(", ");
+      return responsePayload(res, 400, errorMessage);
+    }
 
-      let [user] = await User.create([{ name: fullname, email, password }], {
-        session,
+    const { fullname, email, password } = data;
+    const session = await mongoose.startSession();
+    let user = null;
+    try {
+      await session.withTransaction(async () => {
+        const existingUser = await User.findOne({ email }).session(session);
+        if (existingUser) {
+          const error = new Error("User already registered.");
+          error.statusCode = 409;
+          throw error;
+        }
+
+        [user] = await User.create([{ name: fullname, email, password }], {
+          session,
+        });
+        const [root] = await Directory.create(
+          [
+            {
+              dirname: `root-${user.username}`,
+              parentId: new mongoose.Types.ObjectId(),
+              userId: user._id,
+            },
+          ],
+          { session },
+        );
+
+        user = await User.findByIdAndUpdate(
+          user._id,
+          { root: root._id },
+          { session, new: true },
+        );
       });
-      const [root] = await Directory.create(
-        [
-          {
-            dirname: `root-${user.username}`,
-            parentId: new mongoose.Types.ObjectId(),
-            userId: user._id,
-          },
-        ],
-        { session },
-      );
-
-      user = await User.findByIdAndUpdate(user._id, {
-        root: root._id,
-      }).session(session);
-
-      return { user };
-    });
+    } finally {
+      await session.endSession();
+    }
 
     const expires = Date.now() + TIME.TEN_MINUTES;
     return res
       .cookie(
         "authToken",
-        { purpose: "register", id: user._id, expires },
+        { purpose: "register", id: user?._id, expires },
         {
           httpOnly: true,
           sameSite: "strict",
@@ -401,8 +441,6 @@ export const registerHandler = async (req, res, next) => {
     err.customMessage =
       "Register process failed due to some unavoidable reasons. Try again.";
     next(err);
-  } finally {
-    await session.endSession();
   }
 };
 
@@ -414,14 +452,20 @@ export const registerHandler = async (req, res, next) => {
  *   - user with provided email must exist
  */
 export const forgotPasswordInitHandler = async (req, res, next) => {
-  const { email } = req.body;
-  if (!email) return badRequest(res, "Invalid payload.");
-
   try {
-    const user = await User.findOne({ email });
-    if (!user) return notFound(res, "Incorrect email address.");
+    const { success, data, error } = await z
+      .object({ email: loginSchema.shape.email })
+      .safeParseAsync(req.body);
 
-    const expires = new Date(Date.now() + TIME.TEN_MINUTES);
+    if (!success) {
+      const errorMessage = error.issues.map((err) => err.message).join(", ");
+      return responsePayload(res, 400, errorMessage);
+    }
+
+    const user = await User.findOne({ email: data.email });
+    if (!user) return notFound(res, "User does not exists.");
+
+    const expires = Date.now() + TIME.TEN_MINUTES;
     return res
       .cookie(
         "authToken",
@@ -457,43 +501,53 @@ export const forgotPasswordInitHandler = async (req, res, next) => {
  *   - OTP record with given id and purpose `forgotPassword` must exist
  */
 export const forgotPasswordHandler = async (req, res, next) => {
-  const { newPassword } = req.body;
-  const { oid } = req.signedCookies;
-
-  if (!newPassword) return badRequest(res, "Invalid payload.");
-
-  if (!oid || !mongoose.isValidObjectId(oid))
-    return notFound(res, "Invalid cookies.");
-
-  const session = await mongoose.startSession();
   try {
-    await session.withTransaction(async () => {
-      const otpRecord = await OTP.findOne({
-        _id: oid,
-        purpose: "forgot-password",
-      })
-        .select("email")
-        .session(session);
+    const { success, data, error } = await z
+      .object({ newPassword: loginSchema.shape.password })
+      .safeParseAsync(req.body);
+    if (!success) {
+      const errorMessage = error.issues.map((err) => err.message).join(", ");
+      return responsePayload(res, 400, errorMessage);
+    }
 
-      if (!otpRecord) {
-        const error = new Error("Invalid OTP.");
-        error.statusCode = 404;
-        throw error;
-      }
+    const { newPassword } = data;
+    const { oid } = req.signedCookies;
 
-      //create hashedPassword
-      const hashedPass = await bcrypt.hash(newPassword, 12);
+    if (!newPassword || !oid || !mongoose.isValidObjectId(oid))
+      return responsePayload(res, 400, "Invalid cookies or payload.");
 
-      await User.findOneAndUpdate(
-        { email: otpRecord.email },
-        { $set: { password: hashedPass } },
-      ).session(session);
+    const session = await mongoose.startSession();
 
-      //password changed success message
-      //await sendEmail({email, purpose})
+    //create hashedPassword
+    const hashedPass = await bcrypt.hash(newPassword, 12);
+    try {
+      await session.withTransaction(async () => {
+        const otpRecord = await OTP.findOne({
+          _id: oid,
+          purpose: "forgot-password",
+        })
+          .select("email")
+          .session(session);
 
-      await otpRecord.deleteOne({ _id: oid }).session(session);
-    });
+        if (!otpRecord) {
+          const error = new Error("Invalid OTP.");
+          error.statusCode = 404;
+          throw error;
+        }
+
+        await User.findOneAndUpdate(
+          { email: otpRecord.email },
+          { $set: { password: hashedPass } },
+        ).session(session);
+
+        await otpRecord.deleteOne({ _id: oid }).session(session);
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    //password changed success message
+    //await sendEmail({email, purpose})
 
     return res.clearCookie("oid").status(201).json({
       success: true,
@@ -507,7 +561,5 @@ export const forgotPasswordHandler = async (req, res, next) => {
     err.customMessage =
       "Password reset process failed due to some unavoidable reasons. Try again.";
     next(err);
-  } finally {
-    await session.endSession();
   }
 };
