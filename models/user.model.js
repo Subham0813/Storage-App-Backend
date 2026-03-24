@@ -65,7 +65,7 @@ const userSchema = new Schema(
 
     allotedStorage: { type: Number, default: 1024 * 1024 * 1024 },
     usedStorage: { type: Number, default: 0 },
-    
+
     isLogged: { type: Boolean, default: false },
     isDeleted: { type: Boolean, default: false },
   },
@@ -80,7 +80,12 @@ userSchema.pre("save", async function () {
 
   // Set username if it doesn't exist
   if (this.email && !this.username) {
-    this.username = this.email.split("@")[0];
+    const random = String(this.password)
+      .substring(45, 60)
+      .replace("/", "-")
+      .replace(".", "_");
+    const username = this.email.split("@")[0].concat(random);
+    this.username = username;
   }
 });
 
