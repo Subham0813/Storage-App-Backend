@@ -13,34 +13,16 @@ import { File as FileModel } from "../models/file.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { finalizeStorageRecord } from "../utils/storage.js";
 import { badRequest, getFileHash } from "../utils/helper.js";
-import { TIME } from "../misc/constants.js";
-
-const google_client_id = process.env.GOOGLE_CLIENT_ID;
-
-const google_client_secret = process.env.GOOGLE_CLIENT_SECRET;
-
-const google_drive_redirect_uri = process.env.GOOGLE_DRIVE_REDIRECT_URI;
-
-const UPLOAD_ROOT =
-  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
-
-const TMP_ROOT =
-  process.env.TMP_ROOT || path.resolve(process.cwd() + "/uploads/temp");
-
-const CHUNK_SIZE = {
-  GUEST: 16 * 1024,
-  USER: 1024 * 1024,
-  ADMIN: 10 * 1024 * 1024,
-  SUPER_ADMIN: 10 * 1024 * 1024,
-};
-
-const EXPORT_MAP = {
-  "application/vnd.google-apps.document": "application/pdf",
-  "application/vnd.google-apps.spreadsheet":
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.google-apps.presentation":
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-};
+import {
+  TIME,
+  CHUNK_SIZE,
+  UPLOAD_ROOT,
+  TEMP_ROOT,
+  EXPORT_MAP,
+  google_client_id,
+  google_client_secret,
+  google_drive_redirect_uri,
+} from "../misc/constants.js";
 
 const getDriveClient = (integration) => {
   const auth = new google.auth.OAuth2(
@@ -106,8 +88,8 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
               : "Insufficient storage space.",
         });
       } else {
-        const tempPath = path.join(
-          TMP_ROOT,
+        const tempPath = path.resolve(
+          TEMP_ROOT,
           `google-${req.user._id}-${file._id}-${file.name}`,
         );
         await mkdir(path.dirname(tempPath), { recursive: true });
@@ -165,9 +147,8 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
         const file = accepted[i];
 
         if (!session) continue;
-
-        const tempPath = session.tempDir;
-
+        const tempPath = path.resolve(session.tempDir);
+    
         let finalPath = null;
         let bytesRead = 0;
         let driveRes;
@@ -185,10 +166,10 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
               );
             } catch (exportErr) {
               // HANDLE "FILE TOO LARGE" -> FALLBACK TO LINK
-              await appendFile(
-                "./error.log.json",
-                JSON.stringify(exportErr) + "\n",
-              );
+              // await appendFile(
+              //   "./error.log.json",
+              //   JSON.stringify(exportErr) + "\n",
+              // );
               const parsedErr = JSON.parse(exportErr.message).error;
               console.error(parsedErr);
 
@@ -218,7 +199,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
                   parentId: parent._id,
                   disposition: "inline",
                   mimetype: "application/vnd.google-apps.link",
-                  size: 0,
+                  size: 1,
                   inline_preview: false,
                   force_inline_preview: false,
                   meta: null, // No physical file
@@ -236,7 +217,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
 
                 await UploadSession.findByIdAndUpdate(session._id, {
                   status: "imported",
-                  size: 0,
+                  size: 1,
                 });
                 continue; // Skip the rest of the loop for this file
               }
@@ -296,7 +277,11 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
           const detectedMime =
             detected?.mime || file.mime || "application/octet-stream";
 
-          finalPath = path.join(UPLOAD_ROOT, parent.userId._id.toString(), hash);
+          finalPath = path.resolve(
+            UPLOAD_ROOT,
+            parent.userId._id.toString(),
+            hash,
+          );
           await mkdir(path.dirname(finalPath), { recursive: true });
 
           const existingRecord = await FileModel.findOne({
@@ -327,43 +312,44 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
         } catch (err) {
           console.error(`Import failed for ${file.filename}: ${err.message}`);
 
-          const logEntry = {
-            id: crypto.randomUUID().replaceAll("-", ""),
-            timestamp: new Date().toISOString(),
-            url: req.originalUrl,
-            method: req.method,
-            user: req.user ? req.user.email || req.user._id : undefined,
-            error: {
-              name: err.name,
-              message: err.message,
-              stack: err.stack,
-              code: err.code,
-              details: err?.details || err?.errInfo || undefined,
-              status: err.status || undefined,
-              type: err.constructor ? err.constructor.name : undefined,
-            },
-            requestBody: req.body,
-            query: req.query,
-            params: req.params,
-          };
-          try {
-            await appendFile(
-              "./error.log.json",
-              JSON.stringify(logEntry) + ",\n",
-            );
-          } catch (e) {
-            console.error("Logging failed", e);
-          }
+          // const logEntry = {
+          //   id: crypto.randomUUID().replaceAll("-", ""),
+          //   timestamp: new Date().toISOString(),
+          //   url: req.originalUrl,
+          //   method: req.method,
+          //   user: req.user ? req.user.email || req.user._id : undefined,
+          //   error: {
+          //     name: err.name,
+          //     message: err.message,
+          //     stack: err.stack,
+          //     code: err.code,
+          //     details: err?.details || err?.errInfo || undefined,
+          //     status: err.status || undefined,
+          //     type: err.constructor ? err.constructor.name : undefined,
+          //   },
+          //   requestBody: req.body,
+          //   query: req.query,
+          //   params: req.params,
+          // };
+          // try {
+          //   await appendFile(
+          //     "./error.log.json",
+          //     JSON.stringify(logEntry) + ",\n",
+          //   );
+          // } catch (e) {
+          //   console.error("Logging failed", e);
+          // }
 
           // If file moved to storage, and DB failed -> Delete from storage
           if (finalPath) {
             try {
-              await unlink(path.normalize(finalPath));
+              await unlink(path.resolve(finalPath));
             } catch (e) {}
           }
 
           // Cleanup temp file
-          if (existsSync(tempPath)) await unlink(tempPath).catch(() => {});
+          if (existsSync(tempPath))
+            await unlink(path.resolve(tempPath)).catch(() => {});
 
           // Session failed
           await UploadSession.updateOne(

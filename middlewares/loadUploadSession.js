@@ -13,7 +13,7 @@ import mongoose from "mongoose";
 export const loadUploadSession = async (req, res, next) => {
   const { sessionId } = req.params;
 
-  if (!mongoose.Types.ObjectId.isValid(sessionId)) {
+  if (!mongoose.isValidObjectId(sessionId)) {
     return res.status(400).json({ message: "Invalid sessionId." });
   }
 

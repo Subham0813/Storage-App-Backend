@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { SUPER_ROLES } from "../misc/constants.js";
 import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
@@ -10,6 +11,8 @@ export const getShareInfo = (path) => {
         path === "file" ? UserFile : path === "dir" ? Directory : null;
       if (!Model) next(err);
 
+      if (!mongoose.isValidObjectId(req.params.id))
+        return badRequest(res, "Invalid id.");
       const { _id: userId, email } = req.user;
       const item = await Model.findOne({
         _id: req.params.id,
@@ -23,10 +26,9 @@ export const getShareInfo = (path) => {
       const isShared = hasAccess(item, ["VIEWER", "EDITOR"], email);
 
       if (!item.sharedAt)
-        return res.status(200).json({
+        return res.status(204).json({
           success: true,
           message: "Item is not shared.",
-          data: { shareInfo: null },
         });
 
       if (!isShared && !isOwner && !SUPER_ROLES.includes(req.user?.role))

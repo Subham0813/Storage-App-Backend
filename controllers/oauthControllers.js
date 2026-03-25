@@ -117,6 +117,7 @@ export const googleOAuthHandler = async (req, res, next) => {
 
     res.cookie("oauth_state_google", state, {
       httpOnly: true,
+      signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: TIME.TEN_MINUTES,
@@ -124,6 +125,7 @@ export const googleOAuthHandler = async (req, res, next) => {
 
     res.cookie("oauth_pkce_google", codeVerifier, {
       httpOnly: true,
+      signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: TIME.TEN_MINUTES,
@@ -132,6 +134,7 @@ export const googleOAuthHandler = async (req, res, next) => {
     if (req.user?._id) {
       res.cookie("oauth_user_google", req.user._id, {
         httpOnly: true,
+        signed: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
         maxAge: TIME.TEN_MINUTES,
@@ -164,9 +167,9 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
   try {
     const { code, state, error } = req.query;
 
-    const savedState = req.cookies.oauth_state_google;
-    const codeVerifier = req.cookies.oauth_pkce_google;
-    const userId = req.cookies.oauth_user_google;
+    const savedState = req.signedCookies.oauth_state_google;
+    const codeVerifier = req.signedCookies.oauth_pkce_google;
+    const userId = req.signedCookies.oauth_user_google;
 
     if (!code || !state || !savedState || !codeVerifier) {
       return res.status(403).json({ message: "Invalid OAuth request.", error });
@@ -229,7 +232,6 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
                 authProviders: ["google"],
                 googleId: sub,
                 email,
-                username: email.split("@")[0],
                 name,
                 avatar: picture,
                 isEmailVerified: email_verified,
@@ -256,7 +258,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
             updateQuery.$push = { authProviders: { $each: ["google"] } };
         }
 
-        updateQuery.$set.isLogged = true
+        updateQuery.$set.isLogged = true;
         await User.findByIdAndUpdate(user._id, updateQuery, { session });
 
         if (!userId) {
@@ -305,6 +307,7 @@ export const githubOAuthHandler = async (req, res, next) => {
     // CSRF state
     res.cookie("oauth_state_github", state, {
       httpOnly: true,
+      signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: TIME.TEN_MINUTES,
@@ -313,6 +316,7 @@ export const githubOAuthHandler = async (req, res, next) => {
     // PKCE verifier
     res.cookie("oauth_pkce_github", codeVerifier, {
       httpOnly: true,
+      signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: TIME.TEN_MINUTES,
@@ -322,6 +326,7 @@ export const githubOAuthHandler = async (req, res, next) => {
       console.log("userId found....");
       res.cookie("oauth_user_github", req.user._id, {
         httpOnly: true,
+        signed: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
         maxAge: TIME.TEN_MINUTES,
@@ -355,9 +360,9 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
   try {
     const { code, state, error } = req.query;
 
-    const savedState = req.cookies.oauth_state_github;
-    const codeVerifier = req.cookies.oauth_pkce_github;
-    const userId = req.cookies.oauth_user_google;
+    const savedState = req.signedCookies.oauth_state_github;
+    const codeVerifier = req.signedCookies.oauth_pkce_github;
+    const userId = req.signedCookies.oauth_user_google;
 
     if (!code || !state || !savedState || !codeVerifier) {
       return res.status(403).json({ message: "Invalid OAuth request.", error });
@@ -420,7 +425,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
             updateQuery.$push = { authProviders: { $each: ["github"] } };
         }
 
-        updateQuery.$set.isLogged = true
+        updateQuery.$set.isLogged = true;
         await User.findByIdAndUpdate(user._id, updateQuery, { session });
 
         if (!userId) {
@@ -478,6 +483,7 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
 
     res.cookie("oauth_state_google", state, {
       httpOnly: true,
+      signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: TIME.TEN_MINUTES,
@@ -485,6 +491,7 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
 
     res.cookie("oauth_pkce_google", codeVerifier, {
       httpOnly: true,
+      signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: TIME.TEN_MINUTES,
@@ -524,8 +531,8 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
   try {
     const { code, state, error } = req.query;
 
-    const savedState = req.cookies.oauth_state_google;
-    const codeVerifier = req.cookies.oauth_pkce_google;
+    const savedState = req.signedCookies.oauth_state_google;
+    const codeVerifier = req.signedCookies.oauth_pkce_google;
 
     if (!code || !state || !savedState || !codeVerifier) {
       return res.status(403).json({ message: "Invalid OAuth request.", error });
@@ -563,9 +570,8 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
             },
             $unset: { stateCreatedAt: "" },
           },
-          { upsert: true , new: true},
-        )
-          .lean();
+          { upsert: true, new: true },
+        ).lean();
 
         if (!drive) {
           const error = new Error("Drive intregation failed.");

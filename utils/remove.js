@@ -4,6 +4,7 @@ import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { File as FileModel } from "../models/file.model.js";
 import { User } from "../models/user.model.js";
+import { existsSync } from "fs";
 
 const UPLOAD_ROOT =
   process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
@@ -75,7 +76,7 @@ export const recursiveDelete = async (
   visited,
   session,
   filesToDelete,
-  userId
+  userId,
 ) => {
   try {
     if (visited.has(parentId.toString())) return;
@@ -111,8 +112,13 @@ export const recursiveDelete = async (
         //delete from db
         await FileModel.deleteOne({ _id: updt._id }).session(session);
         //delete  from local
-        const absolutePath = path.join(UPLOAD_ROOT, file.meta.objectKey);
-        filesToDelete.push(absolutePath);
+        const absolutePath = path.resolve(UPLOAD_ROOT, file.meta.objectKey);
+        if (
+          !absolutePath.startsWith(path.resolve(UPLOAD_ROOT) + path.sep) ||
+          !existsSync(filePath)
+        )
+          continue;
+        else filesToDelete.push(absolutePath);
       }
     }
 

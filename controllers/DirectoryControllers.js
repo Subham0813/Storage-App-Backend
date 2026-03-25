@@ -17,8 +17,9 @@ import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { shareDirectoryRecursive } from "../utils/share.js";
 import { base64URLEncode } from "./oauthControllers.js";
-import { SUPER_ROLES, EMAIL_REGEX } from "../misc/constants.js";
-
+import { SUPER_ROLES } from "../misc/constants.js";
+import { filenameSchema } from "../Schemas/userSchema.js";
+import { emailSchema } from "../Schemas/authSchema.js";
 
 // API Handlers
 /**
@@ -284,10 +285,10 @@ export const downloadDirectoryHandler = async (req, res, next) => {
  *   - `targetId` must be a valid directory id and user must have create permissions on it
  */
 export const createDirectoryHandler = async (req, res, next) => {
-  const { name } = req.body;
-  if (!name || !/^[^\\\\/:*?"<>|]+$/.test(name.toString()))
-    return badRequest(res, "Invalid payload.");
+  const { success, data, error } = filenameSchema.safeParse(req.body);
+  if (!success) return badRequest(res, error.issues[0].message);
 
+  const { name } = data;
   const { _id: targetDirId, userId, publicRole, sharedWith } = req.parent;
 
   try {
@@ -312,7 +313,7 @@ export const createDirectoryHandler = async (req, res, next) => {
         [newDir] = await Directory.create(
           [
             {
-              dirname: req.body.name ? req.body.name.toString() : "Untitled",
+              dirname: name,
               parentId: targetDirId,
               userId,
               isDeleted: false,
@@ -365,18 +366,18 @@ export const createDirectoryHandler = async (req, res, next) => {
  * what it do: Rename a directory if requester is owner or has EDITOR access.
  * requirements:
  *   - req.params: { id: string } (directory id)
- *   - req.body: { newname: string }
+ *   - req.body: { name: string }
  *   - req.user: authenticated user object provided by `validateSession`
  */
 export const renameDirectoryHandler = async (req, res, next) => {
-  const { newname } = req.body;
-  if (!newname || !/^[^\\\\/:*?"<>|]+$/.test(newname.toString()))
-    return badRequest(res, "Invalid payload.");
-
-  if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
-
   try {
+    const { success, data, error } = filenameSchema.safeParse(req.body);
+    if (!success) return badRequest(res, error.issues[0].message);
+
+    const { name } = data;
+    if (!mongoose.isValidObjectId(req.params.id))
+      return badRequest(res, "Invalid id.");
+
     const directory = await Directory.findOne({
       _id: req.params.id,
       isDeleted: false,
@@ -397,7 +398,7 @@ export const renameDirectoryHandler = async (req, res, next) => {
       session.withTransaction(async () => {
         updated = await Directory.findOneAndUpdate(
           { _id: directory._id, isDeleted: false },
-          { dirname: newname.toString() },
+          { dirname: name },
           { session, new: true },
         )
           .select("_id parentId dirname")
@@ -726,13 +727,13 @@ export const deleteDirectoryHandler = async (req, res, next) => {
  * what it do: Change sharing settings for a directory — set `publicRole` and add/update `sharedWith` entries; only the directory owner may perform this action.
  * requirements:
  *   - req.params: { id: string } (directory id)
- *   - req.body: { emailsWithRole?: [{ email, role }], notify?: boolean }
+ *   - req.body: { emailsWithRole?: [{ email, role }], notify?: boolean, message?: string }
  *   - req.user: authenticated user object provided by `validateSession` (must be directory owner)
- *   - When used with `shareHandlerPreProcessor` middleware, expects `req.shareConfig` and responds with `{ accepted, skipped, shareToken }`
+ *   - When used with `shareHandlerPreProcessor` middleware, expects `req.shareConfig` and responds with `{ accepted, shareToken }`
  */
 export const shareDirectoryHandler = async (req, res, next) => {
   const { notify, message } = req.body;
-  const { updateQuery, emailsToUpdate, accepted, skipped } = req.shareConfig;
+  const { updateQuery, emailsToUpdate, accepted } = req.shareConfig;
 
   const session = await mongoose.startSession();
   let shareToken = null;
@@ -803,10 +804,8 @@ export const shareDirectoryHandler = async (req, res, next) => {
       message: "Permission changed.",
       data: {
         sharedWith: updated.sharedWith,
-        publicRole: updated.publicRole,
         depth,
         accepted,
-        skipped,
         token: shareToken,
       },
     });
@@ -832,7 +831,9 @@ export const directoryPublicRoleHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return badRequest(res, "Invalid id.");
 
-  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
+  const formattedPublicRole = publicRole
+    ? String(publicRole).toUpperCase()
+    : undefined;
   if (!formattedPublicRole || !allowedPublicRoles.includes(formattedPublicRole))
     return badRequest(res, "Invalid `publicRole`.");
 
@@ -901,21 +902,31 @@ export const getNewDirectoryShareToken = async (req, res, next) => {
     return badRequest(res, "Invalid id.");
 
   const shareToken = base64URLEncode(crypto.randomBytes(32));
+  const session = await mongoose.startSession();
   try {
-    const directory = await Directory.findOneAndUpdate(
-      {
-        _id: req.params.id,
-        userId: req.user._id,
-        isDeleted: false,
-        sharedBy: { $ne: "none" },
-      },
-      { $set: { shareToken, sharedBy: "user" } },
-      { new: true },
-    )
-      .select("_id")
-      .lean();
+    await session.withTransaction(async () => {
+      const dir = await Directory.findOneAndUpdate(
+        {
+          _id: req.params.id,
+          userId: req.user._id,
+          isDeleted: false,
+          sharedBy: { $ne: "none" },
+        },
+        { $set: { shareToken, sharedBy: "user" } },
+        { session, new: true },
+      )
+        .select("_id")
+        .lean();
+      if (!dir) {
+        const error = new Error("Directory not exists or non-shared.");
+        error.statusCode = 404;
+        throw error;
+      }
 
-    if (!directory) return notFound(res, "Directory not found.");
+      await shareDirectoryRecursive(dir._id, session, [], {
+        $set: { shareToken },
+      });
+    });
 
     return res.status(200).json({
       success: true,
@@ -923,7 +934,11 @@ export const getNewDirectoryShareToken = async (req, res, next) => {
       data: { newToken: shareToken },
     });
   } catch (err) {
+    if (err.statusCode)
+      return responsePayload(res, err.statusCode, err.message);
     next(err);
+  } finally {
+    session.endSession();
   }
 };
 
@@ -936,14 +951,7 @@ export const getNewDirectoryShareToken = async (req, res, next) => {
  *   - req.user: authenticated user object provided by `validateSession`
  */
 export const revokeAccessDirectoryHandler = async (req, res, next) => {
-  const { emails, publicRole } = req.body;
-
-  if (!emails || !Array.isArray(emails))
-    return badRequest(res, "Invalid payload");
-
-  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
-  if (formattedPublicRole && formattedPublicRole !== "NONE")
-    return badRequest(res, "Invalid `publicRole`.");
+  const { updateQuery, emailsToUpdate, formattedPublicRole } = req.revokeConfig;
 
   try {
     const directory = await Directory.findOne({
@@ -962,22 +970,6 @@ export const revokeAccessDirectoryHandler = async (req, res, next) => {
         403,
         "Cannot perform revoke on a non-shared item.",
       );
-
-    const skipped = [];
-    const emailsToUpdate = [];
-
-    emails.forEach((email) => {
-      const ce = email.toLowerCase().trim();
-      if (!EMAIL_REGEX.test(ce))
-        skipped.push(ce);
-      else emailsToUpdate.push(ce);
-    });
-
-    let updateQuery = {};
-    if (emailsToUpdate.length > 0)
-      updateQuery.$pull = { sharedWith: { email: { $in: emailsToUpdate } } };
-    if (formattedPublicRole)
-      updateQuery.$set = { publicRole: formattedPublicRole };
 
     const session = await mongoose.startSession();
     let depth = 0;
@@ -1052,9 +1044,9 @@ export const revokeAccessDirectoryHandler = async (req, res, next) => {
 export const makeDirectoryStarred = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return badRequest(res, "Invalid id.");
+
   const { starred } = req.body;
-  if (typeof starred !== "boolean")
-    return badRequest(res, "Invalid  `starred`.");
+  if (typeof starred !== "boolean") return badRequest(res, "Invalid payload.");
   try {
     const dir = await Directory.findOneAndUpdate(
       {

@@ -20,6 +20,7 @@ import { loadParentDir } from "../middlewares/loadParentDirectory.js";
 import { shareHandlerPreProcessor } from "../middlewares/shareHandlerPreProcess.js";
 import { getShareInfo } from "../middlewares/getShareInfo.js";
 import { restrictRootOperations } from "../middlewares/restrictOperations.js";
+import { revokeAccessPreProcessor } from "../middlewares/revokeAccessPreProcess.js";
 
 const router = Router();
 
@@ -37,7 +38,7 @@ router.patch("/move/:id", loadParentDir, moveFileHandler); //move
 router.patch("/trash/:id", moveToBinHandler); //trash
 router.patch("/restore/:id", restoreFileHandler); //restore
 router.patch("/public-role/:id", filePublicRoleHandler); //change public-role
-router.patch("/revoke-access/:id", revokeAccessFileHandler); //revoke access
+router.patch("/revoke-access/:id", revokeAccessPreProcessor, revokeAccessFileHandler); //revoke access
 router.patch("/starred/:id", makeFileStarred);
 
 router.delete("/delete/:id", deleteFileHandler); //delete

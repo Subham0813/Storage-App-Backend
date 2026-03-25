@@ -115,7 +115,7 @@ export const changeUserRole = async (req, res, next) => {
   try {
     const { id } = req.params;
     let requestedRole = req.body.role || req.query.role;
-    requestedRole = requestedRole.toUpperCase();
+    requestedRole = String(requestedRole).toUpperCase();
 
     const allowedRoles = ["GUEST", "USER", "ADMIN"];
     if (!requestedRole || !allowedRoles.includes(requestedRole))

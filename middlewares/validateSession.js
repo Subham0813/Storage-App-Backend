@@ -14,6 +14,31 @@ import { DriveIntegration } from "../models/integration.model.js";
  *   - Sets req.user to authenticated user object from session
  */
 
+const ALLOWED_ORIGINS = new Set([
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://10.114.2.153:5173",
+]);
+
+const MUTATING_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
+export const verifyCsrfOrigin = (req, res, next) => {
+  if (
+    process.env.NODE_ENV === "production" &&
+    MUTATING_METHODS.has(req.method)
+  ) {
+    const origin = req.headers["origin"];
+    const referer = req.headers["referer"];
+    const source = origin ?? (referer ? new URL(referer).origin : null);
+    if (!source || !ALLOWED_ORIGINS.has(source))
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: invalid request origin.",
+      });
+  }
+  next();
+};
+
 export const validateSession = async (req, res, next) => {
   try {
     const { sid } = req.signedCookies;

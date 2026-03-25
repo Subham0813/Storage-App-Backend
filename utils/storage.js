@@ -13,6 +13,7 @@ import { Directory } from "../models/directory.model.js";
 import { User } from "../models/user.model.js";
 import mongoose from "mongoose";
 import { createHash } from "node:crypto";
+import { TIME } from "../misc/constants.js";
 
 /**
  * Utility: mergeFileChunks
@@ -165,7 +166,7 @@ export const finalizeStorageRecord = async ({
 
       await UploadSession.findByIdAndUpdate(
         upload._id,
-        { status, expiresAt: new Date(Date.now() + 60000) },
+        { status, expiresAt: new Date(Date.now() + TIME.ONE_MINUTE) },
         { session },
       );
 

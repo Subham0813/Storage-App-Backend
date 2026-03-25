@@ -1,6 +1,7 @@
 import express from "express";
 import serveFavicon from "serve-favicon";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 
 import adminRoutes from "./routes/adminRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
@@ -12,11 +13,12 @@ import uploadRoutes from "./routes/uploadRoutes.js";
 import importDriveRoutes from "./routes/importDriveRoutes.js";
 import shareRoutes from "./routes/shareRoutes.js";
 
-import { validateSession } from "./middlewares/validateSession.js";
-
-import connectMongoose from "./configs/connect.js";
-import cookieParser from "cookie-parser";
+import {
+  validateSession,
+  verifyCsrfOrigin,
+} from "./middlewares/validateSession.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
+import connectMongoose from "./configs/connect.js";
 
 try {
   await connectMongoose();
@@ -25,7 +27,12 @@ try {
   const port = process.env.PORT || 4000;
 
   app.use(serveFavicon(import.meta.dirname + "/public/favicon.ico"));
-  app.use(cors({ origin: "http://localhost:5173", credentials: true }));
+  app.use(
+    cors({
+      origin: [process.env.ALLOWED_ORIGINS],
+      credentials: true,
+    }),
+  );
 
   app.use(cookieParser(process.env.COOKIE_SECRET));
 
@@ -33,13 +40,12 @@ try {
   app.use("/api/oauth", express.json(), oauthRoutes);
   app.use("/api/uploads", validateSession, uploadRoutes);
 
-  app.use(express.json());
-  app.use("/api/shared", shareRoutes);
-  app.use("/api/import", validateSession, importDriveRoutes);
-  app.use("/api/home", validateSession, homeRoutes);
-  app.use("/api/files", validateSession, fileRoutes);
-  app.use("/api/directories", validateSession, directoryRoutes);
-  app.use("/api/admin", validateSession, adminRoutes);
+  app.use(express.json(), verifyCsrfOrigin, validateSession);
+  app.use("/api/import", importDriveRoutes);
+  app.use("/api/home", homeRoutes);
+  app.use("/api/files", fileRoutes);
+  app.use("/api/directories", directoryRoutes);
+  app.use("/api/admin", adminRoutes);
 
   // 404 handler
   app.use((req, res) => {

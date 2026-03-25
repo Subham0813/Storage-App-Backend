@@ -48,7 +48,7 @@ export const requestOtpHandler = async (req, res, next) => {
         ? authError.issues.map((err) => err.message).join(", ")
         : "";
 
-    console.log(error, authError);
+    // console.log(error, authError);
     if (errorMessage.length > 0) {
       return responsePayload(res, 400, errorMessage);
     }

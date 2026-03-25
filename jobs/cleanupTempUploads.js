@@ -3,7 +3,7 @@ import path from "path";
 import { TIME } from "../misc/constants.js";
 
 const TEMP_ROOT = path.resolve(process.cwd(), "uploads/temp");
-const MAX_AGE_MS = TIME.TWO_HOURS;
+const MAX_AGE_MS = TIME.ONE_DAY;
 
 export async function cleanupTempUploads() {
   console.log("....Running cleanupTempUploads....\n")
@@ -12,7 +12,7 @@ export async function cleanupTempUploads() {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
 
-    const dirPath = path.join(TEMP_ROOT, entry.name);
+    const dirPath = path.resolve(TEMP_ROOT, entry.name);
     const stats = await stat(dirPath);
 
     const age = Date.now() - stats.mtimeMs;

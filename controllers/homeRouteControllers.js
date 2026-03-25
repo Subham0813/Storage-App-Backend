@@ -6,7 +6,7 @@ import { File } from "../models/file.model.js";
 import { getUserPayload } from "../utils/helper.js";
 import { User } from "../models/user.model.js";
 import { DriveIntegration } from "../models/integration.model.js";
-import {UPLOAD_ROOT} from "../misc/constants.js"
+import { UPLOAD_ROOT } from "../misc/constants.js";
 
 /**
  * path: /api/home/user
@@ -20,7 +20,7 @@ export const getUserHandler = async (req, res, next) => {
     const integration = await DriveIntegration.findOne({ userId: user._id })
       .select("provider -_id")
       .lean();
-    user.integrations = [integration?.provider || null];
+    user.integrations = integration?.provider ? [integration?.provider] : [];
     return res.status(200).json({ success: true, data: { user } });
   } catch (err) {
     next(err);
@@ -159,8 +159,8 @@ export const getSharedWithHandler = async (req, res, next) => {
   const userId = req.user._id;
   const userEmail = req.user.email;
 
-  const limit = parseInt(req.query.limit) || 50;
-  const skip = parseInt(req.query.skip) || 0;
+  const limit = parseInt(req.query.limit) || parseInt(req.body.limit) || 50;
+  const skip = parseInt(req.query.skip) || parseInt(req.body.limit) || 0;
 
   const sharedCriteria = {
     isDeleted: false,

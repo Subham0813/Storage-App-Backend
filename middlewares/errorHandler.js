@@ -11,37 +11,31 @@ import crypto from "crypto";
  *   - Logs errors to error.log.json file if err.errorResponse exists
  */
 export const errorHandler = async (err, req, res, next) => {
-  // Build a comprehensive error log entry
-  const logEntry = {
-    id: crypto.randomUUID().replaceAll("-", ""),
-    timestamp: new Date().toISOString(),
-    url: req.originalUrl,
-    method: req.method,
-    user: req.user ? req.user.email || req.user._id : undefined,
-    error: {
-      name: err.name,
-      message: err.message,
-      stack: err.stack,
-      code: err.code,
-      details: err?.details || err?.errInfo || undefined,
-      status: err.status || undefined,
-      type: err.constructor ? err.constructor.name : undefined,
-    },
-    requestBody: req.body,
-    query: req.query,
-    params: req.params,
-  };
-  try {
-    await appendFile("./error.log.json", JSON.stringify(logEntry) + ",\n");
-  } catch (e) {
-    console.error("Logging failed", e);
-  }
-  // const errmsg =
-  //   err?.errInfo?.details?.schemaRulesNotSatisfied[0]
-  //     ?.propertiesNotSatisfied[0]?.details[0]?.reason ||
-  //   err.errmsg ||
-  //   err.message;
-  // console.error(errmsg);
+  
+  // const logEntry = {
+  //   id: crypto.randomUUID().replaceAll("-", ""),
+  //   timestamp: new Date().toISOString(),
+  //   url: req.originalUrl,
+  //   method: req.method,
+  //   user: req.user ? req.user.email || req.user._id : undefined,
+  //   error: {
+  //     name: err.name,
+  //     message: err.message,
+  //     stack: err.stack,
+  //     code: err.code,
+  //     details: err?.details || err?.errInfo || undefined,
+  //     status: err.status || undefined,
+  //     type: err.constructor ? err.constructor.name : undefined,
+  //   },
+  //   requestBody: req.body,
+  //   query: req.query,
+  //   params: req.params,
+  // };
+  // try {
+  //   await appendFile("./error.log.json", JSON.stringify(logEntry) + ",\n");
+  // } catch (e) {
+  //   console.error("Logging failed", e);
+  // }
 
   // Print error to console for debugging
   if (err instanceof MulterError) {
@@ -85,15 +79,8 @@ export const errorHandler = async (err, req, res, next) => {
     console.error(err);
   }
 
-  // statusCode = 500;
-  // error = "ServerError";
-  // errorType = err.code || err.name || undefined;
-  // message = "Internal server error. Please try again later.";
-
-  // Respond with a generic error message
   return res.status(500).json({
     success: false,
-    // statusCode: 500,
     message: "Internal server error. Please try again later.",
     // error: logEntry.error.name || "ServerError",
     // errorId: logEntry.id,

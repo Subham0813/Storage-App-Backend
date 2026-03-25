@@ -82,8 +82,8 @@ userSchema.pre("save", async function () {
   if (this.email && !this.username) {
     const random = String(this.password)
       .substring(45, 60)
-      .replace("/", "-")
-      .replace(".", "_");
+      .replaceAll("/", "-")
+      .replaceAll(".", "_");
     const username = this.email.split("@")[0].concat(random);
     this.username = username;
   }

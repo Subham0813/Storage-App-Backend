@@ -1,17 +1,17 @@
 import mongoose from "mongoose";
 import { z } from "zod/v4";
 
-const nameSchema = z
+export const nameSchema = z
   .string()
   .min(3, { message: "Name must be between 3 and 100 characters long." })
   .max(100, { message: "Name must be between 3 and 100 characters long." })
-  .regex(/^[a-zA-Z]+ [a-zA-Z]+$/, {
+  .regex(/^[a-zA-Z]+( [a-zA-Z]+)*$/, {
     message: "Name must contain exactly one space between words.",
   });
-const emailSchema = z.email({
+export const emailSchema = z.email({
   message: "Please enter a valid email address.",
 });
-const passwordSchema = z
+export const passwordSchema = z
   .string()
   .min(8)
   .regex(
@@ -21,7 +21,7 @@ const passwordSchema = z
         "Password must contain at least one uppercase letter, one lowercase letter, one number, one symbol and at least 8 characters long.",
     },
   );
-const purposeSchema = z.enum(["login", "register", "forgot-password"], {
+export const purposeSchema = z.enum(["login", "register", "forgot-password"], {
   message: "Purpose must be either login/register/forgot-password.",
 });
 

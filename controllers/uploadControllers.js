@@ -5,10 +5,12 @@ import { UploadSession } from "../models/uploadSession.model.js";
 import { File as FileModel } from "../models/file.model.js";
 import { User } from "../models/user.model.js";
 import { finalizeStorageRecord, mergeFileChunks } from "../utils/storage.js";
-import { badRequest } from "../utils/helper.js";
+import { badRequest, getFileDoc } from "../utils/helper.js";
 import { fileTypeFromFile } from "file-type";
 import mongoose from "mongoose";
-import { TIME, CHUNK_SIZE, TEMP_ROOT, UPLOAD_ROOT} from "../misc/constants.js";
+import { TIME, CHUNK_SIZE, TEMP_ROOT, UPLOAD_ROOT } from "../misc/constants.js";
+import { filenameSchema, uploadInitSchema } from "../Schemas/userSchema.js";
+import { existsSync } from "node:fs";
 
 /**
  * path: /api/uploads/session/create
@@ -20,16 +22,19 @@ import { TIME, CHUNK_SIZE, TEMP_ROOT, UPLOAD_ROOT} from "../misc/constants.js";
  */
 export const initUpload = async (req, res, next) => {
   try {
-    const { name, size, mime } = req.body;
+    const { success, data, error } = uploadInitSchema.safeParse(req.body);
+    if (!success) {
+      const errorMessage = error.issues.map((err) => err.message).join(", ");
+      return badRequest(res, errorMessage);
+    }
+
+    const { name, size, mime } = data;
     const { allotedStorage, usedStorage } = await User.findById(
       req.parent.userId,
     )
       .select("allotedStorage usedStorage")
       .lean();
-
-    const parsedSize = parseInt(size);
-    const remaining = allotedStorage - usedStorage;
-    if (remaining < parsedSize)
+    if (allotedStorage - usedStorage < size)
       return res.status(400).json({
         success: false,
         message: `Insufficient storage for the file : ${name}`,
@@ -37,16 +42,16 @@ export const initUpload = async (req, res, next) => {
       });
 
     const { _id: userId, role } = req.user;
-    const strategy = parsedSize > CHUNK_SIZE[role] ? "chunked" : "direct";
-    const chunkSize = strategy === "chunked" ? CHUNK_SIZE[role] : parsedSize;
+    const strategy = size > CHUNK_SIZE[role] ? "chunked" : "direct";
+    const chunkSize = strategy === "chunked" ? CHUNK_SIZE[role] : size;
     const totalChunks =
-      strategy === "chunked" ? Math.ceil(parsedSize / chunkSize) : 1;
+      strategy === "chunked" ? Math.ceil(size / chunkSize) : 1;
 
     const upload = await UploadSession.create({
       userId,
       parentId: req.parent._id,
       filename: name,
-      size: parsedSize,
+      size,
       mime,
       strategy,
       chunkSize,
@@ -56,10 +61,14 @@ export const initUpload = async (req, res, next) => {
 
     // res.setHeader("x-chunk-index", 0);
     res.status(200).json({
-      uploadId: upload._id,
-      strategy,
-      expectedChunkSize: chunkSize,
-      totalChunks,
+      success: true,
+      message: "Upload record created.",
+      data: {
+        uploadId: upload._id,
+        strategy,
+        expectedChunkSize: chunkSize,
+        totalChunks,
+      },
     });
   } catch (err) {
     next(err);
@@ -88,7 +97,8 @@ export const saveChunk = async (req, res, next) => {
       return badRequest(res, "Wrong chunk indexing.");
 
     const file = req.file;
-    if (!file || file.size === 0) return badRequest(res, "No chunk received.");
+    if (!file || file.size === 0 || !file.path)
+      return badRequest(res, "No chunk received.");
 
     let error = null;
 
@@ -97,6 +107,7 @@ export const saveChunk = async (req, res, next) => {
       if (detected && detected.mime !== req.uploadSession.mime) {
         error = { status: 403, message: "Chunk MIME type mismatch." };
       }
+      mime = detected.mime;
     } else if (totalChunks === uploadedChunks.length) {
       error = { status: 409, message: "All chunks are already uploaded." };
     } else if (uploadedChunks.includes(chunkIndex)) {
@@ -111,13 +122,20 @@ export const saveChunk = async (req, res, next) => {
     }
 
     if (error) {
-      if (file?.path) await unlink(file.path);
+      if (file.path && existsSync(file.path)) await unlink(file.path);
       return res.status(error.status).json({ message: error.message });
     }
 
     const status =
       totalChunks === uploadedChunks.length + 1 ? "uploaded" : "uploading";
-    const td = tempDir || path.join(TEMP_ROOT, _id.toString());
+    const td = path.resolve(TEMP_ROOT, _id.toString());
+
+    if (!td.startsWith(path.resolve(TEMP_ROOT) + path.sep))
+      return next("Invalid session path.");
+
+    const chunkPath = path.resolve(td, `chunk-${chunkIndex}`);
+    if (!chunkPath.startsWith(td + path.sep))
+      return badRequest(res, "Invalid chunk path.");
 
     const updatedUpload = await UploadSession.findByIdAndUpdate(
       _id,
@@ -131,8 +149,6 @@ export const saveChunk = async (req, res, next) => {
       .lean();
 
     await mkdir(td, { recursive: true });
-
-    const chunkPath = path.join(td, `chunk-${chunkIndex}`);
     await rename(file.path, chunkPath);
 
     const progress = Math.round(
@@ -152,7 +168,7 @@ export const saveChunk = async (req, res, next) => {
   } catch (err) {
     // attempt safe cleanup
     try {
-      if (file?.path) await unlink(file.path);
+      if (file?.path) await unlink(path.resolve(file.path));
     } catch (cleanupErr) {
       // ignore cleanup errors
     }
@@ -175,19 +191,15 @@ export const completeUpload = async (req, res, next) => {
   if (uploadedChunks.length !== totalChunks) {
     return res.status(400).json({ message: "Chunks missing." });
   }
-  const mergedPath = path.join(
-    TEMP_ROOT,
-    `${_id.toString()}-merged`,
-  );
+  const mergedPath = path.resolve(TEMP_ROOT, `${_id.toString()}-merged`);
 
   try {
     // 1. Optimized Merge via Streams
     const hash = await mergeFileChunks(uploadedChunks, tempDir, mergedPath);
 
     //2. Pre-Process
-    const detected = await fileTypeFromFile(mergedPath);
-    const detectedMime =
-      detected?.mime || upload.mime || "application/octet-stream";
+    // const detected = await fileTypeFromFile(mergedPath);
+    const detectedMime = upload.mime || "application/octet-stream";
 
     const existingRecord = await FileModel.findOne({ hash })
       .select("_id refCount")
@@ -204,14 +216,11 @@ export const completeUpload = async (req, res, next) => {
 
     //4. Post-Process (storage manage)
     if (finalRec) {
-      await mkdir(
-        path.join(UPLOAD_ROOT, parentId.userId.toString()),
-        {
-          recursive: true,
-        },
-      );
+      await mkdir(path.resolve(UPLOAD_ROOT, parentId.userId.toString()), {
+        recursive: true,
+      });
 
-      const finalPath = path.join(
+      const finalPath = path.resolve(
         UPLOAD_ROOT,
         parentId.userId.toString(),
         hash,
@@ -232,7 +241,7 @@ export const completeUpload = async (req, res, next) => {
         );
     }
 
-    const { meta, isDeleted, deletedAt, ...file } = finalRec;
+    const file = getFileDoc(finalRec);
     return res.status(201).json({
       success: true,
       message: "File uploaded.",

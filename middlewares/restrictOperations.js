@@ -12,7 +12,7 @@ import { forbidden } from "../utils/helper.js";
 export const restrictRootOperations = async (req, res, next) => {
   try {
     const rootId = req.user?.root?.toString();
-    const paramId = req.params?.id;
+    const paramId = req.params?.id.toString();
 
     if ((paramId && !mongoose.isValidObjectId(paramId)) || rootId === paramId) {
       return forbidden(res);

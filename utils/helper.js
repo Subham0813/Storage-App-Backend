@@ -121,6 +121,7 @@ export const getDbData = ({ dirId, dirName, userId, isDeleted }) => {
  *   - Returns: object with { _id, name, username, email, deviceCount, usedStorage, ... }
  */
 export const getUserPayload = (user) => {
+  if (!user) return null;
   const {
     _id,
     name,
@@ -137,7 +138,7 @@ export const getUserPayload = (user) => {
     createdAt,
     updatedAt,
     role,
-    avatar
+    avatar,
   } = user;
 
   return {
@@ -156,7 +157,7 @@ export const getUserPayload = (user) => {
     createdAt,
     updatedAt,
     role,
-    avatar
+    avatar,
   };
 };
 

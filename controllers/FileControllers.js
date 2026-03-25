@@ -4,7 +4,6 @@ import crypto from "crypto";
 import { existsSync, createReadStream, statSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { getFileDoc, hasAccess } from "../utils/helper.js";
-
 import { File as FileModel } from "../models/file.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
@@ -15,13 +14,10 @@ import {
   forbidden,
   notFound,
 } from "../utils/helper.js";
-import { SUPER_ROLES, EMAIL_REGEX } from "../misc/constants.js";
-
+import { SUPER_ROLES } from "../misc/constants.js";
 import { base64URLEncode } from "./oauthControllers.js";
-
-//env variables
-const UPLOAD_ROOT =
-  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
+import { UPLOAD_ROOT } from "../misc/constants.js";
+import { filenameSchema } from "../Schemas/userSchema.js";
 
 //API Handlers
 
@@ -72,7 +68,7 @@ export const getFileInfoHandler = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "File found.",
-      data: { ...fileData, owner },
+      data: { file: { ...fileData, owner } },
     });
   } catch (err) {
     next(err);
@@ -122,15 +118,14 @@ export const previewFileHandler = async (req, res, next) => {
     )
       return forbidden(res);
 
-    const filePath = path.join(
+    const filePath = path.resolve(
       UPLOAD_ROOT,
       file.userId.toString(),
       file.meta.objectKey,
     );
-
-    // Safety check: ensure inside upload root
-    if (!existsSync(filePath))
-      return notFound(res, "File missing from server.");
+    if (!filePath.startsWith(path.resolve(UPLOAD_ROOT) + path.sep))
+      return badRequest(res, "Invalid file path.");
+    if (!existsSync(filePath)) return next("File missing from server.");
 
     //check preview/forcePreview
     if (file.disposition !== "inline") {
@@ -243,15 +238,14 @@ export const downloadFileHandler = async (req, res, next) => {
       return res.status(200).json({ success: true, data: file.linkMeta });
     }
 
-    const filePath = path.join(
+    const filePath = path.resolve(
       UPLOAD_ROOT,
       file.userId.toString(),
       file.meta.objectKey,
     );
-
-    // Safety check: ensure inside upload root
-    if (!existsSync(filePath))
-      return notFound(res, "File missing from server.");
+    if (!filePath.startsWith(path.resolve(UPLOAD_ROOT) + path.sep))
+      return badRequest(res, "Invalid file path.");
+    if (!existsSync(filePath)) return next("File missing from server.");
 
     res.writeHead(200, {
       "Content-Length": statSync(filePath).size,
@@ -278,20 +272,18 @@ export const downloadFileHandler = async (req, res, next) => {
  * what it do: Rename a file if requester is owner or has EDITOR access.
  * requirements:
  *   - req.params: { id: string }
- *   - req.body: { newname: string }
+ *   - req.body: { name: string }
  *   - req.user: authenticated user object provided by `validateSession`
  */
 export const renameFileHandler = async (req, res, next) => {
-  let { newname } = req.body;
-
-  if (!newname || !/^[^\\\\/:*?"<>|]+$/.test(newname.toString()))
-    return badRequest(res, "Invalid payload.");
-
-  if (!mongoose.isValidObjectId(req.params.id)) {
-    return badRequest(res, "Invalid id.");
-  }
-
   try {
+    const { success, data, error } = filenameSchema.safeParse(req.body);
+    if (!success) return badRequest(res, error.issues[0].message);
+
+    if (!mongoose.isValidObjectId(req.params.id))
+      return badRequest(res, "Invalid id.");
+
+    const { name } = data;
     const file = await UserFile.findOne({
       _id: req.params.id,
       isDeleted: false,
@@ -316,7 +308,7 @@ export const renameFileHandler = async (req, res, next) => {
 
     const renamed = await UserFile.findOneAndUpdate(
       { _id: file._id, isDeleted: false },
-      { $set: { filename: newname } },
+      { $set: { filename: name } },
       { new: true },
     )
       .select("_id filename")
@@ -657,48 +649,54 @@ export const deleteFileHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return badRequest(res, "Invalid id.");
 
-  const session = await mongoose.startSession();
-  let filePathToDelete = null;
   try {
-    await session.withTransaction(async () => {
-      const file = await UserFile.findOneAndDelete({
-        _id: req.params.id,
-        userId: req.user._id,
-      })
-        .select("userId parentId size meta")
-        .populate({ path: "meta", select: "objectKey" })
-        .session(session)
-        .lean();
+    const session = await mongoose.startSession();
+    let filePathToDelete = null;
+    try {
+      await session.withTransaction(async () => {
+        const file = await UserFile.findOneAndDelete({
+          _id: req.params.id,
+          userId: req.user._id,
+        })
+          .select("userId parentId size meta")
+          .populate({ path: "meta", select: "objectKey" })
+          .session(session)
+          .lean();
 
-      await Directory.findOneAndUpdate(
-        { _id: file.parentId },
-        { $inc: { size: -file.size } },
-        { session },
-      );
-
-      await User.findOneAndUpdate(
-        { _id: req.user._id },
-        { $inc: { usedStorage: -file.size } },
-        { session },
-      );
-
-      let updatedFile = null;
-      if (file.meta)
-        updatedFile = await FileModel.findOneAndUpdate(
-          { _id: file.meta._id, refCount: { $gt: 0 } },
-          { $inc: { refCount: -1 } },
-          { session, new: true },
-        ).select("_id objectKey refCount");
-
-      if (updatedFile && updatedFile.refCount < 1) {
-        await FileModel.deleteOne({ _id: updatedFile._id });
-        filePathToDelete = path.join(
-          UPLOAD_ROOT,
-          file.userId.toString(),
-          file.meta.objectKey,
+        await Directory.findOneAndUpdate(
+          { _id: file.parentId },
+          { $inc: { size: -file.size } },
+          { session },
         );
-      }
-    });
+
+        await User.findOneAndUpdate(
+          { _id: req.user._id },
+          { $inc: { usedStorage: -file.size } },
+          { session },
+        );
+
+        let updatedFile = null;
+        if (file.meta)
+          updatedFile = await FileModel.findOneAndUpdate(
+            { _id: file.meta._id, refCount: { $gt: 0 } },
+            { $inc: { refCount: -1 } },
+            { session, new: true },
+          ).select("_id objectKey refCount");
+
+        if (updatedFile && updatedFile.refCount < 1) {
+          await FileModel.deleteOne({ _id: updatedFile._id });
+          const deletePath = path.resolve(
+            UPLOAD_ROOT,
+            file.userId.toString(),
+            file.meta.objectKey,
+          );
+          if (deletePath.startsWith(path.resolve(UPLOAD_ROOT) + path.sep))
+            filePathToDelete = deletePath;
+        }
+      });
+    } finally {
+      await session.endSession();
+    }
 
     if (filePathToDelete) {
       unlink(filePathToDelete).catch((err) => {
@@ -719,8 +717,6 @@ export const deleteFileHandler = async (req, res, next) => {
     });
   } catch (err) {
     next(err);
-  } finally {
-    if (session) await session.endSession();
   }
 };
 
@@ -729,7 +725,7 @@ export const deleteFileHandler = async (req, res, next) => {
  * what it do: Change sharing settings for a file — set `publicRole` and add/update `sharedWith` entries; only the file owner may perform this action.
  * requirements:
  *   - req.params: { id: string } (directory id)
- *   - req.body: { emailsWithRole?: [{ email, role }], publicRole?: 'VIEWER'|'NONE', notify?: boolean }
+ *   - req.body: { emailsWithRole?: [{ email, role }], publicRole?: 'VIEWER'|'NONE', notify?: boolean, message?; string}
  *   - req.user: authenticated user object provided by `validateSession` (must be directory owner)
  *   - When used with `shareHandlerPreProcessor` middleware, expects `req.shareConfig` and responds with `{ accepted, skipped, shareToken }`
  */
@@ -796,7 +792,7 @@ export const shareFileHandler = async (req, res, next) => {
       message: "Permission changed.",
       data: {
         sharedWith: updated.sharedWith,
-        skipped,
+        accepted,
         token: shareToken,
       },
     });
@@ -823,7 +819,9 @@ export const filePublicRoleHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return badRequest(res, "Invalid id.");
 
-  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
+  const formattedPublicRole = publicRole
+    ? String(publicRole).toUpperCase()
+    : undefined;
   if (!formattedPublicRole || !allowedPublicRoles.includes(formattedPublicRole))
     return badRequest(res, "Invalid `publicRole`.");
 
@@ -930,13 +928,7 @@ export const getNewFileShareToken = async (req, res, next) => {
  *   - req.user: authenticated user object provided by `validateSession` (must be file owner)
  */
 export const revokeAccessFileHandler = async (req, res, next) => {
-  const { emails, publicRole } = req.body;
-  if (!emails || !Array.isArray(emails))
-    return badRequest(res, "Invalid payload");
-
-  const formattedPublicRole = publicRole ? publicRole.toUpperCase() : undefined;
-  if (formattedPublicRole && formattedPublicRole !== "NONE")
-    return badRequest(res, "Invalid `publicRole`.");
+  const { updateQuery, emailsToUpdate, formattedPublicRole } = req.revokeConfig;
 
   try {
     const file = await UserFile.findOne({
@@ -955,22 +947,6 @@ export const revokeAccessFileHandler = async (req, res, next) => {
         403,
         "Cannot perform revoke on a non-shared item.",
       );
-
-    const skipped = [];
-    const emailsToUpdate = [];
-
-    emails.forEach((email) => {
-      const ce = email.toLowerCase().trim();
-      if (!EMAIL_REGEX.test(ce))
-        skipped.push(ce);
-      else emailsToUpdate.push(ce);
-    });
-
-    let updateQuery = {};
-    if (emailsToUpdate.length > 0)
-      updateQuery.$pull = { sharedWith: { email: { $in: emailsToUpdate } } };
-    if (formattedPublicRole)
-      updateQuery.$set = { publicRole: formattedPublicRole };
 
     const session = await mongoose.startSession();
     let updated = null;
@@ -1002,7 +978,6 @@ export const revokeAccessFileHandler = async (req, res, next) => {
         sharedWith: updated.sharedWith,
         publicRole: updated.publicRole,
         revoked: emailsToUpdate,
-        skipped,
       },
     });
   } catch (err) {
@@ -1021,9 +996,9 @@ export const revokeAccessFileHandler = async (req, res, next) => {
 export const makeFileStarred = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return badRequest(res, "Invalid id.");
+  
   const { starred } = req.body;
-  if (typeof starred !== "boolean")
-    return badRequest(res, "Invalid  `starred`.");
+  if (typeof starred !== "boolean") return badRequest(res, "Invalid payload.");
   try {
     const file = await UserFile.findOneAndUpdate(
       {
