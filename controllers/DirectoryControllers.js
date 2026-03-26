@@ -66,7 +66,7 @@ export const getDirectoryInfoHandler = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "Directory found.",
-      data: { ...dirData, owner },
+      data: { directory: {...dirData, owner} },
     });
   } catch (err) {
     next(err);
@@ -393,9 +393,9 @@ export const renameDirectoryHandler = async (req, res, next) => {
     if (!isShared && !isOwner) return forbidden(res);
 
     const session = await mongoose.startSession();
-    const updated = null;
+    let updated = null;
     try {
-      session.withTransaction(async () => {
+      await session.withTransaction(async () => {
         updated = await Directory.findOneAndUpdate(
           { _id: directory._id, isDeleted: false },
           { dirname: name },
@@ -806,7 +806,7 @@ export const shareDirectoryHandler = async (req, res, next) => {
         sharedWith: updated.sharedWith,
         depth,
         accepted,
-        token: shareToken,
+        shareToken,
       },
     });
   } catch (err) {

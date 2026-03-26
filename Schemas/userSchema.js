@@ -14,8 +14,8 @@ export const filenameSchema = z.object({
 });
 
 export const uploadInitSchema = z.object({
-  filename: filenameSchema.shape.name,
-  mimetype: z
+  name: filenameSchema.shape.name,
+  mime: z
     .string()
     .trim()
     .regex(/^[a-zA-Z0-9]+\/[a-zA-Z0-9+.-]+$/, { message: "Invalid mimetype" }),

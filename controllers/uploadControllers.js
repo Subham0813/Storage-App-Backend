@@ -100,15 +100,14 @@ export const saveChunk = async (req, res, next) => {
     if (!file || file.size === 0 || !file.path)
       return badRequest(res, "No chunk received.");
 
-    let error = null;
-
+    let mime = null;
     if (chunkIndex == 0) {
       const detected = await fileTypeFromFile(file.path);
-      if (detected && detected.mime !== req.uploadSession.mime) {
-        error = { status: 403, message: "Chunk MIME type mismatch." };
-      }
       mime = detected.mime;
-    } else if (totalChunks === uploadedChunks.length) {
+    }
+
+    let error = null;
+    if (totalChunks === uploadedChunks.length) {
       error = { status: 409, message: "All chunks are already uploaded." };
     } else if (uploadedChunks.includes(chunkIndex)) {
       error = { status: 409, message: "Chunk already exists." };
@@ -137,14 +136,15 @@ export const saveChunk = async (req, res, next) => {
     if (!chunkPath.startsWith(td + path.sep))
       return badRequest(res, "Invalid chunk path.");
 
-    const updatedUpload = await UploadSession.findByIdAndUpdate(
-      _id,
-      {
-        $addToSet: { uploadedChunks: chunkIndex }, //prevents duplicate indices
-        $set: { status, tempDir: td },
-      },
-      { new: true },
-    )
+    const uq = {
+      $addToSet: { uploadedChunks: chunkIndex }, //prevents duplicate indices
+      $set: { status, tempDir: td },
+    };
+    if (mime) uq.$set.mime = mime;
+
+    const updatedUpload = await UploadSession.findByIdAndUpdate(_id, uq, {
+      new: true,
+    })
       .select("uploadedChunks")
       .lean();
 

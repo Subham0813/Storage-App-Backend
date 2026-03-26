@@ -24,12 +24,13 @@ export const loadUploadSession = async (req, res, next) => {
       .lean();
 
     if (!upSession) {
-      return res.status(404).json({ message: "Upload session not found." });
+      return res
+        .status(404)
+        .json({ success: false, message: "Session not found." });
     }
 
-    // 🔐 security: ensure ownership
     if (!upSession.userId.equals(req.user._id)) {
-      return res.status(401).json({ message: "Unauthorized upload session." });
+      return res.status(401).json({success:false, message: "Unauthorized." });
     }
 
     req.uploadSession = upSession;

@@ -362,8 +362,13 @@ export const copyFileHandler = async (req, res, next) => {
     }
 
     const { _id: userId, email } = req.user;
-    const isOwner = file.userId.toString() === userId.toString();
-    const isShared = hasAccess(file, ["EDITOR"], email);
+    const isOwner =
+      file.userId.toString() === userId.toString() &&
+      targetUser._id.toString() === userId.toString();
+    const isShared = email
+      ? hasAccess(file, ["EDITOR"], email) &&
+        hasAccess(req.parent, ["EDITOR"], email)
+      : false;
     if (!isShared && !isOwner) return forbidden(res);
 
     let { filename, parentId, userId: fileUserId, ...rest } = getFileDoc(file);
@@ -445,7 +450,7 @@ export const copyFileHandler = async (req, res, next) => {
 export const moveFileHandler = async (req, res, next) => {
   const {
     _id: targetParentId,
-    userId: targetUserId,
+    userId: targetUser,
     sharedWith,
     publicRole,
     shareToken,
@@ -470,7 +475,7 @@ export const moveFileHandler = async (req, res, next) => {
     const { _id: userId, email } = req.user;
     const isOwner =
       file.userId.toString() === userId.toString() &&
-      targetUserId.toString() === userId.toString();
+      targetUser._id.toString() === userId.toString();
     const isShared = email
       ? hasAccess(file, ["EDITOR"], email) &&
         hasAccess(req.parent, ["EDITOR"], email)
@@ -793,7 +798,7 @@ export const shareFileHandler = async (req, res, next) => {
       data: {
         sharedWith: updated.sharedWith,
         accepted,
-        token: shareToken,
+        shareToken,
       },
     });
   } catch (err) {
@@ -868,7 +873,7 @@ export const filePublicRoleHandler = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "Permission changed.",
-      data: { publicRole: formattedPublicRole, token: shareToken },
+      data: { publicRole: formattedPublicRole, shareToken },
     });
   } catch (err) {
     if (err.statusCode) {
