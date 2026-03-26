@@ -14,13 +14,8 @@ import { DriveIntegration } from "../models/integration.model.js";
  *   - Sets req.user to authenticated user object from session
  */
 
-const ALLOWED_ORIGINS = new Set([
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "http://10.114.2.153:5173",
-]);
-
-const MUTATING_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+const ALLOWED_ORIGINS = new Set([process.env.ALLOWED_ORIGINS]);
+const MUTATING_METHODS = new Set([process.env.MUTATING_METHODS]);
 
 export const verifyCsrfOrigin = (req, res, next) => {
   if (
@@ -53,7 +48,7 @@ export const validateSession = async (req, res, next) => {
       if (session?.userId && !session.userId.isDeleted) {
         //check Admin for admin route
         if (
-          req.baseUrl.includes("/admin") &&
+          req.url.includes("/admin") &&
           !SUPER_ROLES.includes(session.userId.role)
         )
           return res
@@ -72,13 +67,13 @@ export const validateSession = async (req, res, next) => {
       if (id && mongoose.isValidObjectId(id)) {
         let isValid = false;
 
-        if (req.baseUrl.includes("/files")) {
+        if (req.url.includes("/files")) {
           const file = await UserFile.findOne({ _id: id, shareToken: token })
             .select("_id")
             .lean();
 
           if (file) isValid = true;
-        } else if (req.baseUrl.includes("/directories")) {
+        } else if (req.url.includes("/directories")) {
           const dir = await Directory.findOne({ _id: id, shareToken: token })
             .select("_id")
             .lean();

@@ -56,9 +56,8 @@ const generatePKCE = () => {
  *   - No body parameters required
  */
 const getGithubAccesToken = async (code, codeVerifier) => {
-  if (!code || !codeVerifier) {
-    throw new Error("Missing OAuth parameters");
-  }
+  const message = "access_denied:invalid_code";
+  if (!code || !codeVerifier) throw new Error(message);
 
   const response = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
@@ -75,21 +74,19 @@ const getGithubAccesToken = async (code, codeVerifier) => {
     signal: AbortSignal.timeout(5000),
   });
 
-  if (!response.ok) {
-    throw new Error("GitHub token exchange failed");
-  }
+  if (!response.ok) throw new Error(message);
 
   const data = await response.json();
-
-  if (!data.access_token || data.token_type !== "bearer") {
-    throw new Error("Invalid token response from GitHub");
+  if (!data || !data.access_token || data.token_type !== "bearer") {
+    throw new Error(message);
   }
 
-  return data.access_token;
+  return data;
 };
 
 const getGithubUserPayload = async (accessToken) => {
-  if (!accessToken) return null;
+  if (!accessToken) throw new Error("access_denied:no_access_token");
+
   const response = await fetch("https://api.github.com/user", {
     method: "GET",
     headers: {
@@ -97,7 +94,10 @@ const getGithubUserPayload = async (accessToken) => {
       Accept: "application/json",
       Authorization: `Bearer ${accessToken}`,
     },
+    signal: AbortSignal.timeout(5000),
   });
+
+  if (!response.ok) throw new Error("access_denied:no_payload");
 
   const data = await response.json();
   return data;
@@ -171,12 +171,16 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     const codeVerifier = req.signedCookies.oauth_pkce_google;
     const userId = req.signedCookies.oauth_user_google;
 
-    if (!code || !state || !savedState || !codeVerifier) {
-      return res.status(403).json({ message: "Invalid OAuth request.", error });
-    }
-
-    if (state !== savedState) {
-      return res.status(403).json({ message: "OAuth state mismatch." });
+    if (
+      error ||
+      !code ||
+      !state ||
+      !savedState ||
+      !codeVerifier ||
+      state !== savedState
+    ) {
+      const err = new Error(error || "access_denied:cookies_tempered");
+      throw err;
     }
 
     res.clearCookie("oauth_state_google");
@@ -190,7 +194,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     });
 
     if (!tokens.id_token) {
-      throw new Error("Missing id_token");
+      throw new Error("access_denied:no_token_found.");
     }
 
     const ticket = await googleClient.verifyIdToken({
@@ -199,19 +203,15 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     });
 
     const payload = ticket.getPayload();
-
-    if (!payload || !payload.email_verified) {
-      return res.status(403).json({ message: "Unverified Google account." });
-    }
+    if (!payload || !payload.email) throw new Error("access_denied:no_email");
 
     const { sub, email, name, picture, email_verified } = payload;
-
     let user = null;
 
     if (!userId) {
       user = await User.findOne({
+        googleId: sub,
         authProviders: { $in: ["google"] },
-        authId: sub,
       });
 
       if (!user && email) {
@@ -234,7 +234,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
                 email,
                 name,
                 avatar: picture,
-                isEmailVerified: email_verified,
+                isEmailVerified: email_verified ?? false,
               },
             ],
             { session },
@@ -284,11 +284,9 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
       });
     }
 
-    return res.redirect(
-      `http://localhost:5173/auth/callback/google?google=connected`,
-    );
+    return res.redirect(`${process.env.CLIENT_URL}/google?google=connected`);
   } catch (err) {
-    next(err);
+    return res.redirect(`${process.env.CLIENT_URL}/google?error=${err.message}`);
   }
 };
 
@@ -323,7 +321,7 @@ export const githubOAuthHandler = async (req, res, next) => {
     });
 
     if (req.user?._id) {
-      console.log("userId found....");
+      // console.log("userId found....");
       res.cookie("oauth_user_github", req.user._id, {
         httpOnly: true,
         signed: true,
@@ -362,29 +360,34 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
 
     const savedState = req.signedCookies.oauth_state_github;
     const codeVerifier = req.signedCookies.oauth_pkce_github;
-    const userId = req.signedCookies.oauth_user_google;
+    const userId = req.signedCookies.oauth_user_github;
 
-    if (!code || !state || !savedState || !codeVerifier) {
-      return res.status(403).json({ message: "Invalid OAuth request.", error });
+    if (
+      error ||
+      !code ||
+      !state ||
+      !savedState ||
+      !codeVerifier ||
+      state !== savedState
+    ) {
+      const err = new Error(error || "access_denied:cookies_tempered");
+      throw err;
     }
 
-    if (state !== savedState) {
-      return res.status(403).json({
-        message: "Security Alert: OAuth state mismatch.",
-      });
-    }
-
-    // Cleanup
     res.clearCookie("oauth_state_github");
     res.clearCookie("oauth_pkce_github");
     res.clearCookie("oauth_user_github");
 
-    const accessToken = await getGithubAccesToken(code, codeVerifier);
+    const { access_token: accessToken, ...rest } = await getGithubAccesToken(
+      code,
+      codeVerifier,
+    );
     const payload = await getGithubUserPayload(accessToken);
+    if (!payload || !payload.email) throw new Error("access_denied:no_email");
 
     const { id, name, email, login, avatar_url } = payload;
-
     let user;
+
     if (!userId) {
       user = await User.findOne({
         githubId: id,
@@ -451,11 +454,9 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
       });
     }
 
-    return res.redirect(
-      `http://localhost:5173/auth/callback/github?github=connected`,
-    );
+    return res.redirect(`${process.env.CLIENT_URL}/github?github=connected`);
   } catch (err) {
-    next(err);
+    return res.redirect(`${process.env.CLIENT_URL}/github?error=${err.message}`);
   }
 };
 
@@ -474,9 +475,7 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
     });
 
     if (integration)
-      return res.redirect(
-        "http://localhost:5173/auth/callback/google-drive?google-drive=connected",
-      );
+      return res.redirect(`${process.env.CLIENT_URL}?google-drive=connected`);
 
     const state = crypto.randomBytes(32).toString("hex");
     const { codeVerifier, codeChallenge } = generatePKCE();
@@ -490,6 +489,14 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
     });
 
     res.cookie("oauth_pkce_google", codeVerifier, {
+      httpOnly: true,
+      signed: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: TIME.TEN_MINUTES,
+    });
+
+    res.cookie("oauth_user_google-drive", req.user._id, {
       httpOnly: true,
       signed: true,
       secure: process.env.NODE_ENV === "production",
@@ -533,62 +540,65 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
 
     const savedState = req.signedCookies.oauth_state_google;
     const codeVerifier = req.signedCookies.oauth_pkce_google;
+    const userId = req.signedCookies["oauth_user_google-drive"];
 
-    if (!code || !state || !savedState || !codeVerifier) {
-      return res.status(403).json({ message: "Invalid OAuth request.", error });
-    }
-
-    if (state !== savedState) {
-      return res.status(403).json({ message: "OAuth state mismatch." });
+    if (
+      error ||
+      !code ||
+      !state ||
+      !savedState ||
+      !codeVerifier ||
+      state !== savedState
+    ) {
+      const err = new Error(error || "access_denied:cookies_tempered");
+      throw err;
     }
 
     res.clearCookie("oauth_state_google");
     res.clearCookie("oauth_pkce_google");
+    res.clearCookie("oauth_user_google-drive");
 
     const { tokens, ...rest } = await googleDriveClient.getToken({
       code,
       codeVerifier,
     });
 
-    if (!tokens.refresh_token) {
-      throw new Error("No refresh token received");
+    if (!tokens || !tokens.refresh_token) {
+      const err = new Error("access_denied:no_refresh_token");
+      throw err;
     }
+    const { access_token, refresh_token, scope, refresh_token_expires_in } =
+      tokens;
 
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
         const drive = await DriveIntegration.findOneAndUpdate(
-          { provider: "google-drive", state },
+          { userId, provider: "google-drive", state },
           {
             $set: {
-              scope: tokens.scope,
-              accessToken: tokens.access_token,
-              refreshToken: tokens.refresh_token,
-              expiresIn: new Date(
-                Date.now() + tokens.refresh_token_expires_in * 1000,
-              ),
+              scope: scope,
+              accessToken: access_token,
+              refreshToken: refresh_token,
+              expiresIn: new Date(Date.now() + refresh_token_expires_in * 1000),
             },
             $unset: { stateCreatedAt: "" },
           },
           { upsert: true, new: true },
-        ).lean();
+        )
+          .select("_id")
+          .lean();
 
         if (!drive) {
-          const error = new Error("Drive intregation failed.");
-          error.statusCode = 500;
-          throw error;
+          throw new Error("unable_to_create_integration");
         }
       });
     } finally {
       session.endSession();
     }
 
-    return res.redirect(
-      `http://localhost:5173/auth/callback/google-drive?google-drive=connected`,
-    );
+    return res.redirect(`${process.env.CLIENT_URL}/google-drive?google-drive=connected`);
   } catch (err) {
-    if (err.statusCode)
-      return responsePayload(res, err.statusCode, err.message);
-    next(err);
+    return res.redirect(`${process.env.CLIENT_URL}/google-drive?error=${err.message}`);
   }
 };
