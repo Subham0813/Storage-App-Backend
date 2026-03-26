@@ -103,7 +103,7 @@ export const saveChunk = async (req, res, next) => {
     let mime = null;
     if (chunkIndex == 0) {
       const detected = await fileTypeFromFile(file.path);
-      mime = detected.mime;
+      mime = detected?.mime || "application/octet-stream";
     }
 
     let error = null;
