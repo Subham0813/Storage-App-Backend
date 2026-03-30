@@ -28,7 +28,7 @@ const router = Router();
 
 router.get("/:id", getDirectoriesHandler);
 router.get("/all-files/:id", getAllFilesHandler);
-router.get("/download/:id", restrictRootOperations, downloadDirectoryHandler);
+router.get("/download/:id",  downloadDirectoryHandler);
 router.get("/new-token/:id", restrictRootOperations, getNewDirectoryShareToken);
 router.get("/info/:id", getDirectoryInfoHandler);
 router.get("/share-info/:id", restrictRootOperations, getShareInfo("dir"));

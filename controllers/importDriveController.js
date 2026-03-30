@@ -73,7 +73,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
     if (remaining < 1) return badRequest(res, "Storage limit exceeded.");
     const skipped = [];
     const accepted = [];
-    const chunkSize = CHUNK_SIZE[role];
+    const chunkSize = 16384;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -88,11 +88,6 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
               : "Insufficient storage space.",
         });
       } else {
-        const tempPath = path.resolve(
-          TEMP_ROOT,
-          `google-${req.user._id}-${file._id}-${file.name}`,
-        );
-        await mkdir(path.dirname(tempPath), { recursive: true });
         accepted.push({
           id: file.id,
           userId: parent.userId._id,
@@ -103,7 +98,6 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
           strategy: "google-drive",
           chunkSize,
           totalChunks: Math.ceil(parseInt(file.sizeBytes) / chunkSize) || 1,
-          tempDir: tempPath,
           // googleFileId: file.id,
         });
       }
@@ -144,18 +138,28 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
     (async () => {
       for (let i = 0; i < accepted.length; i++) {
         const session = sessions[i];
-        const file = accepted[i];
-
         if (!session) continue;
-        const tempPath = path.resolve(session.tempDir);
-    
+
+        const file = accepted[i];
+        const tempPath = path.resolve(
+          TEMP_ROOT,
+          `google_${req.user._id.toString()}`,
+        );
+        const filePath = path.resolve(tempPath, file.id);
+        await mkdir(tempPath, { recursive: true });
+
         let finalPath = null;
         let bytesRead = 0;
         let driveRes;
         try {
-          await UploadSession.findByIdAndUpdate(session._id, {
-            status: "importing",
-          });
+          let updated = await UploadSession.findOneAndUpdate(
+            { _id: session._id, status: "initiated" },
+            { status: "importing" },
+            { returnDocument: "after" },
+          )
+            .select("_id")
+            .lean();
+          console.log(updated);
 
           // --- A. Handle Google Native Docs ---
           if (isGoogleDoc(file.mime)) {
@@ -171,7 +175,6 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
               //   JSON.stringify(exportErr) + "\n",
               // );
               const parsedErr = JSON.parse(exportErr.message).error;
-              console.error(parsedErr);
 
               if (
                 parsedErr.code === 403 &&
@@ -183,8 +186,8 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
                   `[Import] File too large: ${file.filename}. Saving as Link.`,
                 );
 
-                if (existsSync(tempPath))
-                  await unlink(tempPath).catch(() => {});
+                if (existsSync(filePath))
+                  await unlink(filePath).catch(() => {});
 
                 const linkMeta = await drive.files.get({
                   fileId: file.id,
@@ -193,35 +196,48 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
 
                 // console.log(file);
                 // Manually create the "Link" UserFile
-                await UserFile.create({
-                  filename: file.filename,
-                  userId: parent.userId._id,
-                  parentId: parent._id,
-                  disposition: "inline",
-                  mimetype: "application/vnd.google-apps.link",
-                  size: 1,
-                  inline_preview: false,
-                  force_inline_preview: false,
-                  meta: null, // No physical file
-                  publicRole: parent.publicRole || "NONE",
-                  sharedWith: parent.sharedWith || [],
-                  sharedAt: parent.publicRole ? new Date() : null,
-                  // Custom Metadata for frontend to open link
-                  linkMeta: {
-                    // driveId: integration.providerId,
-                    fileId: file.id,
-                    webViewLink: linkMeta.data.webViewLink,
-                    // iconLink: linkMeta.data.iconLink,
-                  },
-                });
+                const session = await mongoose.startSession();
+                try {
+                  await session.withTransaction(async () => {
+                    await UploadSession.updateOne(
+                      { _id: updated._id, status: "importing" },
+                      { status: "imported" },
+                      { session },
+                    );
 
-                await UploadSession.findByIdAndUpdate(session._id, {
-                  status: "imported",
-                  size: 1,
-                });
-                continue; // Skip the rest of the loop for this file
+                    await UserFile.create(
+                      [
+                        {
+                          filename: file.filename,
+                          userId: parent.userId._id,
+                          parentId: parent._id,
+                          disposition: "inline",
+                          mimetype: "application/vnd.google-apps.link",
+                          size: 1024,
+                          inline_preview: false,
+                          force_inline_preview: false,
+                          meta: null, // No physical file
+                          publicRole: parent.publicRole || "NONE",
+                          sharedWith: parent.sharedWith || [],
+                          sharedAt: parent.publicRole ? new Date() : null,
+                          // Custom Metadata for frontend to open link
+                          linkMeta: {
+                            // driveId: integration.providerId,
+                            fileId: file.id,
+                            webViewLink: linkMeta.data.webViewLink,
+                            // iconLink: linkMeta.data.iconLink,
+                          },
+                        },
+                      ],
+                      session,
+                    );
+                  });
+                } finally {
+                  session.endSession();
+                }
+                continue;
               }
-              throw exportErr; // Rethrow other errors
+              throw exportErr;
             }
           }
           // --- B. Handle Regular Files (PDF, Images) ---
@@ -234,46 +250,74 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
           }
 
           // --- C. Save Stream to Disk ---
-          let lastDbUpdate = Date.now();
-          driveRes.data.on("data", (chunk) => {
-            bytesRead += chunk.length;
-            const now = Date.now();
-            if (now - lastDbUpdate > TIME.FIVE_SECONDS) {
-              UploadSession.updateOne(
-                { _id: session._id },
-                { $set: { bytesRead } },
-              ).catch(() => {
-                (err) =>
-                  console.error(
-                    `Progress update failed for ${file.filename}:`,
-                    err.message,
-                  );
-              });
-              lastDbUpdate = now;
-            }
-          });
+          const controller = new AbortController();
+          try {
+            const writeStream = createWriteStream(filePath);
+            let lastDbUpdate = Date.now();
+            console.log(updated);
+            driveRes.data.on("data", async (chunk) => {
+              bytesRead += chunk.length;
+              const now = Date.now();
+              if (now - lastDbUpdate > 800) {
+                updated = await UploadSession.findOneAndUpdate(
+                  { _id: updated._id, status: "importing" },
+                  { $set: { bytesRead } },
+                  { returnDocument: "after" },
+                )
+                  .select("_id")
+                  .lean();
 
-          await pipeline(driveRes.data, createWriteStream(tempPath));
-          console.info("Import finished for ", file.filename);
+                if (!updated) {
+                  controller.abort("db_update_fails");
+                  console.warn("Failed to update session progress");
+                  return;
+                }
+
+                lastDbUpdate = now;
+              }
+            });
+
+            await pipeline(driveRes.data, writeStream, {
+              signal: controller.signal,
+            });
+            console.info("Import finished for ", file.filename);
+          } catch (pipeErr) {
+            if (pipeErr.name === "AbortError")
+              console.info(
+                "Pipeline was manually aborted:",
+                controller.signal.reason,
+              );
+            else {
+              console.error(
+                "Pipeline failed due to a system error:",
+                err.message,
+              );
+            }
+            throw pipeErr;
+          }
 
           // --- D. Update Real Size ---
-          // Google Docs started as size 0. We must check the actual exported size.
-          const stats = await stat(tempPath);
+          const stats = await stat(filePath);
+          if (stats.size === 0) {
+            throw new Error("Downloaded file size is 0 bytes.");
+          }
 
-          //Updating the session in DB for consistency.
-          const upload = await UploadSession.findOneAndUpdate(
-            { _id: session._id },
+          const upload = await UploadSession.findByIdAndUpdate(
+            { _id: updated._id, status: "importing" },
             { $set: { size: parseInt(stats.size), bytesRead } },
-            { new: true },
+            { returnDocument: "after" },
           )
             .select("filename parentId size")
             .populate("parentId", "_id userId publicRole sharedWith")
             .lean();
-          // console.info(upload);
 
-          //Pre-Processing
-          const hash = await getFileHash(tempPath, "sha256", "base64url");
-          const detected = await fileTypeFromFile(tempPath);
+          if (!upload) {
+            throw new Error("Upload session not found after file save.");
+          }
+
+          //Pre-Finalizing
+          const hash = await getFileHash(filePath, "sha256", "base64url");
+          const detected = await fileTypeFromFile(filePath);
           const detectedMime =
             detected?.mime || file.mime || "application/octet-stream";
 
@@ -284,24 +328,18 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
           );
           await mkdir(path.dirname(finalPath), { recursive: true });
 
-          const existingRecord = await FileModel.findOne({
-            hash,
-            userId,
-          })
+          const existingRecord = await FileModel.findOne({ hash, userId })
             .select("_id")
             .lean();
 
           if (existingRecord) {
-            await unlink(tempPath);
-            // Deduplication: The file exists at 'finalPath' already (from a previous upload),
-            // so we don't set finalPath variable (to avoid deleting someone else's file on error)
+            await unlink(filePath);
             finalPath = null;
           } else {
-            await rename(tempPath, finalPath);
-            // We moved it! If DB fails later, we MUST delete this specific path.
+            await rename(filePath, finalPath);
           }
 
-          // --- E. Finalize (Deduplication, Hashing, Quota) ---
+          // --- E. Finalize ---
           await finalizeStorageRecord({
             upload,
             hash,
@@ -342,14 +380,12 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
 
           // If file moved to storage, and DB failed -> Delete from storage
           if (finalPath) {
-            try {
-              await unlink(path.resolve(finalPath));
-            } catch (e) {}
+            await unlink(path.resolve(finalPath)).catch(() => {});
           }
 
           // Cleanup temp file
-          if (existsSync(tempPath))
-            await unlink(path.resolve(tempPath)).catch(() => {});
+          if (existsSync(filePath))
+            await unlink(path.resolve(filePath)).catch(() => {});
 
           // Session failed
           await UploadSession.updateOne(

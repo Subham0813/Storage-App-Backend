@@ -127,6 +127,7 @@ export const changeUserRole = async (req, res, next) => {
     const user = await User.findOneAndUpdate(
       { _id: id, isDeleted: false, role: { $ne: req.user.role } },
       { role: requestedRole },
+      { returnDocument: "after" },
     );
     if (!user) return forbidden(res);
 
@@ -198,10 +199,10 @@ export const tempRemoveUser = async (req, res, next) => {
     let updated = null;
     try {
       await session.withTransaction(async () => {
-        updated = await User.findOneAndUpdate(
-          { _id: user._id },
+        updated = await User.findByIdAndUpdate(
+          user._id,
           { isDeleted: true },
-          { session, new: true },
+          { session, returnDocument: "after" },
         )
           .select("_id isDeleted")
           .lean();
@@ -236,8 +237,10 @@ export const recoverUser = async (req, res, next) => {
     const user = await User.findOneAndUpdate(
       { _id: id, isDeleted: true },
       { isDeleted: false },
-      { new: true },
-    ).select("_id isDeleted");
+      { returnDocument: "after" },
+    )
+      .select("_id isDeleted")
+      .lean();
     if (!user) return notFound(res, "User not found.");
 
     return res

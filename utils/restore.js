@@ -81,7 +81,7 @@ export const restoreChildFiles = async (parentId, session) => {
       { session },
     );
   } catch (err) {
-    throw err;
+    throw new Error("restore failed: " + err.message);
   }
 };
 
@@ -114,7 +114,7 @@ export const restoreChildDirectories = async (parentId, session) => {
       await restoreChildDirectories(child._id, session);
     }
   } catch (err) {
-    throw err;
+    throw new Error("restore failed: " + err.message);
   }
 };
 

@@ -19,7 +19,6 @@ import { shareDirectoryRecursive } from "../utils/share.js";
 import { base64URLEncode } from "./oauthControllers.js";
 import { SUPER_ROLES } from "../misc/constants.js";
 import { filenameSchema } from "../Schemas/userSchema.js";
-import { emailSchema } from "../Schemas/authSchema.js";
 
 // API Handlers
 /**
@@ -66,7 +65,7 @@ export const getDirectoryInfoHandler = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "Directory found.",
-      data: { directory: {...dirData, owner} },
+      data: { directory: { ...dirData, owner } },
     });
   } catch (err) {
     next(err);
@@ -200,7 +199,7 @@ export const downloadDirectoryHandler = async (req, res, next) => {
       _id: req.params.id,
       isDeleted: false,
     })
-      .select("userId publicRole sharedWith")
+      .select("dirname size userId publicRole sharedWith")
       .lean();
 
     if (!directory) return notFound(res, "Directory not found!");
@@ -214,14 +213,13 @@ export const downloadDirectoryHandler = async (req, res, next) => {
     const safeDirname = sanitizeName(directory.dirname);
     const safeTimeStamp = new Date().toISOString().replace(/[-:.]/g, "");
 
-    // const zipName = `${dir.name}-${new Date().toJSON()}-${dir.filesCount}-001.zip`; //google drive naming
+    // const zipName = `${safeDirname}-${new Date().toJSON()}-${dir.filesCount}-001.zip`; //google drive naming
 
-    const zipName = `${safeDirname}-${safeTimeStamp}-001.zip`;
+    const zipName = `${safeDirname}-${safeTimeStamp}.zip`;
     // const zipPath = path.join(process.cwd(),"uploads", "temp", zipName);
     // const output = createWriteStream(zipPath);
 
     res.writeHead(200, {
-      "Content-Length": directory.size,
       "Content-Type": "application/zip",
       "Content-Disposition": `attachment; filename="${zipName}"`,
       "X-Content-Type-Options": "nosniff",
@@ -229,21 +227,21 @@ export const downloadDirectoryHandler = async (req, res, next) => {
 
     // Create ZIP stream
     const archive = archiver("zip", {
-      zlib: { level: 2 }, // fast compression
+      zlib: { level: 2 },
     });
 
     // If client aborts, stop everything
     req.on("close", () => {
-      console.log("Client aborted download!!");
+      console.log("Client aborted download.");
       archive.abort();
     });
 
     req.on("aborted", () => {
-      console.log("Client aborted download!!");
+      console.log("Client aborted download.");
       archive.abort();
     });
 
-    req.on("end", () => console.log("Zip served successfully."));
+    req.on("finish", () => console.log("Zip served successfully."));
 
     archive.on("error", (err) => {
       archive.abort();
@@ -253,7 +251,7 @@ export const downloadDirectoryHandler = async (req, res, next) => {
     // archive.pipe(output);
     // console.log("Zip creating started..");
 
-    archive.pipe(res);
+    await archive.pipe(res);
     console.log("Zip serving started..");
 
     // Traverse Directory tree and add files
@@ -262,7 +260,7 @@ export const downloadDirectoryHandler = async (req, res, next) => {
     await serveZip({
       archive,
       dirId: directory._id,
-      zipPath: `${directory.dirname}/`,
+      zipPath: `${safeDirname}/`,
       visited,
       userEmail: email,
       userId,
@@ -270,9 +268,13 @@ export const downloadDirectoryHandler = async (req, res, next) => {
 
     // Finalize ZIP
     await archive.finalize();
-    res.status(200).end();
   } catch (err) {
-    next(err);
+    if (res.headersSent) {
+      console.error("Stream failed mid-download:", err);
+      res.end(); 
+    } else {
+      next(err);
+    }
   }
 };
 
@@ -399,7 +401,7 @@ export const renameDirectoryHandler = async (req, res, next) => {
         updated = await Directory.findOneAndUpdate(
           { _id: directory._id, isDeleted: false },
           { dirname: name },
-          { session, new: true },
+          { session, returnDocument: "after" },
         )
           .select("_id parentId dirname")
           .lean();
@@ -550,13 +552,17 @@ export const moveToBinDirectoryHandler = async (req, res, next) => {
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
-        await Directory.findByIdAndUpdate(directory._id, {
-          $set: {
-            isDeleted: true,
-            deletedAt: new Date(),
-            deletedBy: "user",
+        await Directory.updateOne(
+          { _id: directory._id },
+          {
+            $set: {
+              isDeleted: true,
+              deletedAt: new Date(),
+              deletedBy: "user",
+            },
           },
-        });
+          { session },
+        );
 
         await recursiveRemove(directory._id, session, new Set());
       });
@@ -618,8 +624,8 @@ export const restoreDirectoryHandler = async (req, res, next) => {
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
-        await Directory.findByIdAndUpdate(
-          directory._id,
+        await Directory.updateOne(
+          { _id: directory._id },
           {
             $set: {
               isDeleted: false,
@@ -772,10 +778,10 @@ export const shareDirectoryHandler = async (req, res, next) => {
         );
 
         updateQuery.$set.sharedBy = "user";
-        updated = await Directory.findOneAndUpdate(
-          { _id: directory._id },
+        updated = await Directory.findByIdAndUpdate(
+          directory._id,
           updateQuery,
-          { session, new: true },
+          { session, returnDocument: "after" },
         )
           .select("sharedWith publicRole -_id")
           .lean();
@@ -868,7 +874,7 @@ export const directoryPublicRoleHandler = async (req, res, next) => {
       } else shareToken = directory.shareToken;
 
       updateQuery.$set.sharedBy = "user";
-      await Directory.findByIdAndUpdate(directory._id, updateQuery, {
+      await Directory.updateOne({ _id: directory._id }, updateQuery, {
         session,
       });
 
@@ -913,7 +919,7 @@ export const getNewDirectoryShareToken = async (req, res, next) => {
           sharedBy: { $ne: "none" },
         },
         { $set: { shareToken, sharedBy: "user" } },
-        { session, new: true },
+        { session, returnDocument: "after" },
       )
         .select("_id")
         .lean();
@@ -952,6 +958,8 @@ export const getNewDirectoryShareToken = async (req, res, next) => {
  */
 export const revokeAccessDirectoryHandler = async (req, res, next) => {
   const { updateQuery, emailsToUpdate, formattedPublicRole } = req.revokeConfig;
+  if (!mongoose.isValidObjectId(req.params.id))
+    return badRequest(res, "Invalid id.");
 
   try {
     const directory = await Directory.findOne({
@@ -963,13 +971,8 @@ export const revokeAccessDirectoryHandler = async (req, res, next) => {
       .select("_id sharedWith publicRole")
       .lean();
 
-    if (!directory) return notFound(res, "directory not found.");
-    if (directory.publicRole !== "VIEWER" && directory.sharedWith.length < 1)
-      return responsePayload(
-        res,
-        403,
-        "Cannot perform revoke on a non-shared item.",
-      );
+    if (!directory)
+      return notFound(res, "Wrong id or is a non-shared directory.");
 
     const session = await mongoose.startSession();
     let depth = 0;
@@ -979,7 +982,7 @@ export const revokeAccessDirectoryHandler = async (req, res, next) => {
         updated = await Directory.findOneAndUpdate(
           { _id: req.params.id, userId: req.user._id, isDeleted: false },
           updateQuery,
-          { new: true, session },
+          { returnDocument: "after", session },
         )
           .select("_id sharedWith publicRole")
           .lean();
@@ -996,13 +999,14 @@ export const revokeAccessDirectoryHandler = async (req, res, next) => {
             },
           };
 
-          updated = await Directory.findOneAndUpdate(
-            { _id: updated._id },
+          updated = await Directory.findByIdAndUpdate(
+            updated._id,
             updateQuery,
-            { session, new: true },
+            { session, returnDocument: "after" },
           )
             .select("_id sharedWith publicRole")
             .lean();
+
           emailsToPull = [];
         }
 
@@ -1056,7 +1060,7 @@ export const makeDirectoryStarred = async (req, res, next) => {
         isStarred: !starred,
       },
       { $set: { isStarred: starred } },
-      { new: true },
+      { returnDocument: "after" },
     )
       .select("_id")
       .lean();
@@ -1066,7 +1070,7 @@ export const makeDirectoryStarred = async (req, res, next) => {
         `Directory not found or already ${starred ? "starred" : "non-starred"}.`,
       );
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ success: true, data: { directory: dir } });
   } catch (err) {
     next(err);
   }

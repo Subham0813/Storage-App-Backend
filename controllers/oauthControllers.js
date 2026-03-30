@@ -56,7 +56,7 @@ const generatePKCE = () => {
  *   - No body parameters required
  */
 const getGithubAccesToken = async (code, codeVerifier) => {
-  const message = "access_denied:invalid_code";
+  const message = "error=invalid_code";
   if (!code || !codeVerifier) throw new Error(message);
 
   const response = await fetch("https://github.com/login/oauth/access_token", {
@@ -85,7 +85,7 @@ const getGithubAccesToken = async (code, codeVerifier) => {
 };
 
 const getGithubUserPayload = async (accessToken) => {
-  if (!accessToken) throw new Error("access_denied:no_access_token");
+  if (!accessToken) throw new Error("error=no_access_token");
 
   const response = await fetch("https://api.github.com/user", {
     method: "GET",
@@ -97,7 +97,7 @@ const getGithubUserPayload = async (accessToken) => {
     signal: AbortSignal.timeout(5000),
   });
 
-  if (!response.ok) throw new Error("access_denied:no_payload");
+  if (!response.ok) throw new Error("error=no_payload");
 
   const data = await response.json();
   return data;
@@ -120,7 +120,7 @@ export const googleOAuthHandler = async (req, res, next) => {
       signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: TIME.TEN_MINUTES,
+      maxAge: TIME.ONE_MINUTE * 0.5,
     });
 
     res.cookie("oauth_pkce_google", codeVerifier, {
@@ -128,7 +128,7 @@ export const googleOAuthHandler = async (req, res, next) => {
       signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: TIME.TEN_MINUTES,
+      maxAge: TIME.ONE_MINUTE * 0.5,
     });
 
     if (req.user?._id) {
@@ -137,7 +137,7 @@ export const googleOAuthHandler = async (req, res, next) => {
         signed: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
-        maxAge: TIME.TEN_MINUTES,
+        maxAge: TIME.ONE_MINUTE * 0.5,
       });
     }
 
@@ -179,7 +179,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
       !codeVerifier ||
       state !== savedState
     ) {
-      const err = new Error(error || "access_denied:cookies_tempered");
+      const err = new Error(error || "error=cookies_tempered");
       throw err;
     }
 
@@ -194,7 +194,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     });
 
     if (!tokens.id_token) {
-      throw new Error("access_denied:no_token_found.");
+      throw new Error("error=no_token_found.");
     }
 
     const ticket = await googleClient.verifyIdToken({
@@ -203,7 +203,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     });
 
     const payload = ticket.getPayload();
-    if (!payload || !payload.email) throw new Error("access_denied:no_email");
+    if (!payload || !payload.email) throw new Error("error=no_email");
 
     const { sub, email, name, picture, email_verified } = payload;
     let user = null;
@@ -259,7 +259,9 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
         }
 
         updateQuery.$set.isLogged = true;
-        await User.findByIdAndUpdate(user._id, updateQuery, { session });
+        await User.updateOne({ _id: user._id }, updateQuery, {
+          session,
+        });
 
         if (!userId) {
           [userSession] = await Session.create([{ userId: user._id }], {
@@ -286,7 +288,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
 
     return res.redirect(`${process.env.CLIENT_URL}/google?google=connected`);
   } catch (err) {
-    return res.redirect(`${process.env.CLIENT_URL}/google?error=${err.message}`);
+    return res.redirect(`${process.env.CLIENT_URL}/google?${err.message}`);
   }
 };
 
@@ -308,7 +310,7 @@ export const githubOAuthHandler = async (req, res, next) => {
       signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: TIME.TEN_MINUTES,
+      maxAge: TIME.ONE_MINUTE * 0.5,
     });
 
     // PKCE verifier
@@ -317,7 +319,7 @@ export const githubOAuthHandler = async (req, res, next) => {
       signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: TIME.TEN_MINUTES,
+      maxAge: TIME.ONE_MINUTE * 0.5,
     });
 
     if (req.user?._id) {
@@ -327,7 +329,7 @@ export const githubOAuthHandler = async (req, res, next) => {
         signed: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
-        maxAge: TIME.TEN_MINUTES,
+        maxAge: TIME.ONE_MINUTE * 0.5,
       });
     }
 
@@ -370,7 +372,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
       !codeVerifier ||
       state !== savedState
     ) {
-      const err = new Error(error || "access_denied:cookies_tempered");
+      const err = new Error(error || "error=cookies_tempered");
       throw err;
     }
 
@@ -383,7 +385,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
       codeVerifier,
     );
     const payload = await getGithubUserPayload(accessToken);
-    if (!payload || !payload.email) throw new Error("access_denied:no_email");
+    if (!payload || !payload.email) throw new Error("error=no_email");
 
     const { id, name, email, login, avatar_url } = payload;
     let user;
@@ -406,20 +408,26 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
     try {
       await session.withTransaction(async () => {
         if (!user) {
-          user = await User.create({
-            authProviders: ["github"],
-            githubId: id,
-            username: login,
-            email,
-            name: name.length > 0 ? name : login,
-            avatar: avatar_url,
-          });
+          user = await User.create(
+            {
+              authProviders: ["github"],
+              githubId: id,
+              username: login,
+              email,
+              name: name.length > 0 ? name : login,
+              avatar: avatar_url,
+            },
+            { session },
+          );
 
-          const root = await Directory.create({
-            dirname: `root-${user.username}`,
-            parentId: new mongoose.Types.ObjectId(),
-            userId: user._id,
-          });
+          const root = await Directory.create(
+            {
+              dirname: `root-${user.username}`,
+              parentId: new mongoose.Types.ObjectId(),
+              userId: user._id,
+            },
+            { session },
+          );
 
           updateQuery.$set.root = root._id;
         } else {
@@ -429,7 +437,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
         }
 
         updateQuery.$set.isLogged = true;
-        await User.findByIdAndUpdate(user._id, updateQuery, { session });
+        await User.updateOne({ _id: user._id }, updateQuery, { session });
 
         if (!userId) {
           [userSession] = await Session.create([{ userId: user._id }], {
@@ -456,7 +464,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
 
     return res.redirect(`${process.env.CLIENT_URL}/github?github=connected`);
   } catch (err) {
-    return res.redirect(`${process.env.CLIENT_URL}/github?error=${err.message}`);
+    return res.redirect(`${process.env.CLIENT_URL}/github?${err.message}`);
   }
 };
 
@@ -485,7 +493,7 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
       signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: TIME.TEN_MINUTES,
+      maxAge: TIME.ONE_MINUTE * 0.5,
     });
 
     res.cookie("oauth_pkce_google", codeVerifier, {
@@ -493,7 +501,7 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
       signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: TIME.TEN_MINUTES,
+      maxAge: TIME.ONE_MINUTE * 0.5,
     });
 
     res.cookie("oauth_user_google-drive", req.user._id, {
@@ -501,7 +509,7 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
       signed: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: TIME.TEN_MINUTES,
+      maxAge: TIME.ONE_MINUTE * 0.5,
     });
 
     const authUrl = googleDriveClient.generateAuthUrl({
@@ -550,7 +558,7 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
       !codeVerifier ||
       state !== savedState
     ) {
-      const err = new Error(error || "access_denied:cookies_tempered");
+      const err = new Error(error || "error=cookies_tempered");
       throw err;
     }
 
@@ -564,41 +572,38 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
     });
 
     if (!tokens || !tokens.refresh_token) {
-      const err = new Error("access_denied:no_refresh_token");
+      const err = new Error("error=no_refresh_token");
       throw err;
     }
     const { access_token, refresh_token, scope, refresh_token_expires_in } =
       tokens;
 
-    const session = await mongoose.startSession();
-    try {
-      await session.withTransaction(async () => {
-        const drive = await DriveIntegration.findOneAndUpdate(
-          { userId, provider: "google-drive", state },
-          {
-            $set: {
-              scope: scope,
-              accessToken: access_token,
-              refreshToken: refresh_token,
-              expiresIn: new Date(Date.now() + refresh_token_expires_in * 1000),
-            },
-            $unset: { stateCreatedAt: "" },
-          },
-          { upsert: true, new: true },
-        )
-          .select("_id")
-          .lean();
+    const drive = await DriveIntegration.findOneAndUpdate(
+      { userId, provider: "google-drive", state },
+      {
+        $set: {
+          scope: scope,
+          accessToken: access_token,
+          refreshToken: refresh_token,
+          expiresIn: new Date(Date.now() + refresh_token_expires_in * 1000),
+        },
+        $unset: { stateCreatedAt: "" },
+      },
+      { upsert: true, returnDocument: "after" },
+    )
+      .select("_id")
+      .lean();
 
-        if (!drive) {
-          throw new Error("unable_to_create_integration");
-        }
-      });
-    } finally {
-      session.endSession();
+    if (!drive) {
+      throw new Error("error=unable_to_create_integration");
     }
 
-    return res.redirect(`${process.env.CLIENT_URL}/google-drive?google-drive=connected`);
+    return res.redirect(
+      `${process.env.CLIENT_URL}/google-drive?google-drive=connected`,
+    );
   } catch (err) {
-    return res.redirect(`${process.env.CLIENT_URL}/google-drive?error=${err.message}`);
+    return res.redirect(
+      `${process.env.CLIENT_URL}/google-drive?${err.message}`,
+    );
   }
 };

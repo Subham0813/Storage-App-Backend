@@ -12,7 +12,7 @@ const fileSchema = new Schema(
       type: String,
       // match: [/^[a-f0-9]{64}$/, "hash pattern mismatched. "],
       required: true,
-      // unique: true,
+      unique: true,
     },
 
     hashAlgo: {
@@ -28,7 +28,7 @@ const fileSchema = new Schema(
       //   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       //   "Filename not match with the pattern!",
       // ],
-      // unique: true,
+      unique: true,
     },
 
     detectedMime: {

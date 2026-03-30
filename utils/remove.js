@@ -105,20 +105,20 @@ export const recursiveDelete = async (
       const updt = await FileModel.findOneAndUpdate(
         { _id: file.meta._id, refCount: { $gt: 0 } },
         { $inc: { refCount: -1 } },
-        { new: true, session },
+        { returnDocument: "after", session },
       );
 
       if (updt && updt.refCount < 1) {
         //delete from db
         await FileModel.deleteOne({ _id: updt._id }).session(session);
         //delete  from local
-        const absolutePath = path.resolve(UPLOAD_ROOT, file.meta.objectKey);
+        const filePath = path.resolve(UPLOAD_ROOT, file.meta.objectKey);
         if (
-          !absolutePath.startsWith(path.resolve(UPLOAD_ROOT) + path.sep) ||
+          !filePath.startsWith(path.resolve(UPLOAD_ROOT) + path.sep) ||
           !existsSync(filePath)
         )
           continue;
-        else filesToDelete.push(absolutePath);
+        else filesToDelete.push(filePath);
       }
     }
 

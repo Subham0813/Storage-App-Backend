@@ -8,13 +8,13 @@ export const MAX_DEVICE_COUNT = 2;
 export const FILENAME_REGEX = /^[^\\/:\*\?"<>|]+$/;
 export const EMAIL_REGEX = /^[\w.%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$/;
 export const SUPER_ROLES = ["ADMIN", "SUPER_ADMIN"];
-export const UPLOAD_ROOT = path.resolve(process.env.UPLOAD_ROOT || "./uploads");
-export const TEMP_ROOT = path.resolve(process.env.TEMP_ROOT || "./uploads/temp");
+export const UPLOAD_ROOT = path.resolve(process.env.UPLOAD_ROOT);
+export const TEMP_ROOT = path.resolve(process.env.TEMP_ROOT);
 
 export const TIME = {
+  FIVE_SECONDS: 5 * 1000,
   ONE_MINUTE: 60 * 1000,
   FIVE_MINUTES: 5 * 60 * 1000,
-  FIVE_SECONDS: 5 * 1000,
   TEN_MINUTES: 10 * 60 * 1000,
   FIFTEEN_MINUTES: 15 * 60 * 1000,
   TWO_HOURS: 2 * 60 * 60 * 1000,

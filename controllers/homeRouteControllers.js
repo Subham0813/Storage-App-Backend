@@ -258,7 +258,7 @@ export const LogoutAllHandler = async (req, res, next) => {
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      await User.findOneAndUpdate(
+      await User.updateOne(
         { _id: req.user._id, deviceCount: { $gt: 0 } },
         { $set: { deviceCount: 0 } },
         { session },

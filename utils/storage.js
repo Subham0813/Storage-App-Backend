@@ -134,8 +134,8 @@ export const finalizeStorageRecord = async ({
       } else {
         metaId = existingRecord._id;
 
-        await FileModel.findByIdAndUpdate(
-          existingRecord._id,
+        await FileModel.updateOne(
+          { _id: existingRecord._id },
           { $inc: { refCount: 1 } },
           { session },
         );
@@ -164,16 +164,16 @@ export const finalizeStorageRecord = async ({
         { session },
       );
 
-      await UploadSession.findByIdAndUpdate(
-        upload._id,
+      await UploadSession.updateOne(
+        { _id: upload._id },
         { status, expiresAt: new Date(Date.now() + TIME.ONE_MINUTE) },
         { session },
       );
 
-      user = await User.findByIdAndUpdate(
-        userId,
+      user = await User.updateOne(
+        { _id: userId },
         { $inc: { usedStorage: upload.size } },
-        { session, new: true },
+        { session, returnDocument: "after" },
       ).select("-_id usedStorage");
 
       const visited = new Set();
@@ -181,9 +181,7 @@ export const finalizeStorageRecord = async ({
       await updateAncestors(parentId, session, updateQuery, visited);
     });
 
-    const fileDoc = getFileDoc(userFile);
-    fileDoc.user = { usedStorage: user.usedStorage };
-    return fileDoc;
+    return getFileDoc(userFile);
   } catch (err) {
     throw err;
   } finally {
@@ -206,9 +204,8 @@ const updateAncestors = async (dirId, session, updateQuery, visited) => {
   if (visited.has(dirId.toString())) return;
   visited.add(dirId.toString());
 
-  const dir = await Directory.findById(dirId).session(session);
-  if (!dir) return;
-
-  await Directory.findByIdAndUpdate(dirId, updateQuery, { session });
-  await updateAncestors(dir.parentId, session, updateQuery, visited);
+  const dir = await Directory.findByIdAndUpdate(dirId, updateQuery, {
+    session,
+  });
+  if (dir) await updateAncestors(dir.parentId, session, updateQuery, visited);
 };

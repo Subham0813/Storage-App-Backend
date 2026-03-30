@@ -183,8 +183,7 @@ export const verifyOtpHandler = async (req, res, next) => {
           user.deviceCount >= MAX_DEVICE_COUNT
         ) {
           if (logoutLastSession) {
-            await Session.deleteOne({ userId: user._id })
-              .session(_session);
+            await Session.deleteOne({ userId: user._id }).session(_session);
           } else {
             const error = new Error(
               "Session creation failed. Max.session limit reached.",
@@ -199,7 +198,7 @@ export const verifyOtpHandler = async (req, res, next) => {
           email,
           purpose: authPurpose,
         })
-          .sort({createdAt: -1})
+          .sort({ createdAt: -1 })
           .session(_session);
         if (!otpRecord) {
           const error = new Error("OTP expired.");
@@ -223,17 +222,17 @@ export const verifyOtpHandler = async (req, res, next) => {
           updatedOtpRecord = await OTP.findByIdAndUpdate(
             otpRecord._id,
             { createdAt: new Date() },
-            { new: true },
+            { returnDocument: "after" },
           )
             .select("createdAt")
             .session(_session)
             .lean();
         } else {
           const incr = user.deviceCount < MAX_DEVICE_COUNT ? 1 : 0;
-          updatedUserRecord = await User.findOneAndUpdate(
-            { _id: user._id },
+          updatedUserRecord = await User.findByIdAndUpdate(
+            user._id,
             { $set: { isLogged: true }, $inc: { deviceCount: incr } },
-            { new: true },
+            { returnDocument: "after" },
           )
             .session(_session)
             .lean();
@@ -407,7 +406,7 @@ export const registerHandler = async (req, res, next) => {
         user = await User.findByIdAndUpdate(
           user._id,
           { root: root._id },
-          { session, new: true },
+          { session, returnDocument: "after" },
         );
       });
     } finally {
@@ -535,7 +534,7 @@ export const forgotPasswordHandler = async (req, res, next) => {
           throw error;
         }
 
-        await User.findOneAndUpdate(
+        await User.updateOne(
           { email: otpRecord.email },
           { $set: { password: hashedPass } },
         ).session(session);

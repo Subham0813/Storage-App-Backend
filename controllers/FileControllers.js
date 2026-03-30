@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { existsSync, createReadStream, statSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { getFileDoc, hasAccess } from "../utils/helper.js";
-import { File as FileModel } from "../models/file.model.js";
+import { File } from "../models/file.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
 import { User } from "../models/user.model.js";
@@ -17,7 +17,7 @@ import {
 import { SUPER_ROLES } from "../misc/constants.js";
 import { base64URLEncode } from "./oauthControllers.js";
 import { UPLOAD_ROOT } from "../misc/constants.js";
-import { filenameSchema } from "../Schemas/userSchema.js";
+import { filenameSchema, uploadInitSchema } from "../Schemas/userSchema.js";
 
 //API Handlers
 
@@ -143,6 +143,11 @@ export const previewFileHandler = async (req, res, next) => {
       }
     }
 
+    const { success, data } = uploadInitSchema.shape.mime.safeParse(
+      file.meta.detectedMime,
+    );
+    const safeMime = success ? data : "application/octet-stream";
+
     const stat = statSync(filePath);
     //stream
     const range = req.headers.range;
@@ -163,7 +168,7 @@ export const previewFileHandler = async (req, res, next) => {
       res.writeHead(206, {
         "Content-Range": `bytes ${start}-${end}/${stat.size}`,
         "Content-Length": end - start + 1,
-        "Content-Type": file.meta.detectedMime,
+        "Content-Type": safeMime,
         "Content-Disposition": `${file.disposition}; filename="${file.filename}"`,
         "X-Content-Type-Options": "nosniff",
       });
@@ -180,7 +185,7 @@ export const previewFileHandler = async (req, res, next) => {
 
     res.writeHead(200, {
       "Content-Length": stat.size,
-      "Content-Type": file.meta.detectedMime,
+      "Content-Type": safeMime,
       "Content-Disposition": `${file.disposition}; filename="${file.filename}"`,
     });
 
@@ -309,7 +314,7 @@ export const renameFileHandler = async (req, res, next) => {
     const renamed = await UserFile.findOneAndUpdate(
       { _id: file._id, isDeleted: false },
       { $set: { filename: name } },
-      { new: true },
+      { returnDocument: "after" },
     )
       .select("_id filename")
       .lean();
@@ -388,11 +393,13 @@ export const copyFileHandler = async (req, res, next) => {
           { $inc: { size: file.size } },
           { session },
         );
+
         await User.updateOne(
           { _id: targetUser._id },
           { $inc: { usedStorage: file.size } },
           { session },
         );
+
         [newFile] = await UserFile.create(
           [
             {
@@ -417,8 +424,8 @@ export const copyFileHandler = async (req, res, next) => {
         );
 
         if (file.meta)
-          await FileModel.findByIdAndUpdate(
-            file.meta,
+          await File.updateOne(
+            { _id: file.meta },
             { $inc: { refCount: 1 } },
             { session },
           );
@@ -485,8 +492,8 @@ export const moveFileHandler = async (req, res, next) => {
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
-        await UserFile.findByIdAndUpdate(
-          file._id,
+        await UserFile.updateOne(
+          { _id: file._id },
           {
             $set: {
               parentId: targetParentId,
@@ -505,13 +512,13 @@ export const moveFileHandler = async (req, res, next) => {
           },
           { session },
         );
-        await Directory.findByIdAndUpdate(
-          targetParentId,
+        await Directory.updateOne(
+          { _id: targetParentId },
           { $inc: { size: file.size } },
           { session },
         );
-        await Directory.findByIdAndUpdate(
-          file.parentId,
+        await Directory.updateOne(
+          { _id: file.parentId },
           { $inc: { size: -file.size } },
           { session },
         );
@@ -560,13 +567,17 @@ export const moveToBinHandler = async (req, res, next) => {
     const isShared = hasAccess(file, ["EDITOR"], email);
     if (!isShared && !isOwner) return forbidden(res);
 
-    const binned = await UserFile.findByIdAndUpdate(file._id, {
-      $set: {
-        isDeleted: true,
-        deletedAt: new Date(),
-        deletedBy: "user",
+    const binned = await UserFile.findByIdAndUpdate(
+      file._id,
+      {
+        $set: {
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedBy: "user",
+        },
       },
-    })
+      { returnDocument: "after" },
+    )
       .select("_id filename parentId isDeleted")
       .lean();
 
@@ -620,8 +631,8 @@ export const restoreFileHandler = async (req, res, next) => {
     // const { _id: uid, rootDirId } = file.userId;
     // const rfp = await restoreFileParent(uid, file, rootDirId);
 
-    const restored = await UserFile.findOneAndUpdate(
-      { _id: file._id },
+    const restored = await UserFile.findByIdAndUpdate(
+      file._id,
       {
         $set: {
           isDeleted: false,
@@ -629,6 +640,7 @@ export const restoreFileHandler = async (req, res, next) => {
           deletedBy: "none",
         },
       },
+      { returnDocument: "after" },
     )
       .select("_id, filename, parentId isDeleted")
       .lean();
@@ -664,37 +676,43 @@ export const deleteFileHandler = async (req, res, next) => {
           userId: req.user._id,
         })
           .select("userId parentId size meta")
-          .populate({ path: "meta", select: "objectKey" })
+          .populate({ path: "meta", select: "refCount objectKey" })
           .session(session)
           .lean();
 
-        await Directory.findOneAndUpdate(
+        await Directory.updateOne(
           { _id: file.parentId },
           { $inc: { size: -file.size } },
           { session },
         );
 
-        await User.findOneAndUpdate(
+        await User.updateOne(
           { _id: req.user._id },
           { $inc: { usedStorage: -file.size } },
           { session },
         );
 
-        let updatedFile = null;
-        if (file.meta)
-          updatedFile = await FileModel.findOneAndUpdate(
-            { _id: file.meta._id, refCount: { $gt: 0 } },
-            { $inc: { refCount: -1 } },
-            { session, new: true },
-          ).select("_id objectKey refCount");
+        let uf = null;
 
-        if (updatedFile && updatedFile.refCount < 1) {
-          await FileModel.deleteOne({ _id: updatedFile._id });
+        if (file.meta && file.meta.refCount - 1 > 0) {
+          uf = await File.findByIdAndUpdate(
+            file.meta._id,
+            { $inc: { refCount: -1 } },
+            { session, returnDocument: "after" },
+          )
+            .select("objectKey")
+            .lean();
+        } else if (file.meta && file.meta.refCount - 1 <= 0) {
+          uf = await File.findByIdAndDelete(file.meta._id, { session })
+            .select("objectKey")
+            .lean();
+
           const deletePath = path.resolve(
             UPLOAD_ROOT,
             file.userId.toString(),
-            file.meta.objectKey,
+            uf.objectKey,
           );
+
           if (deletePath.startsWith(path.resolve(UPLOAD_ROOT) + path.sep))
             filePathToDelete = deletePath;
         }
@@ -771,13 +789,13 @@ export const shareFileHandler = async (req, res, next) => {
         await UserFile.updateOne(
           { _id: req.params.id, userId: req.user._id, isDeleted: false },
           { $pull: { sharedWith: { email: { $in: emailsToUpdate } } } },
-          { new: true, session },
+          { returnDocument: "after", session },
         );
 
         updateQuery.$set.sharedBy = "user";
         updated = await UserFile.findByIdAndUpdate(file._id, updateQuery, {
           session,
-          new: true,
+          returnDocument: "after",
         })
           .select("sharedWith -_id")
           .lean();
@@ -908,7 +926,7 @@ export const getNewFileShareToken = async (req, res, next) => {
         sharedBy: { $ne: "none" },
       },
       { $set: { shareToken, sharedBy: "user" } },
-      { new: true },
+      { returnDocument: "after" },
     )
       .select("_id")
       .lean();
@@ -960,7 +978,7 @@ export const revokeAccessFileHandler = async (req, res, next) => {
         updated = await UserFile.findOneAndUpdate(
           { _id: req.params.id, userId: req.user._id, isDeleted: false },
           updateQuery,
-          { new: true, session },
+          { returnDocument: "after", session },
         )
           .select("_id sharedWith publicRole")
           .lean();
@@ -1001,7 +1019,7 @@ export const revokeAccessFileHandler = async (req, res, next) => {
 export const makeFileStarred = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return badRequest(res, "Invalid id.");
-  
+
   const { starred } = req.body;
   if (typeof starred !== "boolean") return badRequest(res, "Invalid payload.");
   try {
@@ -1013,7 +1031,7 @@ export const makeFileStarred = async (req, res, next) => {
         isStarred: !starred,
       },
       { $set: { isStarred: starred } },
-      { new: true },
+      { returnDocument: "after" },
     )
       .select("_id")
       .lean();

@@ -2,10 +2,9 @@ import fs from "node:fs";
 import path from "path";
 import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
+import { UPLOAD_ROOT } from "../misc/constants.js";
 
 const MAX_DEPTH = process.env.MAX_DEPTH || 5;
-const UPLOAD_ROOT =
-  process.env.UPLOAD_ROOT || path.resolve(process.cwd() + "/uploads");
 
 /**
  * Utility: serveZip
@@ -64,7 +63,11 @@ export const serveZip = async ({
     // Ensure meta exists before accessing objectKey
     if (!file.meta?.objectKey) continue;
 
-    const absolutePath = path.resolve(UPLOAD_ROOT, file.meta.objectKey);
+    const absolutePath = path.resolve(
+      UPLOAD_ROOT,
+      userId.toString(),
+      file.meta.objectKey,
+    );
 
     if (!absolutePath.startsWith(UPLOAD_ROOT)) continue;
     if (!fs.existsSync(absolutePath)) continue;
