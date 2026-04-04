@@ -3,22 +3,16 @@ import mongoose from "mongoose";
 import { existsSync, createWriteStream, createReadStream } from "node:fs";
 import { mkdir, rename, unlink, stat, appendFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-
 import { google } from "googleapis";
 import { fileTypeFromFile } from "file-type";
-
 import { DriveIntegration } from "../models/integration.model.js";
 import { UploadSession } from "../models/uploadSession.model.js";
 import { File as FileModel } from "../models/file.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { finalizeStorageRecord } from "../utils/storage.js";
-import { badRequest, getFileHash } from "../utils/helper.js";
+import { getErrorObject, getFileHash } from "../utils/helper.js";
+import { TIME, UPLOAD_ROOT, TEMP_ROOT, EXPORT_MAP } from "../misc/constants.js";
 import {
-  TIME,
-  CHUNK_SIZE,
-  UPLOAD_ROOT,
-  TEMP_ROOT,
-  EXPORT_MAP,
   google_client_id,
   google_client_secret,
   google_drive_redirect_uri,
@@ -55,7 +49,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
   const { _id: userId, role, allotedStorage, usedStorage } = req.user;
   const parent = req.parent;
 
-  if (files.length < 1) return badRequest(res, "Invalid payload.");
+  if (files.length < 1) return next(getErrorObject("Invalid payload."));
 
   try {
     const integration = await DriveIntegration.findOne({
@@ -63,14 +57,13 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
       provider: "google-drive",
     });
 
-    if (!integration)
-      return res.status(403).json({ message: "Drive not connected." });
+    if (!integration) return next(getErrorObject("Drive not connected."));
 
     const drive = getDriveClient(integration);
 
     // 0. Pre-process
     let remaining = allotedStorage - usedStorage;
-    if (remaining < 1) return badRequest(res, "Storage limit exceeded.");
+    if (remaining < 1) return next(getErrorObject("Storage limit exceeded."));
     const skipped = [];
     const accepted = [];
     const chunkSize = 16384;
@@ -89,7 +82,6 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
         });
       } else {
         accepted.push({
-          id: file.id,
           userId: parent.userId._id,
           parentId: parent._id,
           filename: file.name || "new file" + file.mimeType,
@@ -102,36 +94,30 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
         });
       }
     }
+
     if (accepted.length < 1)
       return res.status(400).json({
-        success: false,
-        message: "No files accepted.",
+        success: true,
+        message: "No files are accepted.",
         data: { skipped },
       });
 
     // 1. Create sessions for frontend polling
     const sessions = await Promise.all(
-      accepted.map(({ id, ...file }) =>
-        UploadSession.create({
+      accepted.map((file) => {
+        const { _id, filename, size, mime } = UploadSession.create({
           ...file,
           expiresAt: new Date(Date.now() + TIME.ONE_DAY),
-        }),
-      ),
+        });
+        return { _id, filename, size, mime };
+      }),
     );
 
     // 2. Immediate response
     res.status(201).json({
       success: true,
       message: "Import initiated.",
-      data: {
-        sessions: sessions.map(({ _id, filename, size, mime }) => ({
-          _id,
-          filename,
-          size,
-          mime,
-        })),
-        skipped,
-      },
+      data: { sessions, skipped },
     });
 
     // 3. Background Processing Loop
@@ -350,34 +336,6 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
         } catch (err) {
           console.error(`Import failed for ${file.filename}: ${err.message}`);
 
-          // const logEntry = {
-          //   id: crypto.randomUUID().replaceAll("-", ""),
-          //   timestamp: new Date().toISOString(),
-          //   url: req.originalUrl,
-          //   method: req.method,
-          //   user: req.user ? req.user.email || req.user._id : undefined,
-          //   error: {
-          //     name: err.name,
-          //     message: err.message,
-          //     stack: err.stack,
-          //     code: err.code,
-          //     details: err?.details || err?.errInfo || undefined,
-          //     status: err.status || undefined,
-          //     type: err.constructor ? err.constructor.name : undefined,
-          //   },
-          //   requestBody: req.body,
-          //   query: req.query,
-          //   params: req.params,
-          // };
-          // try {
-          //   await appendFile(
-          //     "./error.log.json",
-          //     JSON.stringify(logEntry) + ",\n",
-          //   );
-          // } catch (e) {
-          //   console.error("Logging failed", e);
-          // }
-
           // If file moved to storage, and DB failed -> Delete from storage
           if (finalPath) {
             await unlink(path.resolve(finalPath)).catch(() => {});
@@ -415,12 +373,10 @@ export const getDrivePickerTokenHandler = async (req, res, next) => {
       stateCreatedAt: { $exists: false },
     });
 
-    if (!integration) {
-      return badRequest(
-        res,
-        "Google Drive integration not found or misconfigured.",
+    if (!integration)
+      return next(
+        getErrorObject("Google Drive integration not found or misconfigured."),
       );
-    }
 
     const auth = new google.auth.OAuth2({
       client_id: google_client_id,
@@ -435,6 +391,7 @@ export const getDrivePickerTokenHandler = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
+      message: "Token refreshed.",
       data: { accessToken: credentials.access_token },
     });
   } catch (err) {

@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import { User } from "../models/user.model.js";
-import { badRequest, forbidden, notFound } from "../utils/helper.js";
+import { getErrorObject } from "../utils/helper.js";
 import { Directory } from "../models/directory.model.js";
 import { Session } from "../models/session.model.js";
 import { UserFile } from "../models/user_file.model.js";
@@ -17,8 +17,12 @@ import { File } from "../models/file.model.js";
  */
 export const getAllUsers = async (req, res, next) => {
   try {
-    const users = await User.find({ isDeleted: false }).select("-__v").lean();
-    return res.status(200).json({ success: true, data: { users } });
+    const users = await User.find({ isDeleted: false })
+      .select("-__v -googleId -githubId")
+      .lean();
+    return res
+      .status(200)
+      .json({ success: true, message: "Users found.", data: { users } });
   } catch (err) {
     console.log(err);
     next(err);
@@ -34,8 +38,12 @@ export const getAllUsers = async (req, res, next) => {
  */
 export const getAllDeletedUsers = async (req, res, next) => {
   try {
-    const users = await User.find({ isDeleted: true }).select("-__v").lean();
-    return res.status(200).json({ success: true, data: { users } });
+    const users = await User.find({ isDeleted: true })
+      .select("-__v -googleId -githubId")
+      .lean();
+    return res
+      .status(200)
+      .json({ success: true, message: "Users found.", data: { users } });
   } catch (err) {
     next(err);
   }
@@ -51,52 +59,17 @@ export const getAllDeletedUsers = async (req, res, next) => {
  */
 export const getSingleUser = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    if (!mongoose.isValidObjectId(id)) return badRequest(res, "Invalid id.");
+    const { uid } = req.params;
+    if (!mongoose.isValidObjectId(uid))
+      return next(getErrorObject("Invalid id."));
 
-    const user = await User.findById(id).select("-__v").lean();
-    if (!user) return notFound(res, "User not found.");
-    return res.status(200).json({ success: true, data: { user } });
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * path: /api/admin/directories/:id
- * what it do: Get a directory and its children for a user.
- * requirements:
- *   - req.params: { id: string } (valid Mongo ObjectId)
- *   - req.user: authenticated admin user
- *   - Only accessible by ADMIN or SUPER_ADMIN
- */
-export const getDirectory = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.isValidObjectId(id)) return badRequest(res, "Invalid id.");
-
-    const directory = await Directory.findOne({
-      _id: id,
-      isDeleted: false,
-    })
-      .populate("UserId", "role")
+    const user = await User.findById(uid)
+      .select("-__v -googleId -githubId")
       .lean();
-    if (!directory) return notFound(res, "directory not found.");
-
-    const files = await UserFile.find({
-      parentId: directory._id,
-      userId: directory.userId,
-    });
-
-    const directories = await Directory.find({
-      parentId: directory._id,
-      userId: directory.userId,
-    });
-
-    return res.status(200).json({
-      success: true,
-      data: { directory, children: { directories, files } },
-    });
+    if (!user) return next(getErrorObject("User not found."));
+    return res
+      .status(200)
+      .json({ success: true, message: "User found.", data: { user } });
   } catch (err) {
     next(err);
   }
@@ -119,22 +92,25 @@ export const changeUserRole = async (req, res, next) => {
 
     const allowedRoles = ["GUEST", "USER", "ADMIN"];
     if (!requestedRole || !allowedRoles.includes(requestedRole))
-      return badRequest(res, "Invalid role.");
+      return next(getErrorObject("Invalid role."));
 
     if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-      return badRequest(res, "Invalid id.");
+      return next(getErrorObject("Invalid id."));
 
     const user = await User.findOneAndUpdate(
       { _id: id, isDeleted: false, role: { $ne: req.user.role } },
       { role: requestedRole },
       { returnDocument: "after" },
     );
-    if (!user) return forbidden(res);
+    if (!user)
+      return next(getErrorObject("You don't have this permission.", 409));
 
-    return res.status(200).json({
+    return res.status(201).json({
       success: true,
-      message: "User permissions changed.",
-      data: { user: { _id: user._id, role: requestedRole } },
+      message: "User role changed.",
+      data: {
+        user: { _id: user._id, role: requestedRole },
+      },
     });
   } catch (err) {
     next(err);
@@ -153,20 +129,22 @@ export const logoutUser = async (req, res, next) => {
   try {
     const { id } = req.params;
     if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-      return badRequest(res, "Invalid id.");
+      return next(getErrorObject("Invalid id."));
 
     const user = await User.findOne({ _id: id, isDeleted: false })
       .select("_id role")
       .lean();
-    if (!user) return notFound(res, "User not found.");
+    if (!user) return next(getErrorObject("User not found.", 404));
 
     if (user.role === req.user.role || user.role === "SUPER_ADMIN")
-      return forbidden(res);
+      return next(getErrorObject("You don't have this permission.", 409));
 
     await Session.deleteMany({ userId: user._id });
-    return res
-      .status(200)
-      .json({ success: true, message: "User logged out.", data: { user } });
+    return res.status(200).json({
+      success: true,
+      message: "User logged out. Session deleted.",
+      data: { user },
+    });
   } catch (err) {
     next(err);
   }
@@ -183,7 +161,7 @@ export const logoutUser = async (req, res, next) => {
 export const tempRemoveUser = async (req, res, next) => {
   const { id } = req.params;
   if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-    return badRequest(res, "Invalid id.");
+    return next(getErrorObject("Invalid id."));
 
   try {
     const user = await User.findOne({
@@ -192,8 +170,9 @@ export const tempRemoveUser = async (req, res, next) => {
       role: { $ne: req.user.role },
     });
 
-    if (!user) return notFound(res, "User not found.");
-    if (user.role === "SUPER_ADMIN") return forbidden(res);
+    if (!user) return next(getErrorObject("User not found.", 404));
+    if (user.role === "SUPER_ADMIN")
+      return next(getErrorObject("You don't have this permission.", 409));
 
     const session = await mongoose.startSession();
     let updated = null;
@@ -212,9 +191,11 @@ export const tempRemoveUser = async (req, res, next) => {
       await session.endSession();
     }
 
-    return res
-      .status(200)
-      .json({ success: true, message: "User deleted.", data: { updated } });
+    return res.status(200).json({
+      success: true,
+      message: "User banned.",
+      data: { user: updated },
+    });
   } catch (err) {
     next(err);
   }
@@ -230,8 +211,9 @@ export const tempRemoveUser = async (req, res, next) => {
 export const recoverUser = async (req, res, next) => {
   const { id } = req.params;
   if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-    return badRequest(res, "Invalid id.");
-  if (req.user.role !== "SUPER_ADMIN") return forbidden(res);
+    return next(getErrorObject("Invalid id."));
+  if (req.user.role !== "SUPER_ADMIN")
+    return next(getErrorObject("You don't have this permission.", 409));
 
   try {
     const user = await User.findOneAndUpdate(
@@ -241,7 +223,7 @@ export const recoverUser = async (req, res, next) => {
     )
       .select("_id isDeleted")
       .lean();
-    if (!user) return notFound(res, "User not found.");
+    if (!user) return next(getErrorObject("User not found.", 404));
 
     return res
       .status(200)
@@ -260,17 +242,21 @@ export const recoverUser = async (req, res, next) => {
  */
 export const deleteUser = async (req, res, next) => {
   const { id } = req.params;
+
   if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-    return badRequest(res, "Invalid id.");
-  if (req.user.role !== "SUPER_ADMIN") return forbidden(res);
+    return next(getErrorObject("Invalid id."));
+
+  if (req.user.role !== "SUPER_ADMIN")
+    return next(getErrorObject("You don't have this permission.", 409));
 
   try {
     const user = await User.find({ _id: id }).select("_id").lean();
-    if (!user) return notFound(res, "User not found.");
+    if (!user) return next(getErrorObject("User not found.", 404));
 
     const files = await File.find({ userId: user._id })
       .select("objectKey")
       .lean();
+
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
@@ -310,7 +296,7 @@ export const deleteUser = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "User deleted and can not be recovered anymore.",
+      message: "Userdata deleted permanently and no longer available.",
       data: { user },
     });
   } catch (err) {

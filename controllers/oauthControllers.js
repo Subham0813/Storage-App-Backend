@@ -1,24 +1,21 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
 
-import { TIME } from "../misc/constants.js";
+import {
+  github_client_id,
+  github_client_secret,
+  github_redirect_uri,
+  google_client_id,
+  google_client_secret,
+  google_drive_redirect_uri,
+  google_redirect_uri,
+  TIME,
+} from "../misc/constants.js";
 import { google } from "googleapis";
 import { User } from "../models/user.model.js";
 import { Directory } from "../models/directory.model.js";
-import { createSession } from "../utils/createSession.js";
 import { DriveIntegration } from "../models/integration.model.js";
 import { Session } from "../models/session.model.js";
-import { responsePayload } from "../utils/helper.js";
-
-const github_client_id = process.env.GITHUB_CLIENT_ID;
-const github_redirect_uri = process.env.GITHUB_REDIRECT_URI;
-const github_client_secret = process.env.GITHUB_CLIENT_SECRET;
-
-const google_client_id = process.env.GOOGLE_CLIENT_ID;
-const google_redirect_uri = process.env.GOOGLE_REDIRECT_URI;
-const google_client_secret = process.env.GOOGLE_CLIENT_SECRET;
-
-const google_drive_redirect_uri = process.env.GOOGLE_DRIVE_REDIRECT_URI;
 
 const googleClient = new google.auth.OAuth2(
   google_client_id,

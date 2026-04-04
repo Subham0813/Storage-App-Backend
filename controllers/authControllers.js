@@ -6,12 +6,7 @@ import { TIME, EMAIL_REGEX, MAX_DEVICE_COUNT } from "../misc/constants.js";
 import { User } from "../models/user.model.js";
 import { Directory } from "../models/directory.model.js";
 import { OTP } from "../models/otp.model.js";
-import {
-  badRequest,
-  getUserPayload,
-  notFound,
-  responsePayload,
-} from "../utils/helper.js";
+import { getErrorObject, getUserPayload } from "../utils/helper.js";
 import { Session } from "../models/session.model.js";
 import {
   authTokenSchema,
@@ -32,7 +27,7 @@ import {
 export const requestOtpHandler = async (req, res, next) => {
   try {
     const { authToken } = req.signedCookies;
-    if (!authToken) return badRequest(res, "Invalid cookies");
+    if (!authToken) return next(getErrorObject("Invalid cookies."));
     const { success, data, error } = await requestOtpSchema.safeParseAsync(
       req.body,
     );
@@ -48,44 +43,32 @@ export const requestOtpHandler = async (req, res, next) => {
         ? authError.issues.map((err) => err.message).join(", ")
         : "";
 
-    // console.log(error, authError);
-    if (errorMessage.length > 0) {
-      return responsePayload(res, 400, errorMessage);
-    }
+    if (errorMessage.length > 0) return next(getErrorObject(errorMessage));
 
     const { id: authId, purpose: authPurpose } = authData;
     const { email, purpose } = data;
-    if (purpose !== authPurpose)
-      return responsePayload(
-        res,
-        400,
-        "Purpose mismatch between payload and auth token.",
-      );
+    if (purpose !== authPurpose) {
+      return next(getErrorObject("Purpose not matched with cookie."));
+    }
 
     const session = await mongoose.startSession();
-    let newOtp, expiresAt, deviceLoggedCount;
-    newOtp = expiresAt = deviceLoggedCount = null;
+    let newOtp, otpExpiresAt, deviceLoggedCount;
+    newOtp = otpExpiresAt = deviceLoggedCount = null;
 
     try {
       await session.withTransaction(async () => {
         const user = await User.findOne({ _id: authId, email })
           .select("isEmailVerified deviceCount")
-          .session(session);
-
-        if (!user) {
-          const error = new Error("Invalid email address or token.");
-          error.statusCode = 404;
-          throw error;
-        }
+          .session(session)
+          .lean();
+        if (!user) throw getErrorObject("Invalid email address or token.", 404);
 
         let existingOtps = await OTP.find({ email, purpose, userId: user._id })
           .session(session)
           .select("_id")
           .lean();
         if (existingOtps.length >= 3) {
-          const error = new Error("Limit exceeds for OTP request.");
-          error.statusCode = 429;
-          throw error;
+          throw getErrorObject("Limit exceeds for OTP request.", 429);
         }
 
         newOtp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -94,7 +77,7 @@ export const requestOtpHandler = async (req, res, next) => {
           { session },
         );
 
-        expiresAt = new Date(
+        otpExpiresAt = new Date(
           newOtpRecord.createdAt.getTime() + TIME.FIVE_MINUTES,
         );
         deviceLoggedCount = user.deviceCount;
@@ -107,16 +90,10 @@ export const requestOtpHandler = async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      statusCode: 201,
       message: "An One Time Password has been sent to your Email address.",
-      data: { newOtp, expiresAt, deviceLoggedCount },
+      data: { newOtp, otpExpiresAt, deviceLoggedCount },
     });
   } catch (err) {
-    if (err.statusCode) {
-      return responsePayload(res, err.statusCode, err.message);
-    }
-    err.customMessage =
-      "One Time Password request failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };
@@ -133,7 +110,7 @@ export const requestOtpHandler = async (req, res, next) => {
 export const verifyOtpHandler = async (req, res, next) => {
   try {
     const { authToken } = req.signedCookies;
-    if (!authToken) return badRequest(res, "Invalid cookies.");
+    if (!authToken) return next(getErrorObject("Invalid cookies."));
 
     const { success, data, error } = await verifyOtpSchema.safeParseAsync(
       req.body,
@@ -150,9 +127,7 @@ export const verifyOtpHandler = async (req, res, next) => {
         ? authError.issues.map((err) => err.message).join(", ")
         : "";
 
-    if (errorMessage.length > 0) {
-      return responsePayload(res, 400, errorMessage);
-    }
+    if (errorMessage.length > 0) return next(getErrorObject(errorMessage));
 
     const { id: authId, purpose: authPurpose } = authData;
     const { email, otp, logoutLastSession } = data;
@@ -172,11 +147,7 @@ export const verifyOtpHandler = async (req, res, next) => {
           .session(_session)
           .lean();
 
-        if (!user) {
-          const error = new Error("User does not exists.");
-          error.statusCode = 404;
-          throw error;
-        }
+        if (!user) throw getErrorObject("User not found.", 404);
 
         if (
           authPurpose !== "forgot-password" &&
@@ -185,11 +156,10 @@ export const verifyOtpHandler = async (req, res, next) => {
           if (logoutLastSession) {
             await Session.deleteOne({ userId: user._id }).session(_session);
           } else {
-            const error = new Error(
-              "Session creation failed. Max.session limit reached.",
+            throw getErrorObject(
+              "Session creation failed. Max. limit reached.",
+              413,
             );
-            error.statusCode = 413;
-            throw error;
           }
         }
 
@@ -200,18 +170,10 @@ export const verifyOtpHandler = async (req, res, next) => {
         })
           .sort({ createdAt: -1 })
           .session(_session);
-        if (!otpRecord) {
-          const error = new Error("OTP expired.");
-          error.statusCode = 410;
-          throw error;
-        }
+        if (!otpRecord) throw getErrorObject("OTP expired.", 410);
 
         const isValid = await otpRecord.compareOTP(otp.toString());
-        if (!isValid) {
-          const error = new Error("Invalid OTP.");
-          error.statusCode = 404;
-          throw error;
-        }
+        if (!isValid) throw getErrorObject("Invalid OTP.", 400);
 
         const updateQuery = {};
         if (!user.isLogged) updateQuery["$set"] = { isLogged: true };
@@ -262,10 +224,9 @@ export const verifyOtpHandler = async (req, res, next) => {
           expires: new Date(expires),
           path: "/",
         })
-        .status(201)
+        .status(200)
         .json({
           success: true,
-          statusCode: 201,
           message: "OTP verified.",
         });
     }
@@ -287,16 +248,10 @@ export const verifyOtpHandler = async (req, res, next) => {
       .status(201)
       .json({
         success: true,
-        statusCode: 200,
-        message: "OTP verification successful. Session created.",
+        message: "Session created.",
         data: { user: userPayload },
       });
   } catch (err) {
-    if (err.statusCode) {
-      return responsePayload(res, err.statusCode, err.message);
-    }
-    err.customMessage =
-      "One Time Password verification failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };
@@ -314,19 +269,15 @@ export const loginHandler = async (req, res, next) => {
     const { success, data, error } = await loginSchema.safeParseAsync(req.body);
     if (!success) {
       const errorMessage = error.issues.map((err) => err.message).join(", ");
-      return responsePayload(res, 400, errorMessage);
+      return next(getErrorObject(errorMessage));
     }
 
     const { email, password } = data;
-    const userEmail = email ? email.toLowerCase().trim() : null;
-
     // $or: [{ email: userEmail }, { username: username }],
-    const user = await User.findOne({ email: userEmail }).select("+password");
+    const user = await User.findOne({ email }).select("+password");
 
     if (!user || !user.password || !(await user.comparePassword(password))) {
-      const error = new Error("Incorrect email or password.");
-      error.statusCode = 404;
-      throw error;
+      return next(getErrorObject("Incorrect email or password."));
     }
 
     const expires = Date.now() + TIME.TEN_MINUTES;
@@ -344,17 +295,8 @@ export const loginHandler = async (req, res, next) => {
         },
       )
       .status(200)
-      .json({
-        success: true,
-        statusCode: 200,
-        message: "Login token created.",
-      });
+      .json({ success: true, message: "Login token created." });
   } catch (err) {
-    if (err.statusCode) {
-      return responsePayload(res, err.statusCode, err.message);
-    }
-    err.customMessage =
-      "Login process failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };
@@ -374,7 +316,7 @@ export const registerHandler = async (req, res, next) => {
     );
     if (!success) {
       const errorMessage = error.issues.map((err) => err.message).join(", ");
-      return responsePayload(res, 400, errorMessage);
+      return next(getErrorObject(errorMessage));
     }
 
     const { fullname, email, password } = data;
@@ -383,11 +325,7 @@ export const registerHandler = async (req, res, next) => {
     try {
       await session.withTransaction(async () => {
         const existingUser = await User.findOne({ email }).session(session);
-        if (existingUser) {
-          const error = new Error("User already registered.");
-          error.statusCode = 409;
-          throw error;
-        }
+        if (existingUser) throw getErrorObject("User already registered.", 409);
 
         [user] = await User.create([{ name: fullname, email, password }], {
           session,
@@ -427,18 +365,12 @@ export const registerHandler = async (req, res, next) => {
           path: "/",
         },
       )
-      .status(201)
+      .status(200)
       .json({
         success: true,
-        statusCode: 201,
         message: "Register token created.",
       });
   } catch (err) {
-    if (err.statusCode) {
-      return responsePayload(res, err.statusCode, err.message);
-    }
-    err.customMessage =
-      "Register process failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };
@@ -458,11 +390,11 @@ export const forgotPasswordInitHandler = async (req, res, next) => {
 
     if (!success) {
       const errorMessage = error.issues.map((err) => err.message).join(", ");
-      return responsePayload(res, 400, errorMessage);
+      return next(getErrorObject(errorMessage));
     }
 
     const user = await User.findOne({ email: data.email });
-    if (!user) return notFound(res, "User does not exists.");
+    if (!user) return next(getErrorObject("User not found.", 404));
 
     const expires = Date.now() + TIME.TEN_MINUTES;
     return res
@@ -478,15 +410,12 @@ export const forgotPasswordInitHandler = async (req, res, next) => {
           path: "/",
         },
       )
-      .status(201)
+      .status(200)
       .json({
         success: true,
-        statusCode: 201,
         message: "Password changing token created.",
       });
   } catch (err) {
-    err.customMessage =
-      "Forgot password initialization failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };
@@ -506,14 +435,14 @@ export const forgotPasswordHandler = async (req, res, next) => {
       .safeParseAsync(req.body);
     if (!success) {
       const errorMessage = error.issues.map((err) => err.message).join(", ");
-      return responsePayload(res, 400, errorMessage);
+      return next(getErrorObject(errorMessage));
     }
 
     const { newPassword } = data;
     const { oid } = req.signedCookies;
 
     if (!newPassword || !oid || !mongoose.isValidObjectId(oid))
-      return responsePayload(res, 400, "Invalid cookies or payload.");
+      return next(getErrorObject("Invalid cookies or payload."));
 
     const session = await mongoose.startSession();
 
@@ -528,11 +457,7 @@ export const forgotPasswordHandler = async (req, res, next) => {
           .select("email")
           .session(session);
 
-        if (!otpRecord) {
-          const error = new Error("Invalid OTP.");
-          error.statusCode = 404;
-          throw error;
-        }
+        if (!otpRecord) throw getErrorObject("Invalid OTP.", 404);
 
         await User.updateOne(
           { email: otpRecord.email },
@@ -548,17 +473,11 @@ export const forgotPasswordHandler = async (req, res, next) => {
     //password changed success message
     //await sendEmail({email, purpose})
 
-    return res.clearCookie("oid").status(201).json({
-      success: true,
-      statusCode: 201,
-      message: "Password changed.",
-    });
+    return res
+      .clearCookie("oid")
+      .status(201)
+      .json({ success: true, message: "Password changed." });
   } catch (err) {
-    if (err.statusCode) {
-      return responsePayload(res, err.statusCode, err.message);
-    }
-    err.customMessage =
-      "Password reset process failed due to some unavoidable reasons. Try again.";
     next(err);
   }
 };

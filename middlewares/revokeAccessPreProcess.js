@@ -8,7 +8,7 @@
  */
 export const revokeAccessPreProcessor = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
+    return next(getErrorObject("Invalid id."));
 
   const { emails, publicRole } = req.body;
   const formattedPublicRole = publicRole
@@ -20,7 +20,7 @@ export const revokeAccessPreProcessor = async (req, res, next) => {
     !Array.isArray(emails) ||
     (formattedPublicRole && formattedPublicRole !== "NONE")
   )
-    return badRequest(res, "Invalid payload");
+    return next(getErrorObject("Invalid payload."));
 
   const emailsToUpdate = [];
 
@@ -31,7 +31,7 @@ export const revokeAccessPreProcessor = async (req, res, next) => {
   });
 
   if (!isValid)
-    return badRequest(res, "Invalid `emails`. Must contain valid emails.");
+    return next(getErrorObject("Invalid `emails`. Must contain valid emails."));
 
   let updateQuery = {};
   if (emailsToUpdate.length > 0)

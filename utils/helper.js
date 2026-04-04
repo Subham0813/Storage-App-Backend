@@ -278,3 +278,13 @@ export const forbidden = (res) =>
     message: "You don't have this permission.",
     // error: "FORBIDDEN",
   });
+
+export const getErrorObject = (
+  errMessage = "Server error. Request not fullfiled.",
+  statusCode = 400,
+) => {
+  const err = new Error("");
+  err.customMessage = errMessage;
+  err.statusCode = statusCode;
+  return err;
+};

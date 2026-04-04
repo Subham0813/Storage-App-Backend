@@ -1,16 +1,16 @@
+import mongoose from "mongoose";
 import path from "node:path";
+import { fileTypeFromFile } from "file-type";
+import { existsSync } from "node:fs";
 import { mkdir, rename, rm, unlink } from "node:fs/promises";
 
 import { UploadSession } from "../models/uploadSession.model.js";
 import { File as FileModel } from "../models/file.model.js";
-import { User } from "../models/user.model.js";
-import { finalizeStorageRecord, mergeFileChunks } from "../utils/storage.js";
-import { badRequest, getFileDoc } from "../utils/helper.js";
-import { fileTypeFromFile } from "file-type";
-import mongoose from "mongoose";
-import { TIME, CHUNK_SIZE, TEMP_ROOT, UPLOAD_ROOT } from "../misc/constants.js";
 import { uploadInitSchema } from "../Schemas/userSchema.js";
-import { existsSync } from "node:fs";
+
+import { finalizeStorageRecord, mergeFileChunks } from "../utils/storage.js";
+import {  getErrorObject } from "../utils/helper.js";
+import { TIME, CHUNK_SIZE, TEMP_ROOT, UPLOAD_ROOT } from "../misc/constants.js";
 
 /**
  * path: /api/uploads/session/create
@@ -25,18 +25,14 @@ export const initUpload = async (req, res, next) => {
     const { success, data, error } = uploadInitSchema.safeParse(req.body);
     if (!success) {
       const errorMessage = error.issues.map((err) => err.message).join(", ");
-      return badRequest(res, errorMessage);
+      return next(getErrorObject(errorMessage));
     }
 
     const { name, size, mime } = data;
     const { _id, allotedStorage, usedStorage } = req.parent.userId;
 
     if (allotedStorage - usedStorage < size)
-      return res.status(400).json({
-        success: false,
-        message: `Insufficient storage for the file : ${name}`,
-        error: "MAX_STORAGE_LIMIT_REACHED",
-      });
+      return next(getErrorObject("Storage limit exceeded"));
 
     const { role } = req.user;
     const strategy = size > CHUNK_SIZE[role] ? "chunked" : "direct";
@@ -91,11 +87,11 @@ export const saveChunk = async (req, res, next) => {
       !Number.isInteger(chunkIndex) ||
       chunkIndex < 0
     )
-      return badRequest(res, "Wrong chunk indexing.");
+      return next(getErrorObject("Wrong chunk indexing."));
 
     const file = req.file;
     if (!file || file.size === 0 || !file.path)
-      return badRequest(res, "No chunk received.");
+      return next(getErrorObject("No chunk received."));
 
     const filePath = path.resolve(file.path);
     let error = null;
@@ -114,9 +110,7 @@ export const saveChunk = async (req, res, next) => {
 
     if (error) {
       if (filePath && existsSync(filePath)) await unlink(filePath);
-      return res
-        .status(error.status)
-        .json({ success: false, message: error.message });
+      return next(getErrorObject(error.message, error.status));
     }
 
     const status =
@@ -124,11 +118,11 @@ export const saveChunk = async (req, res, next) => {
     const td = path.resolve(TEMP_ROOT, _id.toString());
 
     if (!td.startsWith(path.resolve(TEMP_ROOT) + path.sep))
-      return next("Invalid session path.");
+      return next(getErrorObject("Invalid session path."));
 
     const chunkPath = path.resolve(td, `chunk-${chunkIndex}`);
     if (!chunkPath.startsWith(td + path.sep))
-      return next("Invalid chunk path.");
+      return next(getErrorObject("Invalid chunk path."));
 
     const uq = {
       $addToSet: { uploadedChunks: chunkIndex }, //prevents duplicate indices
@@ -182,9 +176,9 @@ export const completeUpload = async (req, res, next) => {
   const upload = req.uploadSession;
   const { _id, uploadedChunks, totalChunks, parentId } = upload;
 
-  if (uploadedChunks.length !== totalChunks) {
-    return res.status(400).json({ message: "Chunks missing." });
-  }
+  if (uploadedChunks.length !== totalChunks)
+    return next(getErrorObject("Chunks missing."));
+
   const mergedPath = path.resolve(TEMP_ROOT, `${_id.toString()}-merged`);
   const tempDir = path.resolve(TEMP_ROOT, _id.toString());
 
@@ -223,7 +217,6 @@ export const completeUpload = async (req, res, next) => {
 
       if (existingRecord) {
         await unlink(mergedPath);
-        // console.log("File unlinked...\n", mergedPath);
       } else {
         rename(mergedPath, finalPath).catch((err) =>
           console.error("rename failed:", err),
@@ -312,10 +305,9 @@ export const getUploadStatus = async (req, res, next) => {
         ? Math.round((bytesRead / size) * 100) || 0
         : Math.round((uploadedChunks.length / totalChunks) * 100);
 
-    return res.json({
-      success: true,
-      data: { status, progress, isCompleted },
-    });
+    return res
+      .status(200)
+      .json({ success: true, data: { status, progress, isCompleted } });
   } catch (err) {
     next(err);
   }

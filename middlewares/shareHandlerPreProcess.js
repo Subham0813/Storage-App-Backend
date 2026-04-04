@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
-import { badRequest } from "../utils/helper.js";
-import { EMAIL_REGEX } from "../misc/constants.js";
+import { getErrorObject } from "../utils/helper.js";
 import { emailSchema } from "../Schemas/authSchema.js";
 
 /**
@@ -13,18 +12,19 @@ import { emailSchema } from "../Schemas/authSchema.js";
  */
 export const shareHandlerPreProcessor = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
+    return next(getErrorObject("Invalid id"));
 
   const { emailsWithRole } = req.body;
   if (!emailsWithRole || !Array.isArray(emailsWithRole))
-    return badRequest(res, "Invalid payload.");
+    return next(getErrorObject("Invalid payload"));
   else if (
     emailsWithRole.length < 1 ||
     emailsWithRole.length > 100 //allowing 100 email, role for sharing at once
   )
-    return badRequest(
-      res,
-      "Invalid payload. Array length should be between 1 and 100.",
+    return next(
+      getErrorObject(
+        "Invalid payload. Array length should be between 1 and 100",
+      ),
     );
 
   const validMap = new Map();
@@ -37,11 +37,11 @@ export const shareHandlerPreProcessor = async (req, res, next) => {
     return success && ["VIEWER", "EDITOR"].includes(cr);
   });
 
-  if (!isValid) return badRequest(res, "Invalid payload.");
+  if (!isValid) return next(getErrorObject("Invalid payload"));
 
   const accepted = Array.from(validMap.values());
   const emailsToUpdate = accepted.map((v) => v.email);
-  if (emailsToUpdate.length < 1) return badRequest(res, "Invalid emails.");
+  if (emailsToUpdate.length < 1) return next(getErrorObject("Invalid emails"));
 
   const updateQuery = { $set: { sharedAt: new Date() } };
   if (accepted.length > 0)

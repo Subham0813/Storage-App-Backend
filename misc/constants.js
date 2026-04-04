@@ -1,7 +1,13 @@
 import path from "path";
 
+export const github_client_id = process.env.GITHUB_CLIENT_ID;
+export const github_redirect_uri = process.env.GITHUB_REDIRECT_URI;
+export const github_client_secret = process.env.GITHUB_CLIENT_SECRET;
+
 export const google_client_id = process.env.GOOGLE_CLIENT_ID;
+export const google_redirect_uri = process.env.GOOGLE_REDIRECT_URI;
 export const google_client_secret = process.env.GOOGLE_CLIENT_SECRET;
+
 export const google_drive_redirect_uri = process.env.GOOGLE_DRIVE_REDIRECT_URI;
 
 export const MAX_DEVICE_COUNT = 2;

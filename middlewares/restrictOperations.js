@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { forbidden } from "../utils/helper.js";
+import { getErrorObject } from "../utils/helper.js";
 
 /**
  * Middleware: restrictRootOperations
@@ -15,7 +15,7 @@ export const restrictRootOperations = async (req, res, next) => {
     const paramId = req.params?.id.toString();
 
     if ((paramId && !mongoose.isValidObjectId(paramId)) || rootId === paramId) {
-      return forbidden(res);
+      return next(getErrorObject("You do not have this permission", 403));
     }
 
     next();
@@ -35,12 +35,8 @@ export const restrictRootOperations = async (req, res, next) => {
 export const checkAuthProviderStatus = (provider) => {
   return async (req, res, next) => {
     if (req.user.authProvider.includes(provider))
-      return res.status(409).json({
-        success: false,
-        statusCode: 409,
-        message: `Already connected with ${provider}.`,
-        error: "CONFLICT",
-      });
+      return next(getErrorObject(`Already connected with ${provider}`, 409));
+
     next();
   };
 };

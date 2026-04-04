@@ -1,7 +1,7 @@
 import multer from "multer";
-import { existsSync, mkdirSync } from "fs";
-import { badRequest } from "../utils/helper.js";
 import path from "path";
+import { existsSync, mkdirSync } from "fs";
+import { getErrorObject } from "../utils/helper.js";
 import { TEMP_ROOT } from "../misc/constants.js";
 /**
  * Multer config: diskStorage + upload instance
@@ -33,9 +33,7 @@ const diskStorage = multer.diskStorage({
 export const uploadChunk = (req, res, next) => {
   // 1. Ensure loadUploadSession ran first
   if (!req.uploadSession) {
-    return res
-      .status(500)
-      .json({ message: "Upload session not loaded before file processing." });
+    return next(getErrorObject("Upload-Session not found.", 404));
   }
 
   // 2. Extract the user's specific chunk size from the database record
@@ -52,17 +50,22 @@ export const uploadChunk = (req, res, next) => {
 
   // 4. Execute Multer and Catch Errors instantly
   upload(req, res, (err) => {
-    if (err instanceof multer.MulterError) {
-      if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(413).json({
-          // 413 Payload Too Large
-          success: false,
-          message: `Chunk exceeds the allowed size limit of ${req.uploadSession.chunkSize} bytes.`,
-        });
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return next(
+            getErrorObject(
+              `File chunk too large. Maximum allowed size is ${limitBytes} bytes.`,
+            ),
+          );
+        }
       }
-      return badRequest(res, err.message);
-    } else if (err) {
-      next(err);
+
+      return next(err);
+    }
+
+    if (!req.file) {
+      return next(getErrorObject("No file uploaded."));
     }
 
     next();

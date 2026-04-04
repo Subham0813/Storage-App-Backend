@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 import { Directory } from "../models/directory.model.js";
-import { hasAccess } from "../utils/helper.js";
-import { badRequest, forbidden, notFound } from "../utils/helper.js";
+import { getErrorObject, hasAccess } from "../utils/helper.js";
 
 /**
  * Middleware: loadParentDir
@@ -14,18 +13,26 @@ import { badRequest, forbidden, notFound } from "../utils/helper.js";
  */
 export const loadParentDir = async (req, res, next) => {
   const { targetId } = req.body;
-  if (!mongoose.isValidObjectId(targetId)) {
-    return badRequest(res, "Invalid id.");
-  }
+  if (!mongoose.isValidObjectId(targetId))
+    return next(getErrorObject("Invalid id"));
+
   try {
     const target = await Directory.findOne({
       _id: targetId,
       isDeleted: false,
-    }).populate("userId", "allotedStorage usedStorage").lean();
-    if (!target) return notFound("Target directory not exists.");
-    const isOwner = target.userId._id.toString() ===  req.user._id.toString();
-    const isShared =  req.user.email ? hasAccess(target, ["EDITOR"],  req.user.email) : false;
-    if (!isShared && !isOwner) return forbidden(res);
+    })
+      .populate("userId", "allotedStorage usedStorage")
+      .lean();
+
+    if (!target)
+      return next(getErrorObject("Target directory not exists.", 404));
+    const isOwner = target.userId._id.toString() === req.user._id.toString();
+    const isShared = req.user.email
+      ? hasAccess(target, ["EDITOR"], req.user.email)
+      : false;
+
+    if (!isShared && !isOwner)
+      return next(getErrorObject("You do not have this permission", 403));
     req.parent = target;
     next();
   } catch (err) {

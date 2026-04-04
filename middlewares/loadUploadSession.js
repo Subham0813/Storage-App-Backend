@@ -1,5 +1,6 @@
-import { UploadSession } from "../models/uploadSession.model.js";
 import mongoose from "mongoose";
+import { UploadSession } from "../models/uploadSession.model.js";
+import { getErrorObject } from "../utils/helper.js";
 
 /**
  * Middleware: loadUploadSession
@@ -14,7 +15,7 @@ export const loadUploadSession = async (req, res, next) => {
   const { sessionId } = req.params;
 
   if (!mongoose.isValidObjectId(sessionId)) {
-    return res.status(400).json({ message: "Invalid sessionId." });
+    return next(getErrorObject("Invalid id"));
   }
 
   try {
@@ -24,14 +25,11 @@ export const loadUploadSession = async (req, res, next) => {
       .lean();
 
     if (!upSession) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Session not found." });
+      return next(getErrorObject("Session not found", 404));
     }
 
-    if (!upSession.userId.equals(req.user._id)) {
-      return res.status(401).json({success:false, message: "Unauthorized." });
-    }
+    if (!upSession.userId.equals(req.user._id))
+      return next(getErrorObject("Unauthorized: Access denied.", 401));
 
     req.uploadSession = upSession;
     next();

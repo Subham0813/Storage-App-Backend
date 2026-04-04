@@ -4,6 +4,7 @@ import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
 import { SUPER_ROLES } from "../misc/constants.js";
 import { DriveIntegration } from "../models/integration.model.js";
+import { getErrorObject } from "../utils/helper.js";
 
 /**
  * Middleware: validateSession
@@ -14,22 +15,19 @@ import { DriveIntegration } from "../models/integration.model.js";
  *   - Sets req.user to authenticated user object from session
  */
 
-const ALLOWED_ORIGINS = new Set([process.env.ALLOWED_ORIGINS]);
-const MUTATING_METHODS = new Set([process.env.MUTATING_METHODS]);
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS.split(",");
+const MUTATING_METHODS = process.env.MUTATING_METHODS.split(",");
 
 export const verifyCsrfOrigin = (req, res, next) => {
   if (
     process.env.NODE_ENV === "production" &&
-    MUTATING_METHODS.has(req.method)
+    MUTATING_METHODS.includes(req.method)
   ) {
     const origin = req.headers["origin"];
     const referer = req.headers["referer"];
     const source = origin ?? (referer ? new URL(referer).origin : null);
-    if (!source || !ALLOWED_ORIGINS.has(source))
-      return res.status(403).json({
-        success: false,
-        message: "Forbidden: invalid request origin.",
-      });
+    if (!source || !ALLOWED_ORIGINS.includes(source))
+      return next(getErrorObject("Forbidden: invalid request origin.", 403));
   }
   next();
 };
@@ -51,10 +49,7 @@ export const validateSession = async (req, res, next) => {
           req.url.includes("/admin") &&
           !SUPER_ROLES.includes(session.userId.role)
         )
-          return res
-            .status(401)
-            .json({ success: false, message: "Unauthorized." });
-
+          return next(getErrorObject("Unauthorized: Access denied.", 401));
         req.user = session.userId;
         return next();
       }
@@ -89,7 +84,7 @@ export const validateSession = async (req, res, next) => {
       }
     }
 
-    return res.status(401).json({ success: false, message: "Unauthorized." });
+    return next(getErrorObject("Unauthorized: Access denied.", 401));
   } catch (err) {
     next(err);
   }

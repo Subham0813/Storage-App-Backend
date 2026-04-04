@@ -1,43 +1,10 @@
 import mongoose, { MongooseError } from "mongoose";
 import { MulterError } from "multer";
-import { appendFile } from "node:fs/promises";
-import crypto from "crypto";
 /**
  * Middleware: errorHandler
  * what it do: Centralized error handler that catches and formats various error types (Multer, Mongoose, MongoDB) and logs them.
- * requirements:
- *   - Must be attached as final error-handling middleware in Express app
- *   - Expects (err, req, res, next) signature for Express error handlers
- *   - Logs errors to error.log.json file if err.errorResponse exists
  */
 export const errorHandler = async (err, req, res, next) => {
-  
-  // const logEntry = {
-  //   id: crypto.randomUUID().replaceAll("-", ""),
-  //   timestamp: new Date().toISOString(),
-  //   url: req.originalUrl,
-  //   method: req.method,
-  //   user: req.user ? req.user.email || req.user._id : undefined,
-  //   error: {
-  //     name: err.name,
-  //     message: err.message,
-  //     stack: err.stack,
-  //     code: err.code,
-  //     details: err?.details || err?.errInfo || undefined,
-  //     status: err.status || undefined,
-  //     type: err.constructor ? err.constructor.name : undefined,
-  //   },
-  //   requestBody: req.body,
-  //   query: req.query,
-  //   params: req.params,
-  // };
-  // try {
-  //   await appendFile("./error.log.json", JSON.stringify(logEntry) + ",\n");
-  // } catch (e) {
-  //   console.error("Logging failed", e);
-  // }
-
-  // Print error to console for debugging
   if (err instanceof MulterError) {
     console.error("Multer error", err.name, err.message, "\n", err);
   } else if (err instanceof MongooseError) {
@@ -76,13 +43,14 @@ export const errorHandler = async (err, req, res, next) => {
   } else if (err.code === "ENOENT") {
     console.error({ ...err });
   } else {
-    console.error(err);
+    if (!err.statusCode) console.error(err);
   }
 
-  return res.status(500).json({
-    success: false,
-    message: "Internal server error. Please try again later.",
-    // error: logEntry.error.name || "ServerError",
-    // errorId: logEntry.id,
-  });
+  const { statusCode, customMessage } = err;
+  return res
+    .status(statusCode || 500)
+    .json({
+      success: false,
+      message: customMessage || "Server error. Please try again later.",
+    });
 };

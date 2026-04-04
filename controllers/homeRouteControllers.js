@@ -267,10 +267,10 @@ export const LogoutAllHandler = async (req, res, next) => {
       await Session.deleteMany({ userId: req.user._id }).session(session);
     });
 
-    return res.status(200).clearCookie("sid").json({
-      success: true,
-      message: "Logout Successful from all devices.",
-    });
+    return res
+      .status(200)
+      .clearCookie("sid")
+      .json({ success: true, message: "Logout Successful from all devices." });
   } catch (err) {
     next(err);
   } finally {

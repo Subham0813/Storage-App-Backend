@@ -3,20 +3,14 @@ import mongoose from "mongoose";
 import crypto from "crypto";
 import { existsSync, createReadStream, statSync } from "node:fs";
 import { unlink } from "node:fs/promises";
-import { getFileDoc, hasAccess } from "../utils/helper.js";
 import { File } from "../models/file.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
 import { User } from "../models/user.model.js";
-import {
-  responsePayload,
-  badRequest,
-  forbidden,
-  notFound,
-} from "../utils/helper.js";
 import { SUPER_ROLES } from "../misc/constants.js";
 import { base64URLEncode } from "./oauthControllers.js";
 import { UPLOAD_ROOT } from "../misc/constants.js";
+import { getErrorObject, getFileDoc, hasAccess } from "../utils/helper.js";
 import { filenameSchema, uploadInitSchema } from "../Schemas/userSchema.js";
 
 //API Handlers
@@ -29,9 +23,8 @@ import { filenameSchema, uploadInitSchema } from "../Schemas/userSchema.js";
  *   - req.user: authenticated user object provided by `validateSession`
  */
 export const getFileInfoHandler = async (req, res, next) => {
-  if (!mongoose.isValidObjectId(req.params.id)) {
-    return badRequest(res, "Invalid id.");
-  }
+  if (!mongoose.isValidObjectId(req.params.id))
+    return next(getErrorObject("Invalid id."));
 
   try {
     const file = await UserFile.findOne({
@@ -44,7 +37,7 @@ export const getFileInfoHandler = async (req, res, next) => {
       .populate("userId", "name email avatar")
       .lean();
 
-    if (!file) return badRequest(res, "File not found!");
+    if (!file) return next(getErrorObject("File not found.", 404));
 
     const isOwner = file.userId._id.toString() === req.user._id.toString();
     const isPublic = file.publicRole === "VIEWER";
@@ -57,7 +50,7 @@ export const getFileInfoHandler = async (req, res, next) => {
       !req.isTokenAuthorized &&
       !SUPER_ROLES.includes(req.user.role)
     )
-      return forbidden(res);
+      return next(getErrorObject("You don't have this permission.", 403));
 
     const { sharedWith, publicRole, userId, ...fileData } = file;
     const owner = {
@@ -65,11 +58,13 @@ export const getFileInfoHandler = async (req, res, next) => {
       email: userId.email,
       avatar: userId.avatar,
     };
-    return res.status(200).json({
-      success: true,
-      message: "File found.",
-      data: { file: { ...fileData, owner } },
-    });
+    return res
+      .status(200)
+      .json({
+        success: true,
+        message: "File found.",
+        data: { file: { ...fileData, owner } },
+      });
   } catch (err) {
     next(err);
   }
@@ -84,9 +79,8 @@ export const getFileInfoHandler = async (req, res, next) => {
  *   - req.user: authenticated user object provided by `validateSession`
  */
 export const previewFileHandler = async (req, res, next) => {
-  if (!mongoose.isValidObjectId(req.params.id)) {
-    return badRequest(res, "Invalid id.");
-  }
+  if (!mongoose.isValidObjectId(req.params.id))
+    return next(getErrorObject("Invalid id."));
 
   const query = req.query || req.body; // type=video | type=audio, force=true
 
@@ -102,7 +96,7 @@ export const previewFileHandler = async (req, res, next) => {
       .lean();
 
     if (!file || !file.meta?.objectKey)
-      return badRequest(res, "File not found.");
+      return next(getErrorObject("File not found.", 404));
 
     const { _id: userId, email } = req.user;
     const isOwner = file.userId.toString() === userId.toString();
@@ -116,7 +110,7 @@ export const previewFileHandler = async (req, res, next) => {
       !req.isTokenAuthorized &&
       !SUPER_ROLES.includes(req.user.role)
     )
-      return forbidden(res);
+      return next(getErrorObject("You don't have this permission.", 403));
 
     const filePath = path.resolve(
       UPLOAD_ROOT,
@@ -124,7 +118,7 @@ export const previewFileHandler = async (req, res, next) => {
       file.meta.objectKey,
     );
     if (!filePath.startsWith(path.resolve(UPLOAD_ROOT) + path.sep))
-      return badRequest(res, "Invalid file path.");
+      return next("Invalid file path.");
     if (!existsSync(filePath)) return next("File missing from server.");
 
     //check preview/forcePreview
@@ -139,7 +133,7 @@ export const previewFileHandler = async (req, res, next) => {
         file.disposition = "inline";
         file.meta.detectedMime = file.mimetype;
       } else {
-        return badRequest(res, "Preview not available.");
+        return next(getErrorObject("Preview not available."));
       }
     }
 
@@ -209,9 +203,8 @@ export const previewFileHandler = async (req, res, next) => {
  *   - req.user: authenticated user object provided by `validateSession`
  */
 export const downloadFileHandler = async (req, res, next) => {
-  if (!mongoose.isValidObjectId(req.params.id)) {
-    return badRequest(res, "Invalid id.");
-  }
+  if (!mongoose.isValidObjectId(req.params.id))
+    return next(getErrorObject("Invalid id."));
 
   try {
     const file = await UserFile.findOne({
@@ -223,7 +216,7 @@ export const downloadFileHandler = async (req, res, next) => {
       .lean();
 
     if (!file && !file.meta?.objectKey && !file.linkMeta)
-      return badRequest(res, "File not found!");
+      return next(getErrorObject("File not found.", 404));
 
     const { _id: userId, email } = req.user;
     const isOwner = file.userId.toString() === userId.toString();
@@ -237,10 +230,10 @@ export const downloadFileHandler = async (req, res, next) => {
       !req.isTokenAuthorized &&
       !SUPER_ROLES.includes(req.user.role)
     )
-      return forbidden(res);
+      return next(getErrorObject("You don't have this permission.", 403));
 
     if (file.linkMeta) {
-      return res.status(200).json({ success: true, data: file.linkMeta });
+      return res.status(200).json({ data: file.linkMeta });
     }
 
     const filePath = path.resolve(
@@ -249,8 +242,8 @@ export const downloadFileHandler = async (req, res, next) => {
       file.meta.objectKey,
     );
     if (!filePath.startsWith(path.resolve(UPLOAD_ROOT) + path.sep))
-      return badRequest(res, "Invalid file path.");
-    if (!existsSync(filePath)) return next("File missing from server.");
+      return next("Invalid file path");
+    if (!existsSync(filePath)) return next("File missing from server");
 
     res.writeHead(200, {
       "Content-Length": statSync(filePath).size,
@@ -281,12 +274,12 @@ export const downloadFileHandler = async (req, res, next) => {
  *   - req.user: authenticated user object provided by `validateSession`
  */
 export const renameFileHandler = async (req, res, next) => {
+  if (!mongoose.isValidObjectId(req.params.id))
+    return next(getErrorObject("Invalid id."));
+
   try {
     const { success, data, error } = filenameSchema.safeParse(req.body);
-    if (!success) return badRequest(res, error.issues[0].message);
-
-    if (!mongoose.isValidObjectId(req.params.id))
-      return badRequest(res, "Invalid id.");
+    if (!success) return next(getErrorObject(error.issues[0].message));
 
     const { name } = data;
     const file = await UserFile.findOne({
@@ -296,12 +289,13 @@ export const renameFileHandler = async (req, res, next) => {
       .select("userId sharedWith")
       .lean();
 
-    if (!file) return badRequest(res, "File not found!");
+    if (!file) return next(getErrorObject("File not found.", 404));
 
     const { _id: userId, email } = req.user;
     const isOwner = file.userId.toString() === userId.toString();
     const isShared = hasAccess(file, ["EDITOR"], email);
-    if (!isShared && !isOwner) return forbidden(res);
+    if (!isShared && !isOwner)
+      return next(getErrorObject("You don't have this permission.", 403));
 
     // const currExt = path.extname(file.name);
     // const reqExt = path.extname(newname);
@@ -319,13 +313,15 @@ export const renameFileHandler = async (req, res, next) => {
       .select("_id filename")
       .lean();
 
-    if (!renamed) return badRequest(res, "File not found!");
+    if (!renamed) return next(getErrorObject("File not found.", 404));
 
-    return res.status(200).json({
-      success: true,
-      message: "File renamed.",
-      data: { file: renamed },
-    });
+    return res
+      .status(200)
+      .json({
+        success: true,
+        message: "File renamed",
+        data: { file: renamed },
+      });
   } catch (err) {
     next(err);
   }
@@ -348,9 +344,8 @@ export const copyFileHandler = async (req, res, next) => {
     shareToken,
   } = req.parent;
 
-  if (!mongoose.isValidObjectId(req.params.id)) {
-    return badRequest(res, "Invalid id.");
-  }
+  if (!mongoose.isValidObjectId(req.params.id))
+    return next(getErrorObject("Invalid id."));
 
   try {
     const file = await UserFile.findOne({
@@ -358,12 +353,12 @@ export const copyFileHandler = async (req, res, next) => {
       isDeleted: false,
     }).lean();
 
-    if (!file) return badRequest(res, "File not found!");
+    if (!file) return next(getErrorObject("File not found.", 404));
     if (
       parseInt(file.size) >
       targetUser.allotedStorage - targetUser.usedStorage
     ) {
-      return badRequest(res, "Insufficient storage to copy this file.");
+      return next(getErrorObject("Insufficient storage."));
     }
 
     const { _id: userId, email } = req.user;
@@ -374,7 +369,8 @@ export const copyFileHandler = async (req, res, next) => {
       ? hasAccess(file, ["EDITOR"], email) &&
         hasAccess(req.parent, ["EDITOR"], email)
       : false;
-    if (!isShared && !isOwner) return forbidden(res);
+    if (!isShared && !isOwner)
+      return next(getErrorObject("You don't have this permission.", 403));
 
     let { filename, parentId, userId: fileUserId, ...rest } = getFileDoc(file);
 
@@ -434,13 +430,15 @@ export const copyFileHandler = async (req, res, next) => {
       await session.endSession();
     }
 
-    if (!newFile) throw Error("Failed to create file entry.");
+    if (!newFile) throw Error("Failed to create file entry");
     const fileDoc = getFileDoc(newFile);
-    return res.status(201).json({
-      success: true,
-      message: "Copied to the target directory.",
-      data: { file: fileDoc },
-    });
+    return res
+      .status(201)
+      .json({
+        success: true,
+        message: "Copied to the target directory.",
+        data: { file: fileDoc },
+      });
   } catch (err) {
     next(err);
   }
@@ -463,9 +461,8 @@ export const moveFileHandler = async (req, res, next) => {
     shareToken,
   } = req.parent;
 
-  if (!mongoose.isValidObjectId(req.params.id)) {
-    return badRequest(res, "Invalid id.");
-  }
+  if (!mongoose.isValidObjectId(req.params.id))
+    return next(getErrorObject("Invalid id."));
 
   try {
     const file = await UserFile.findOne({
@@ -475,9 +472,11 @@ export const moveFileHandler = async (req, res, next) => {
       .select("userId sharedWith parentId size")
       .lean();
 
-    if (!file) return badRequest(res, "File not found!");
+    if (!file) return next(getErrorObject("File not found.", 404));
     if (file.parentId.toString() === targetParentId.toString())
-      return badRequest(res, "File already in the target destination.");
+      return next(
+        getErrorObject("File already in the target destination.", 403),
+      );
 
     const { _id: userId, email } = req.user;
     const isOwner =
@@ -487,7 +486,7 @@ export const moveFileHandler = async (req, res, next) => {
       ? hasAccess(file, ["EDITOR"], email) &&
         hasAccess(req.parent, ["EDITOR"], email)
       : false;
-    if (!isShared && !isOwner) return forbidden(res);
+    if (!isShared && !isOwner) return;
 
     const session = await mongoose.startSession();
     try {
@@ -527,15 +526,14 @@ export const moveFileHandler = async (req, res, next) => {
       await session.endSession();
     }
 
-    return res.status(200).json({
-      success: true,
-      message: "Moved to target directory.",
-      data: { file: { _id: req.params.id, parentId: targetParentId } },
-    });
+    return res
+      .status(200)
+      .json({
+        success: true,
+        message: "Moved to target directory.",
+        data: { file: { _id: req.params.id, parentId: targetParentId } },
+      });
   } catch (err) {
-    if (err.statusCode)
-      return responsePayload(res, err.statusCode, err.message);
-
     next(err);
   }
 };
@@ -549,7 +547,7 @@ export const moveFileHandler = async (req, res, next) => {
  */
 export const moveToBinHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
+    return next(getErrorObject("Invalid id."));
 
   try {
     const file = await UserFile.findOne({
@@ -560,12 +558,13 @@ export const moveToBinHandler = async (req, res, next) => {
       .select("userId sharedWith")
       .lean();
 
-    if (!file) return badRequest(res, "File not found!");
+    if (!file) return next(getErrorObject("File not found.", 404));
 
     const { _id: userId, email } = req.user;
     const isOwner = file.userId.toString() === userId.toString();
     const isShared = hasAccess(file, ["EDITOR"], email);
-    if (!isShared && !isOwner) return forbidden(res);
+    if (!isShared && !isOwner)
+      return next(getErrorObject("You don't have this permission.", 403));
 
     const binned = await UserFile.findByIdAndUpdate(
       file._id,
@@ -581,11 +580,13 @@ export const moveToBinHandler = async (req, res, next) => {
       .select("_id filename parentId isDeleted")
       .lean();
 
-    return res.status(200).json({
-      success: true,
-      message: "File moved to bin.",
-      data: { file: binned },
-    });
+    return res
+      .status(200)
+      .json({
+        success: true,
+        message: "File moved to bin.",
+        data: { file: binned },
+      });
   } catch (err) {
     next(err);
   }
@@ -600,7 +601,7 @@ export const moveToBinHandler = async (req, res, next) => {
  */
 export const restoreFileHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
+    return next(getErrorObject("Invalid id."));
 
   try {
     const file = await UserFile.findOne({
@@ -610,7 +611,7 @@ export const restoreFileHandler = async (req, res, next) => {
     })
       .select("userId sharedWith parentId")
       .lean();
-    if (!file) return badRequest(res, "File not found!");
+    if (!file) return next(getErrorObject("File not found.", 404));
 
     const directory = await Directory.findOne({
       _id: file.parentId,
@@ -618,15 +619,15 @@ export const restoreFileHandler = async (req, res, next) => {
     });
 
     if (!directory)
-      return badRequest(
-        res,
-        "Parent directory does not exist. Restore parent first.",
+      return next(
+        getErrorObject("Parent does not exist. Restore parent first."),
       );
 
     const { _id: userId, email } = req.user;
     const isOwner = file.userId.toString() === userId.toString();
     const isShared = hasAccess(file, ["EDITOR"], email);
-    if (!isShared && !isOwner) return forbidden(res);
+    if (!isShared && !isOwner)
+      return next(getErrorObject("You don't have this permission.", 403));
 
     // const { _id: uid, rootDirId } = file.userId;
     // const rfp = await restoreFileParent(uid, file, rootDirId);
@@ -645,11 +646,13 @@ export const restoreFileHandler = async (req, res, next) => {
       .select("_id, filename, parentId isDeleted")
       .lean();
 
-    return res.status(200).json({
-      success: true,
-      message: "file restored.",
-      data: { file: restored },
-    });
+    return res
+      .status(200)
+      .json({
+        success: true,
+        message: "file restored.",
+        data: { file: restored },
+      });
   } catch (err) {
     next(err);
   }
@@ -664,7 +667,7 @@ export const restoreFileHandler = async (req, res, next) => {
  */
 export const deleteFileHandler = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
+    return next(getErrorObject("Invalid id."));
 
   try {
     const session = await mongoose.startSession();
@@ -735,7 +738,7 @@ export const deleteFileHandler = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "File deleted and no longer available.",
+      message: "File permanently deleted and no longer available.",
       data: { file: { _id: req.params.id } },
     });
   } catch (err) {
@@ -770,11 +773,8 @@ export const shareFileHandler = async (req, res, next) => {
           .session(session)
           .lean();
 
-        if (!file) {
-          const error = new Error("File not found.");
-          error.statusCode = 404;
-          throw error;
-        }
+        if (!file) throw getErrorObject("File not found.", 404);
+
         if (file.userId.toString() !== req.user._id.toString()) {
           const error = new Error("You don't have this permission.");
           error.statusCode = 403;
@@ -807,22 +807,15 @@ export const shareFileHandler = async (req, res, next) => {
     // if (notify) {
     //   //send notification to accepted emails
     //   // await sendEmails(accepted, message)
-    //   // console.log("emails sent.");
+    //   // console.log("emails sent");
     // }
 
     res.status(200).json({
       success: true,
-      message: "Permission changed.",
-      data: {
-        sharedWith: updated.sharedWith,
-        accepted,
-        shareToken,
-      },
+      message: `Share permission changed for ${accepted.length} people. Share permission changed at a depth of ${depth}`,
+      data: { sharedWith: updated.sharedWith, shareToken, accepted },
     });
   } catch (err) {
-    if (err.statusCode)
-      return responsePayload(res, err.statusCode, err.message);
-
     next(err);
   }
 };
@@ -840,13 +833,13 @@ export const filePublicRoleHandler = async (req, res, next) => {
   const allowedPublicRoles = ["VIEWER", "NONE"];
 
   if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
+    return next(getErrorObject("Invalid id."));
 
   const formattedPublicRole = publicRole
     ? String(publicRole).toUpperCase()
     : undefined;
   if (!formattedPublicRole || !allowedPublicRoles.includes(formattedPublicRole))
-    return badRequest(res, "Invalid `publicRole`.");
+    return next(getErrorObject("Invalid payload."));
 
   const updateQuery = { $set: { publicRole: formattedPublicRole } };
   let shareToken = null;
@@ -861,16 +854,10 @@ export const filePublicRoleHandler = async (req, res, next) => {
         .session(session)
         .lean();
 
-      if (!file) {
-        const error = new Error("File not found.");
-        error.statusCode = 404;
-        throw error;
-      }
+      if (!file) throw getErrorObject("File not found.", 404);
 
       if (file.userId.toString() !== req.user._id.toString()) {
-        const error = new Error("You don't have this permission.");
-        error.statusCode = 403;
-        throw error;
+        throw getErrorObject("You don't have this permission.", 403);
       }
 
       if (formattedPublicRole === "NONE" && file.sharedWith.length < 1)
@@ -890,13 +877,10 @@ export const filePublicRoleHandler = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "Permission changed.",
+      message: "Public permission changed.",
       data: { publicRole: formattedPublicRole, shareToken },
     });
   } catch (err) {
-    if (err.statusCode) {
-      return responsePayload(res, err.statusCode, err.message);
-    }
     next(err);
   } finally {
     await session.endSession();
@@ -914,7 +898,7 @@ export const filePublicRoleHandler = async (req, res, next) => {
  */
 export const getNewFileShareToken = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
+    return next(getErrorObject("Invalid id."));
 
   const shareToken = base64URLEncode(crypto.randomBytes(32));
   try {
@@ -931,10 +915,10 @@ export const getNewFileShareToken = async (req, res, next) => {
       .select("_id")
       .lean();
 
-    if (!file) return notFound(res, "File not found.");
+    if (!file) return next(getErrorObject("File not found.", 404));
     return res.status(200).json({
       success: true,
-      message: "Token created for the file.",
+      message: "New token created.",
       data: { newToken: shareToken },
     });
   } catch (err) {
@@ -963,12 +947,10 @@ export const revokeAccessFileHandler = async (req, res, next) => {
       .select("_id sharedWith publicRole")
       .lean();
 
-    if (!file) return notFound(res, "file not found.");
+    if (!file) return next(getErrorObject("file not found.", 404));
     if (file.publicRole !== "VIEWER" && file.sharedWith.length < 1)
-      return responsePayload(
-        res,
-        403,
-        "Cannot perform revoke on a non-shared item.",
+      return next(
+        getErrorObject("Cannot perform revoke on a non-shared item.", 403),
       );
 
     const session = await mongoose.startSession();
@@ -996,7 +978,7 @@ export const revokeAccessFileHandler = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "Permission changed.",
+      message: `Share permission revoked for ${emailsToUpdate.length} people. Permission revoked at a depth of ${depth}`,
       data: {
         sharedWith: updated.sharedWith,
         publicRole: updated.publicRole,
@@ -1018,10 +1000,11 @@ export const revokeAccessFileHandler = async (req, res, next) => {
  */
 export const makeFileStarred = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
-    return badRequest(res, "Invalid id.");
+    return next(getErrorObject("Invalid id."));
 
   const { starred } = req.body;
-  if (typeof starred !== "boolean") return badRequest(res, "Invalid payload.");
+  if (typeof starred !== "boolean")
+    return next(getErrorObject("Invalid payload."));
   try {
     const file = await UserFile.findOneAndUpdate(
       {
@@ -1036,12 +1019,16 @@ export const makeFileStarred = async (req, res, next) => {
       .select("_id")
       .lean();
     if (!file)
-      return notFound(
-        res,
-        `File not found or already ${starred ? "starred" : "non-starred"}.`,
+      return next(
+        getErrorObject(
+          `${starred ? "Starred" : "Non-starred"} file not found.`,
+          404,
+        ),
       );
 
-    return res.status(201).json({ success: true });
+    return res
+      .status(201)
+      .json({ success: true, message: "Properties changed.", data: { file } });
   } catch (err) {
     next(err);
   }

@@ -1,7 +1,7 @@
 import express from "express";
-import serveFavicon from "serve-favicon";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import helmet from "helmet";
 
 import adminRoutes from "./routes/adminRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
@@ -11,7 +11,6 @@ import fileRoutes from "./routes/fileRoutes.js";
 import homeRoutes from "./routes/homeRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import importDriveRoutes from "./routes/importDriveRoutes.js";
-import shareRoutes from "./routes/shareRoutes.js";
 
 import {
   validateSession,
@@ -19,26 +18,22 @@ import {
 } from "./middlewares/validateSession.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import connectMongoose from "./configs/connect.js";
+import { getErrorObject } from "./utils/helper.js";
 
 try {
   await connectMongoose();
 
   const app = express();
   const port = process.env.PORT || 4000;
+  const origins = process.env.ALLOWED_ORIGINS.split(",");
 
-  app.use(serveFavicon(import.meta.dirname + "/public/favicon.ico"));
-  app.use(
-    cors({
-      origin: [process.env.ALLOWED_ORIGINS],
-      credentials: true,
-    }),
-  );
-
+  app.use(cors({ origin: origins, credentials: true }));
   app.use(cookieParser(process.env.COOKIE_SECRET));
+  app.use(helmet());
 
   app.use("/api/auth", express.json(), authRoutes);
   app.use("/api/oauth", express.json(), oauthRoutes);
-  app.use("/api/uploads", validateSession, uploadRoutes);
+  app.use("/api/uploads", verifyCsrfOrigin, validateSession, uploadRoutes);
 
   app.use(express.json(), verifyCsrfOrigin, validateSession);
   app.use("/api/import", importDriveRoutes);
@@ -48,13 +43,8 @@ try {
   app.use("/api/admin", adminRoutes);
 
   // 404 handler
-  app.use((req, res) => {
-    return res.status(404).json({
-      success: false,
-      statusCode: 404,
-      message: "Route not found.",
-      error: "NOTFOUND",
-    });
+  app.use((req, res, next) => {
+    return next(getErrorObject("Route not available.", 404));
   });
 
   app.use(errorHandler);
