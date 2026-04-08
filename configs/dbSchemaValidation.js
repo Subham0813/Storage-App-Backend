@@ -25,6 +25,17 @@ await db.command({
           bsonType: "objectId",
           description: "Reference to the user's root directory.",
         },
+        integration: {
+          bsonType: "object",
+          properties: {
+            googleDrive: {
+              accessToken: { bsonType: "string" },
+              refreshToken: { bsonType: "string" },
+              tokenExpiry: { bsonType: "date" },
+              refreshTokenExpiry: { bsonType: "date" },
+            },
+          },
+        },
         name: {
           bsonType: "string",
           minLength: 3,
@@ -662,6 +673,6 @@ await db.command({
 });
 
 await client.close();
-console.log(
+console.info(
   "Database validation script completed and client closed successfully.",
 );

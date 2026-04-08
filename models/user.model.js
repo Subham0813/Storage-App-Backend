@@ -4,6 +4,13 @@ import * as bcrypt from "bcrypt";
 const userSchema = new Schema(
   {
     root: { type: Schema.Types.ObjectId, ref: "Directory" },
+    integration: {
+      googleDrive: {
+        accessToken: String,
+        refreshToken: String,
+        tokenExpiry: Date,
+      },
+    },
 
     name: {
       type: String,

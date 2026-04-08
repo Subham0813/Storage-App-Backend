@@ -9,6 +9,7 @@ import {
   google_client_secret,
   google_drive_redirect_uri,
   google_redirect_uri,
+  MAX_DEVICE_COUNT,
   TIME,
 } from "../misc/constants.js";
 import { google } from "googleapis";
@@ -16,6 +17,8 @@ import { User } from "../models/user.model.js";
 import { Directory } from "../models/directory.model.js";
 import { DriveIntegration } from "../models/integration.model.js";
 import { Session } from "../models/session.model.js";
+import { getUserPayload } from "../utils/helper.js";
+import { redisClient } from "../configs/radis.js";
 
 const googleClient = new google.auth.OAuth2(
   google_client_id,
@@ -41,17 +44,9 @@ const sha256 = (buffer) => crypto.createHash("sha256").update(buffer).digest();
 const generatePKCE = () => {
   const codeVerifier = base64URLEncode(crypto.randomBytes(32));
   const codeChallenge = base64URLEncode(sha256(codeVerifier));
-
   return { codeVerifier, codeChallenge };
 };
 
-/**
- * path: /api/oauth/google/connect
- * what it do: Initiate Google OAuth flow by redirecting user to Google's authorization endpoint.
- * requirements:
- *   - req.user (optional): if authenticated, will be linked after successful authentication
- *   - No body parameters required
- */
 const getGithubAccesToken = async (code, codeVerifier) => {
   const message = "error=invalid_code";
   if (!code || !codeVerifier) throw new Error(message);
@@ -100,43 +95,36 @@ const getGithubUserPayload = async (accessToken) => {
   return data;
 };
 
+const cookieOptions = (MAX_AGE) => ({
+  httpOnly: true,
+  signed: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax",
+  maxAge: MAX_AGE,
+  path: "/",
+});
+
 /**
  * path: /api/oauth/google/connect
  * what it do: Initiate Google OAuth flow by setting PKCE cookies and redirecting user to Google's authorization endpoint.
  * requirements:
  *   - req.user (optional): if authenticated, will be linked after successful authentication
- *   - No body parameters required
  */
 export const googleOAuthHandler = async (req, res, next) => {
   try {
     const state = crypto.randomBytes(32).toString("hex");
     const { codeVerifier, codeChallenge } = generatePKCE();
 
-    res.cookie("oauth_state_google", state, {
-      httpOnly: true,
-      signed: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: TIME.ONE_MINUTE * 0.5,
-    });
-
-    res.cookie("oauth_pkce_google", codeVerifier, {
-      httpOnly: true,
-      signed: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: TIME.ONE_MINUTE * 0.5,
-    });
-
-    if (req.user?._id) {
-      res.cookie("oauth_user_google", req.user._id, {
-        httpOnly: true,
-        signed: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: TIME.ONE_MINUTE * 0.5,
-      });
-    }
+    const googleCookieData = {
+      state,
+      codeVerifier,
+      session: req.user?.sessionId,
+    };
+    res.cookie(
+      "oauth_google",
+      googleCookieData,
+      cookieOptions(TIME.FIVE_MINUTES),
+    );
 
     const authUrl = googleClient.generateAuthUrl({
       response_type: "code",
@@ -157,17 +145,18 @@ export const googleOAuthHandler = async (req, res, next) => {
  * what it do: Handle Google OAuth callback, verify id_token, create or update user, and establish session or link account.
  * requirements:
  *   - req.query: { code: string, state: string, error?: string }
- *   - req.cookies: { oauth_state_google, oauth_pkce_google, oauth_user_google? }
+ *   - req.cookies: { oauth_google }
  *   - Must have been initiated via /oauth/google/connect
  */
 export const googleOAuthCallbackHandler = async (req, res, next) => {
+  const { code, state, error } = req.query;
+  const {
+    state: savedState,
+    codeVerifier,
+    session: userSession,
+  } = req.signedCookies.oauth_google;
+
   try {
-    const { code, state, error } = req.query;
-
-    const savedState = req.signedCookies.oauth_state_google;
-    const codeVerifier = req.signedCookies.oauth_pkce_google;
-    const userId = req.signedCookies.oauth_user_google;
-
     if (
       error ||
       !code ||
@@ -176,19 +165,12 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
       !codeVerifier ||
       state !== savedState
     ) {
-      const err = new Error(error || "error=cookies_tempered");
+      const err = new Error(error || "error=cookies_may_have_compromised");
       throw err;
     }
+    res.clearCookie("oauth_google");
 
-    res.clearCookie("oauth_state_google");
-    res.clearCookie("oauth_pkce_google");
-    res.clearCookie("oauth_user_google");
-
-    // Exchange code → tokens using PKCE verifier
-    const { tokens } = await googleClient.getToken({
-      code,
-      codeVerifier,
-    });
+    const { tokens } = await googleClient.getToken({ code, codeVerifier });
 
     if (!tokens.id_token) {
       throw new Error("error=no_token_found.");
@@ -200,26 +182,20 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     });
 
     const payload = ticket.getPayload();
-    if (!payload || !payload.email) throw new Error("error=no_email");
+    if (!payload || !payload.email)
+      throw new Error("error=no_valid_email_found");
 
     const { sub, email, name, picture, email_verified } = payload;
+
     let user = null;
+    if (userSession) {
+      user = await User.findOne({ _id: userSession.id }).lean();
+    } else {
+      user = await User.findOne({ googleId: sub, email }).lean();
+    }
 
-    if (!userId) {
-      user = await User.findOne({
-        googleId: sub,
-        authProviders: { $in: ["google"] },
-      });
-
-      if (!user && email) {
-        user = await User.findOne({ email });
-      }
-    } else user = await User.findById(userId);
-
-    const updateQuery = { $set: {} };
+    const updateQuery = { $set: { isLogged: true } };
     const session = await mongoose.startSession();
-    let userSession = null;
-
     try {
       await session.withTransaction(async () => {
         if (!user) {
@@ -232,6 +208,8 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
                 name,
                 avatar: picture,
                 isEmailVerified: email_verified ?? false,
+                isLogged: true,
+                deviceCount: 1,
               },
             ],
             { session },
@@ -250,38 +228,52 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
 
           updateQuery.$set.root = root._id;
         } else {
-          if (!user.googleId) updateQuery.$set.googleId = sub;
-          if (!user.authProviders.includes("google"))
+          if (!user.googleId) {
+            updateQuery.$set.googleId = sub;
+          }
+
+          if (!user.authProviders.includes("google")) {
             updateQuery.$push = { authProviders: { $each: ["google"] } };
-        }
+          }
 
-        updateQuery.$set.isLogged = true;
-        await User.updateOne({ _id: user._id }, updateQuery, {
-          session,
-        });
-
-        if (!userId) {
-          [userSession] = await Session.create([{ userId: user._id }], {
-            session,
-          });
+          updateQuery.$inc = {
+            deviceCount: user.deviceCount < MAX_DEVICE_COUNT ? 1 : 0,
+          };
         }
+        await User.updateOne({ _id: user._id }, updateQuery, { session });
       });
     } finally {
       session.endSession();
     }
 
-    if (userSession) {
-      const { _id: sid, expiry } = userSession;
+    if (!user) throw new Error("error=user_not_found");
 
-      res.cookie("sid", sid, {
-        httpOnly: true,
-        sameSite: "strict",
-        secure: process.env.NODE_ENV === "production",
-        signed: true,
-        expires: new Date(expiry),
-        path: "/",
-      });
+    const userdata = getUserPayload(user);
+    const userKey = `storageApp:user:${user._id}:userdata`;
+    await Promise.all([
+      redisClient.json.set(userKey, "$", userdata),
+      redisClient.expire(userKey, 300),
+    ]);
+
+    let token;
+    if (!userSession) {
+      token = crypto.randomBytes(32).toString("hex");
+      const indexKey = `storageApp:user:${user._id}:session_index`;
+      const sessionKey = `storageApp:user:${user._id}:session:${token}`;
+      await Promise.all([
+        redisClient.set(sessionKey, Date.now(), { EX: 7 * 86400 }),
+        redisClient.sAdd(indexKey, sessionKey),
+        redisClient.expire(indexKey, 7 * 86400),
+      ]);
+    } else {
+      token = userSession.token;
     }
+
+    res.cookie(
+      "sessionId",
+      { token, id: user._id },
+      cookieOptions(TIME.ONE_DAY * 7),
+    );
 
     return res.redirect(`${process.env.CLIENT_URL}/google?google=connected`);
   } catch (err) {
@@ -301,34 +293,16 @@ export const githubOAuthHandler = async (req, res, next) => {
     const state = crypto.randomBytes(32).toString("hex");
     const { codeVerifier, codeChallenge } = generatePKCE();
 
-    // CSRF state
-    res.cookie("oauth_state_github", state, {
-      httpOnly: true,
-      signed: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: TIME.ONE_MINUTE * 0.5,
-    });
-
-    // PKCE verifier
-    res.cookie("oauth_pkce_github", codeVerifier, {
-      httpOnly: true,
-      signed: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: TIME.ONE_MINUTE * 0.5,
-    });
-
-    if (req.user?._id) {
-      // console.log("userId found....");
-      res.cookie("oauth_user_github", req.user._id, {
-        httpOnly: true,
-        signed: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: TIME.ONE_MINUTE * 0.5,
-      });
-    }
+    const githubCookieData = {
+      state,
+      codeVerifier,
+      session: req.user?.sessionId,
+    };
+    res.cookie(
+      "oauth_github",
+      githubCookieData,
+      cookieOptions(TIME.FIVE_MINUTES),
+    );
 
     const authUrl =
       `https://github.com/login/oauth/authorize` +
@@ -350,17 +324,18 @@ export const githubOAuthHandler = async (req, res, next) => {
  * what it do: Handle GitHub OAuth callback, exchange code for access token, fetch user profile, and create or update user account.
  * requirements:
  *   - req.query: { code: string, state: string, error?: string }
- *   - req.cookies: { oauth_state_github, oauth_pkce_github, oauth_user_github? }
+ *   - req.cookies: { oauth_github }
  *   - Must have been initiated via /oauth/github/connect
  */
 export const githubOAuthCallbackHandler = async (req, res, next) => {
+  const { code, state, error } = req.query;
+  const {
+    state: savedState,
+    codeVerifier,
+    session: userSession,
+  } = req.signedCookies.oauth_github;
+
   try {
-    const { code, state, error } = req.query;
-
-    const savedState = req.signedCookies.oauth_state_github;
-    const codeVerifier = req.signedCookies.oauth_pkce_github;
-    const userId = req.signedCookies.oauth_user_github;
-
     if (
       error ||
       !code ||
@@ -369,95 +344,113 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
       !codeVerifier ||
       state !== savedState
     ) {
-      const err = new Error(error || "error=cookies_tempered");
+      const err = new Error(error || "error=cookies_may_have_compromised");
       throw err;
     }
 
-    res.clearCookie("oauth_state_github");
-    res.clearCookie("oauth_pkce_github");
-    res.clearCookie("oauth_user_github");
-
+    res.clearCookie("oauth_github");
     const { access_token: accessToken, ...rest } = await getGithubAccesToken(
       code,
       codeVerifier,
     );
     const payload = await getGithubUserPayload(accessToken);
-    if (!payload || !payload.email) throw new Error("error=no_email");
+
+    if (!payload || !payload.email)
+      throw new Error("error=no_valid_email_found");
 
     const { id, name, email, login, avatar_url } = payload;
-    let user;
+    let user = null;
 
-    if (!userId) {
+    if (userSession) {
+      user = await User.findOne({ _id: userSession.id }).lean();
+    } else {
       user = await User.findOne({
         githubId: id,
         authProviders: { $in: ["github"] },
-      });
+      }).lean();
+    }
 
-      if (email && !user) {
-        user = await User.findOne({ email });
-      }
-    } else user = await User.findById(userId);
-
-    const updateQuery = { $set: {} };
+    const updateQuery = { $set: { isLogged: true } };
     const session = await mongoose.startSession();
-    let userSession = null;
-
     try {
       await session.withTransaction(async () => {
         if (!user) {
-          user = await User.create(
-            {
-              authProviders: ["github"],
-              githubId: id,
-              username: login,
-              email,
-              name: name.length > 0 ? name : login,
-              avatar: avatar_url,
-            },
+          [user] = await User.create(
+            [
+              {
+                authProviders: ["github"],
+                githubId: id,
+                username: login,
+                email,
+                name: name.length > 0 ? name : login,
+                avatar: avatar_url,
+                isLogged: true,
+                deviceCount: 1,
+              },
+            ],
             { session },
           );
 
-          const root = await Directory.create(
-            {
-              dirname: `root-${user.username}`,
-              parentId: new mongoose.Types.ObjectId(),
-              userId: user._id,
-            },
+          const [root] = await Directory.create(
+            [
+              {
+                dirname: `root-${user.username}`,
+                parentId: new mongoose.Types.ObjectId(),
+                userId: user._id,
+              },
+            ],
             { session },
           );
 
           updateQuery.$set.root = root._id;
         } else {
-          if (!user.githubId) updateQuery.$set.githubId = id;
-          if (!user.authProviders.includes("github"))
+          if (!user.githubId) {
+            updateQuery.$set.githubId = id;
+          }
+
+          if (!user.authProviders.includes("github")) {
             updateQuery.$push = { authProviders: { $each: ["github"] } };
+          }
+
+          updateQuery.$inc = {
+            deviceCount: user.deviceCount < MAX_DEVICE_COUNT ? 1 : 0,
+          };
         }
 
-        updateQuery.$set.isLogged = true;
         await User.updateOne({ _id: user._id }, updateQuery, { session });
-
-        if (!userId) {
-          [userSession] = await Session.create([{ userId: user._id }], {
-            session,
-          });
-        }
       });
     } finally {
       await session.endSession();
     }
 
-    if (userSession) {
-      const { _id: sid, expiry } = userSession;
+    if (!user) throw new Error("error=user_not_found");
 
-      res.cookie("sid", sid, {
-        httpOnly: true,
-        sameSite: "strict",
-        secure: process.env.NODE_ENV === "production",
-        signed: true,
-        expires: new Date(expiry),
-        path: "/",
-      });
+    const userdata = getUserPayload(user);
+    const userKey = `storageApp:user:${user._id}:userdata`;
+    await Promise.all([
+      redisClient.json.set(userKey, "$", userdata),
+      redisClient.expire(userKey, 300),
+    ]);
+
+    let token;
+    if (!userSession) {
+      token = crypto.randomBytes(32).toString("hex");
+      const indexKey = `storageApp:user:${user._id}:session_index`;
+      const sessionKey = `storageApp:user:${user._id}:session:${token}`;
+      await Promise.all([
+        redisClient.set(sessionKey, Date.now(), { EX: 7 * 86400 }),
+        redisClient.sAdd(indexKey, sessionKey),
+        redisClient.expire(indexKey, 7 * 86400),
+      ]);
+    } else {
+      token = userSession.token;
     }
+
+    res.cookie(
+      "sessionId",
+      { token, id: user._id },
+      cookieOptions(TIME.ONE_DAY * 7),
+    );
 
     return res.redirect(`${process.env.CLIENT_URL}/github?github=connected`);
   } catch (err) {
@@ -474,40 +467,24 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
  */
 export const googleDriveOAuthHandler = async (req, res, next) => {
   try {
-    const integration = await DriveIntegration.exists({
-      userId: req.user._id,
-      stateCreatedAt: { $exists: false },
-    });
-
-    if (integration)
+    const drive = req.user.integrations?.googleDrive;
+    if (drive && Date.now() < new Date(drive.tokenExpiry).getTime()) {
       return res.redirect(`${process.env.CLIENT_URL}?google-drive=connected`);
+    }
 
     const state = crypto.randomBytes(32).toString("hex");
     const { codeVerifier, codeChallenge } = generatePKCE();
 
-    res.cookie("oauth_state_google", state, {
-      httpOnly: true,
-      signed: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: TIME.ONE_MINUTE * 0.5,
-    });
-
-    res.cookie("oauth_pkce_google", codeVerifier, {
-      httpOnly: true,
-      signed: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: TIME.ONE_MINUTE * 0.5,
-    });
-
-    res.cookie("oauth_user_google-drive", req.user._id, {
-      httpOnly: true,
-      signed: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: TIME.ONE_MINUTE * 0.5,
-    });
+    const googleDriveCookieData = {
+      state,
+      codeVerifier,
+      session: req.user?.sessionId,
+    };
+    res.cookie(
+      "oauth_google_drive",
+      googleDriveCookieData,
+      cookieOptions(TIME.FIVE_MINUTES),
+    );
 
     const authUrl = googleDriveClient.generateAuthUrl({
       access_type: "offline", // for refresh token
@@ -517,12 +494,6 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
       state,
       code_challenge: codeChallenge,
       code_challenge_method: "S256",
-    });
-
-    await DriveIntegration.create({
-      userId: req.user._id,
-      provider: "google-drive",
-      state,
     });
 
     res.redirect(authUrl);
@@ -536,17 +507,18 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
  * what it do: Handle Google Drive OAuth callback, exchange code for refresh token, and store integration credentials.
  * requirements:
  *   - req.query: { code: string, state: string, error?: string }
- *   - req.cookies: { oauth_state_google, oauth_pkce_google }
+ *   - req.cookies: { oauth_google_drive }
  *   - Must have been initiated via /oauth/google-drive/connect
  */
 export const googleDriveCallbackHandler = async (req, res, next) => {
+  const { code, state, error } = req.query;
+  const {
+    state: savedState,
+    codeVerifier,
+    session: userSession,
+  } = req.signedCookies.oauth_google_drive;
+
   try {
-    const { code, state, error } = req.query;
-
-    const savedState = req.signedCookies.oauth_state_google;
-    const codeVerifier = req.signedCookies.oauth_pkce_google;
-    const userId = req.signedCookies["oauth_user_google-drive"];
-
     if (
       error ||
       !code ||
@@ -555,13 +527,10 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
       !codeVerifier ||
       state !== savedState
     ) {
-      const err = new Error(error || "error=cookies_tempered");
+      const err = new Error(error || "error=cookies_may_have_compromised");
       throw err;
     }
-
-    res.clearCookie("oauth_state_google");
-    res.clearCookie("oauth_pkce_google");
-    res.clearCookie("oauth_user_google-drive");
+    res.clearCookie("oauth_google_drive");
 
     const { tokens, ...rest } = await googleDriveClient.getToken({
       code,
@@ -572,17 +541,19 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
       const err = new Error("error=no_refresh_token");
       throw err;
     }
+
     const { access_token, refresh_token, scope, refresh_token_expires_in } =
       tokens;
 
-    const drive = await DriveIntegration.findOneAndUpdate(
-      { userId, provider: "google-drive", state },
+    const user = await User.findOneAndUpdate(
+      { _id: userSession.id },
       {
         $set: {
-          scope: scope,
-          accessToken: access_token,
-          refreshToken: refresh_token,
-          expiresIn: new Date(Date.now() + refresh_token_expires_in * 1000),
+          "integrations.googleDrive.accessToken": access_token,
+          "integrations.googleDrive.refreshToken": refresh_token,
+          "integrations.googleDrive.tokenExpiry": new Date(
+            Date.now() + refresh_token_expires_in * 1000,
+          ),
         },
         $unset: { stateCreatedAt: "" },
       },
@@ -591,8 +562,8 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
       .select("_id")
       .lean();
 
-    if (!drive) {
-      throw new Error("error=unable_to_create_integration");
+    if (!user) {
+      throw new Error("error=unable_to_create_integration:user_not_found");
     }
 
     return res.redirect(

@@ -17,10 +17,7 @@ import { UPLOAD_ROOT } from "../misc/constants.js";
 export const getUserHandler = async (req, res, next) => {
   try {
     const user = getUserPayload(req.user);
-    const integration = await DriveIntegration.findOne({ userId: user._id })
-      .select("provider -_id")
-      .lean();
-    user.integrations = integration?.provider ? [integration?.provider] : [];
+    user.integrations = Object.keys(req.user.integrations || {});
     return res.status(200).json({ success: true, data: { user } });
   } catch (err) {
     next(err);

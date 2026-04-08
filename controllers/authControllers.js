@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import * as bcrypt from "bcrypt";
+import crypto from "crypto";
 import { z } from "zod/v4";
 
 import { TIME, EMAIL_REGEX, MAX_DEVICE_COUNT } from "../misc/constants.js";
@@ -15,13 +16,23 @@ import {
   requestOtpSchema,
   verifyOtpSchema,
 } from "../Schemas/authSchema.js";
+import { redisClient } from "../configs/radis.js";
+
+const cookieOptions = {
+  httpOnly: true,
+  sameSite: "strict",
+  secure: process.env.NODE_ENV === "production",
+  signed: true,
+  maxAge: TIME.FIVE_MINUTES,
+  path: "/",
+};
 
 /**
  * path: /api/auth/request-otp
  * what it do: Validate an auth token and send a one-time-password (OTP) for the given purpose (login/register/forgotPassword).
  * requirements:
  *   - req.body: { email: string, purpose: string }
- *   - req.signedCookies.authToken: signed cookie present with { id, purpose, expires }
+ *   - req.signedCookies.authToken: signed cookie present with { id, purpose }
  *   - user with matching email and id must exist
  */
 export const requestOtpHandler = async (req, res, next) => {
@@ -36,7 +47,6 @@ export const requestOtpHandler = async (req, res, next) => {
       data: authData,
       error: authError,
     } = await authTokenSchema.safeParseAsync(authToken);
-
     let errorMessage = !success
       ? error.issues.map((err) => err.message).join(", ")
       : !authSuccess
@@ -45,41 +55,31 @@ export const requestOtpHandler = async (req, res, next) => {
 
     if (errorMessage.length > 0) return next(getErrorObject(errorMessage));
 
-    const { id: authId, purpose: authPurpose } = authData;
+    const { id: userId, purpose: authPurpose } = authData;
     const { email, purpose } = data;
     if (purpose !== authPurpose) {
       return next(getErrorObject("Purpose not matched with cookie."));
     }
 
     const session = await mongoose.startSession();
-    let newOtp, otpExpiresAt, deviceLoggedCount;
-    newOtp = otpExpiresAt = deviceLoggedCount = null;
+    let otpExpiresAt, deviceLoggedCount;
+    otpExpiresAt = deviceLoggedCount = null;
 
     try {
       await session.withTransaction(async () => {
-        const user = await User.findOne({ _id: authId, email })
+        const user = await User.findOne({ _id: userId, email })
           .select("isEmailVerified deviceCount")
           .session(session)
           .lean();
         if (!user) throw getErrorObject("Invalid email address or token.", 404);
 
-        let existingOtps = await OTP.find({ email, purpose, userId: user._id })
-          .session(session)
-          .select("_id")
-          .lean();
-        if (existingOtps.length >= 3) {
-          throw getErrorObject("Limit exceeds for OTP request.", 429);
-        }
+        const otp = crypto.randomInt(100000, 1000000).toString();
 
-        newOtp = Math.floor(100000 + Math.random() * 900000).toString();
-        const [newOtpRecord] = await OTP.create(
-          [{ userId: user._id, email, otp: newOtp, purpose }],
-          { session },
-        );
+        const otpKey = `storageApp:user:${user._id}:otp:${purpose}`;
+        await redisClient.json.set(otpKey, "$", { otp, email });
+        await redisClient.expire(otpKey, 300);
 
-        otpExpiresAt = new Date(
-          newOtpRecord.createdAt.getTime() + TIME.FIVE_MINUTES,
-        );
+        otpExpiresAt = new Date(Date.now() + TIME.FIVE_MINUTES);
         deviceLoggedCount = user.deviceCount;
       });
     } finally {
@@ -91,7 +91,7 @@ export const requestOtpHandler = async (req, res, next) => {
     return res.status(201).json({
       success: true,
       message: "An One Time Password has been sent to your Email address.",
-      data: { newOtp, otpExpiresAt, deviceLoggedCount },
+      data: { otpExpiresAt, deviceLoggedCount },
     });
   } catch (err) {
     next(err);
@@ -129,32 +129,51 @@ export const verifyOtpHandler = async (req, res, next) => {
 
     if (errorMessage.length > 0) return next(getErrorObject(errorMessage));
 
-    const { id: authId, purpose: authPurpose } = authData;
+    const { id: userId, purpose: authPurpose } = authData;
     const { email, otp, logoutLastSession } = data;
 
-    let updatedOtpRecord, updatedUserRecord, newUserSession;
-    updatedOtpRecord = updatedUserRecord = newUserSession = null;
+    const otpKey = `storageApp:user:${userId}:otp:${authPurpose}`;
+    const storedOtp = await redisClient.json.get(otpKey, "$");
+
+    if (!storedOtp) throw getErrorObject("OTP expired.", 410);
+    else if (storedOtp.otp !== otp || storedOtp.email !== email)
+      throw getErrorObject("Invalid email or OTP.", 400);
+
+    await redisClient.del(otpKey);
+    res.clearCookie("authToken");
+
+    const token = crypto.randomBytes(32).toString("hex");
+    if (authToken.purpose === "forgot-password") {
+      const resetKey = `storageApp:user:${userId}:resetPass:${token}`;
+      await redisClient.set(resetKey, email, { EX: 300 });
+
+      return res
+        .cookie("resetToken", { token, id: userId }, cookieOptions)
+        .status(200)
+        .json({ success: true, message: "OTP verified." });
+    }
+
+    let updatedUser = null;
+    const indexKey = `storageApp:user:${userId}:session_index`;
 
     const _session = await mongoose.startSession();
     try {
       await _session.withTransaction(async () => {
         //check for user exists
-        const user = await User.findOne({
-          _id: authId,
-          email: email.toLowerCase().trim(),
-        })
+        const user = await User.findOne({ _id: userId, email })
           .select("isLogged deviceCount")
           .session(_session)
           .lean();
-
         if (!user) throw getErrorObject("User not found.", 404);
 
-        if (
-          authPurpose !== "forgot-password" &&
-          user.deviceCount >= MAX_DEVICE_COUNT
-        ) {
+        if (user.deviceCount >= MAX_DEVICE_COUNT) {
           if (logoutLastSession) {
-            await Session.deleteOne({ userId: user._id }).session(_session);
+            const sessionKeys = await redisClient.sMembers(indexKey);
+
+            if (sessionKeys.length >= 2) {
+              await redisClient.sRem(indexKey, sessionKeys[0]);
+              await redisClient.del(sessionKeys[0]);
+            }
           } else {
             throw getErrorObject(
               "Session creation failed. Max. limit reached.",
@@ -163,93 +182,50 @@ export const verifyOtpHandler = async (req, res, next) => {
           }
         }
 
-        const otpRecord = await OTP.findOne({
-          userId: user._id,
-          email,
-          purpose: authPurpose,
-        })
-          .sort({ createdAt: -1 })
-          .session(_session);
-        if (!otpRecord) throw getErrorObject("OTP expired.", 410);
-
-        const isValid = await otpRecord.compareOTP(otp.toString());
-        if (!isValid) throw getErrorObject("Invalid OTP.", 400);
-
-        const updateQuery = {};
-        if (!user.isLogged) updateQuery["$set"] = { isLogged: true };
-        if (user.deviceCount < MAX_DEVICE_COUNT)
-          updateQuery["$inc"] = { deviceCount: 1 };
-
-        if (authPurpose === "forgot-password") {
-          updatedOtpRecord = await OTP.findByIdAndUpdate(
-            otpRecord._id,
-            { createdAt: new Date() },
-            { returnDocument: "after" },
-          )
-            .select("createdAt")
-            .session(_session)
-            .lean();
-        } else {
-          const incr = user.deviceCount < MAX_DEVICE_COUNT ? 1 : 0;
-          updatedUserRecord = await User.findByIdAndUpdate(
-            user._id,
-            { $set: { isLogged: true }, $inc: { deviceCount: incr } },
-            { returnDocument: "after" },
-          )
-            .session(_session)
-            .lean();
-          await OTP.deleteMany({
-            userId: user._id,
-            email,
-            purpose: authToken.purpose,
-          }).session(_session);
-
-          [newUserSession] = await Session.create([{ userId: user._id }], {
-            session: _session,
-          });
-        }
+        const incr = user.deviceCount < MAX_DEVICE_COUNT ? 1 : 0;
+        updatedUser = await User.findByIdAndUpdate(
+          user._id,
+          { $set: { isLogged: true }, $inc: { deviceCount: incr } },
+          { returnDocument: "after" },
+        )
+          .session(_session)
+          .lean();
       });
     } finally {
       await _session.endSession();
     }
 
-    if (authToken.purpose === "forgot-password") {
-      const expires = updatedOtpRecord.createdAt.getTime() + TIME.FIVE_MINUTES;
-      return res
-        .cookie("oid", updatedOtpRecord._id, {
-          httpOnly: true,
-          sameSite: "strict",
-          secure: process.env.NODE_ENV === "production",
-          signed: true,
-          expires: new Date(expires),
-          path: "/",
-        })
-        .status(200)
-        .json({
-          success: true,
-          message: "OTP verified.",
-        });
-    }
-    // console.log({updatedUserRecord, newUserSession, updatedOtpRecord})
+    const user = getUserPayload(updatedUser);
+    const userKey = `storageApp:user:${user._id}:userdata`;
+    const sessionKey = `storageApp:user:${user._id}:session:${token}`;
 
-    const userPayload = getUserPayload(updatedUserRecord);
-    const { _id: sid, expiry } = newUserSession;
-    res.clearCookie("authToken");
+    await Promise.all([
+      redisClient.json.set(userKey, "$", updatedUser),
+      redisClient.expire(userKey, 300),
+
+      redisClient.set(sessionKey, Date.now(), { EX: 7 * 86400 }),
+      redisClient.sAdd(indexKey, sessionKey),
+      redisClient.expire(indexKey, 7 * 86400),
+    ]);
 
     return res
-      .cookie("sid", sid, {
-        httpOnly: true,
-        sameSite: "strict",
-        secure: process.env.NODE_ENV === "production",
-        signed: true,
-        expires: new Date(expiry),
-        path: "/",
-      })
+      .cookie(
+        "sessionId",
+        { token, id: user._id },
+        {
+          httpOnly: true,
+          sameSite: "lax",
+          secure: process.env.NODE_ENV === "production",
+          signed: true,
+          maxAge: TIME.ONE_DAY * 7,
+          path: "/",
+        },
+      )
       .status(201)
       .json({
         success: true,
         message: "Session created.",
-        data: { user: userPayload },
+        data: { user },
       });
   } catch (err) {
     next(err);
@@ -280,20 +256,8 @@ export const loginHandler = async (req, res, next) => {
       return next(getErrorObject("Incorrect email or password."));
     }
 
-    const expires = Date.now() + TIME.TEN_MINUTES;
     return res
-      .cookie(
-        "authToken",
-        { purpose: "login", id: user._id, expires },
-        {
-          httpOnly: true,
-          sameSite: "strict",
-          secure: process.env.NODE_ENV === "production",
-          signed: true,
-          expires: new Date(expires),
-          path: "/",
-        },
-      )
+      .cookie("authToken", { purpose: "login", id: user._id }, cookieOptions)
       .status(200)
       .json({ success: true, message: "Login token created." });
   } catch (err) {
@@ -351,25 +315,10 @@ export const registerHandler = async (req, res, next) => {
       await session.endSession();
     }
 
-    const expires = Date.now() + TIME.TEN_MINUTES;
     return res
-      .cookie(
-        "authToken",
-        { purpose: "register", id: user?._id, expires },
-        {
-          httpOnly: true,
-          sameSite: "strict",
-          secure: process.env.NODE_ENV === "production",
-          signed: true,
-          expires: new Date(expires),
-          path: "/",
-        },
-      )
+      .cookie("authToken", { purpose: "register", id: user._id }, cookieOptions)
       .status(200)
-      .json({
-        success: true,
-        message: "Register token created.",
-      });
+      .json({ success: true, message: "Register token created." });
   } catch (err) {
     next(err);
   }
@@ -393,28 +342,17 @@ export const forgotPasswordInitHandler = async (req, res, next) => {
       return next(getErrorObject(errorMessage));
     }
 
-    const user = await User.findOne({ email: data.email });
+    const user = await User.findOne({ email: data.email }).select("_id").lean();
     if (!user) return next(getErrorObject("User not found.", 404));
 
-    const expires = Date.now() + TIME.TEN_MINUTES;
     return res
       .cookie(
         "authToken",
-        { purpose: "forgot-password", id: user._id, expires },
-        {
-          httpOnly: true,
-          sameSite: "strict",
-          secure: process.env.NODE_ENV === "production",
-          signed: true,
-          expires: new Date(expires),
-          path: "/",
-        },
+        { purpose: "forgot-password", id: user._id },
+        cookieOptions,
       )
       .status(200)
-      .json({
-        success: true,
-        message: "Password changing token created.",
-      });
+      .json({ success: true, message: "Password changing token created." });
   } catch (err) {
     next(err);
   }
@@ -422,10 +360,10 @@ export const forgotPasswordInitHandler = async (req, res, next) => {
 
 /**
  * path: /api/auth/forgot-password
- * what it do: Reset the user password using a previously-verified OTP. Requires a signed cookie `oid` set by OTP verification.
+ * what it do: Reset the user password using a previously-verified OTP. Requires a signed cookie `resetToken` set by OTP verification.
  * requirements:
  *   - req.body: { newPassword: string }
- *   - req.signedCookies.oid: OTP record id (signed cookie) set by `verify-otp` when purpose is `forgotPassword`
+ *   - req.signedCookies.resetToken: OTP record id (signed cookie) set by `verify-otp` when purpose is `forgotPassword`
  *   - OTP record with given id and purpose `forgotPassword` must exist
  */
 export const forgotPasswordHandler = async (req, res, next) => {
@@ -439,32 +377,26 @@ export const forgotPasswordHandler = async (req, res, next) => {
     }
 
     const { newPassword } = data;
-    const { oid } = req.signedCookies;
+    const { resetToken } = req.signedCookies;
 
-    if (!newPassword || !oid || !mongoose.isValidObjectId(oid))
+    if (!newPassword || !resetToken)
       return next(getErrorObject("Invalid cookies or payload."));
 
-    const session = await mongoose.startSession();
+    const { token, id: userId } = resetToken;
+    const resetKey = `storageApp:user:${userId}:resetPass:${token}`;
+    const storedEmail = await redisClient.get(resetKey);
 
-    //create hashedPassword
-    const hashedPass = await bcrypt.hash(newPassword, 12);
+    if (!storedEmail) return next(getErrorObject("Invalid or expired token."));
+    await redisClient.del(resetKey);
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
-        const otpRecord = await OTP.findOne({
-          _id: oid,
-          purpose: "forgot-password",
-        })
-          .select("email")
-          .session(session);
-
-        if (!otpRecord) throw getErrorObject("Invalid OTP.", 404);
-
         await User.updateOne(
-          { email: otpRecord.email },
-          { $set: { password: hashedPass } },
+          { _id: userId, email: storedEmail },
+          { $set: { password: hashedPassword } },
         ).session(session);
-
-        await otpRecord.deleteOne({ _id: oid }).session(session);
       });
     } finally {
       await session.endSession();
@@ -474,7 +406,7 @@ export const forgotPasswordHandler = async (req, res, next) => {
     //await sendEmail({email, purpose})
 
     return res
-      .clearCookie("oid")
+      .clearCookie("resetToken")
       .status(201)
       .json({ success: true, message: "Password changed." });
   } catch (err) {

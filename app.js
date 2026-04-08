@@ -50,9 +50,9 @@ try {
   app.use(errorHandler);
 
   app.listen(port, () => {
-    console.log("server started at port :", port);
+    console.info("Server Started at PORT :", port);
   });
 } catch (err) {
-  console.log({ [err.name]: err.message });
+  console.info({ [err.name]: err.message });
   process.exit(1);
 }

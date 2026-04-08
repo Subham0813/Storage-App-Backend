@@ -61,5 +61,5 @@ export const authTokenSchema = z.object({
     message: "Invalid id.",
   }),
   purpose: requestOtpSchema.shape.purpose,
-  expires: z.number().refine((val) => val > Date.now()),
+  // expires: z.number().refine((val) => val > Date.now()),
 });

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node --env-file=.env app.js",
-    "dev": "node --env-file=.env --watch app.js"
+    "dev": "node --env-file=.env --watch app.js --trace-warnings ..."
   },
   "keywords": [],
   "author": "",
@@ -26,6 +26,7 @@
     "mongoose": "^9.0.1",
     "multer": "^2.1.1",
     "nodemon": "^3.1.10",
+    "redis": "^5.11.0",
     "serve-favicon": "^2.5.1",
     "zod": "^4.3.6"
   }

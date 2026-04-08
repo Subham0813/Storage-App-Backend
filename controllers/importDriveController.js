@@ -367,13 +367,9 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
  */
 export const getDrivePickerTokenHandler = async (req, res, next) => {
   try {
-    const integration = await DriveIntegration.findOne({
-      userId: req.user._id,
-      provider: "google-drive",
-      stateCreatedAt: { $exists: false },
-    });
-
-    if (!integration)
+    const drive = req.user.integrations?.googleDrive;
+    if (!drive &&
+      Date.now() > new Date(drive.tokenExpiry).getTime())
       return next(
         getErrorObject("Google Drive integration not found or misconfigured."),
       );
@@ -383,10 +379,7 @@ export const getDrivePickerTokenHandler = async (req, res, next) => {
       client_secret: google_client_secret,
     });
 
-    auth.setCredentials({
-      refresh_token: integration.refreshToken,
-    });
-
+    auth.setCredentials({ refresh_token: drive.refreshToken });
     const { credentials } = await auth.refreshAccessToken();
 
     res.status(200).json({

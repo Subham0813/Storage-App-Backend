@@ -4,7 +4,9 @@ import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
 import { SUPER_ROLES } from "../misc/constants.js";
 import { DriveIntegration } from "../models/integration.model.js";
-import { getErrorObject } from "../utils/helper.js";
+import { getErrorObject, getUserPayload } from "../utils/helper.js";
+import { redisClient } from "../configs/radis.js";
+import { User } from "../models/user.model.js";
 
 /**
  * Middleware: validateSession
@@ -34,23 +36,33 @@ export const verifyCsrfOrigin = (req, res, next) => {
 
 export const validateSession = async (req, res, next) => {
   try {
-    const { sid } = req.signedCookies;
+    const { sessionId } = req.signedCookies;
     const { token } = req.query;
 
     //Signed User
-    if (sid && mongoose.isValidObjectId(sid)) {
-      const session = await Session.findById(sid)
-        .populate("userId", "-__v -createdAt -updatedAt")
-        .lean();
+    if (sessionId) {
+      const savedSession = await redisClient.get(
+        `storageApp:user:${sessionId.id}:session:${sessionId.token}`,
+      );
+      if (!savedSession)
+        return next(getErrorObject("Unauthorized. Please login again.", 401));
 
-      if (session?.userId && !session.userId.isDeleted) {
-        //check Admin for admin route
-        if (
-          req.url.includes("/admin") &&
-          !SUPER_ROLES.includes(session.userId.role)
-        )
-          return next(getErrorObject("Unauthorized: Access denied.", 401));
-        req.user = session.userId;
+      const userKey = `storageApp:user:${sessionId.id}:userdata`;
+      let user = await redisClient.json.get(userKey, "$");
+      if (!user) {
+        user = await User.findById(sessionId.id).lean();
+        await Promise.all([
+          redisClient.json.set(userKey, "$", user),
+          redisClient.expire(userKey, 300),
+        ]);
+      }
+
+      if (user && !user.isDeleted) {
+        if (req.url.includes("/admin") && !SUPER_ROLES.includes(savedUser.role))
+          return next(getErrorObject("You're not an admin.", 403));
+
+        user.sessionId = sessionId;
+        req.user = user;
         return next();
       }
     }
@@ -84,7 +96,7 @@ export const validateSession = async (req, res, next) => {
       }
     }
 
-    return next(getErrorObject("Unauthorized: Access denied.", 401));
+    return next(getErrorObject("Unauthorized: validation failed.", 401));
   } catch (err) {
     next(err);
   }
