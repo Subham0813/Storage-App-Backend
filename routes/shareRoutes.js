@@ -16,7 +16,7 @@ export const resolveSharedTokenHandler = async (req, res, next) => {
   try {
     // 1. Try to find a File
     const file = await UserFile.findOne({ shareToken: token, isDeleted: false })
-      .select("_id filename sharedWith sharedAt publicRole")
+      .select("_id name sharedWith sharedAt publicRole")
       .lean();
 
     if (file) {
@@ -28,7 +28,7 @@ export const resolveSharedTokenHandler = async (req, res, next) => {
 
     // 2. Try to find a Directory
     const directory = await Directory.findOne({ shareToken: token, isDeleted: false })
-      .select("_id dirname sharedWith sharedAt publicRole")
+      .select("_id name sharedWith sharedAt publicRole")
       .lean();
 
     if (directory) {

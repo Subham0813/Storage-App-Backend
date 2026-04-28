@@ -14,7 +14,7 @@ const UploadSessionSchema = new Schema(
       required: true,
     },
 
-    filename: { type: String, required: true },
+    name: { type: String, required: true },
     size: { type: Number, required: true },
     mime: { type: String, required: true },
 

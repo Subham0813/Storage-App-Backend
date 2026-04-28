@@ -9,7 +9,7 @@ import { File as FileModel } from "../models/file.model.js";
 import { uploadInitSchema } from "../Schemas/userSchema.js";
 
 import { finalizeStorageRecord, mergeFileChunks } from "../utils/storage.js";
-import {  getErrorObject } from "../utils/helper.js";
+import { getErrorObject } from "../utils/helper.js";
 import { TIME, CHUNK_SIZE, TEMP_ROOT, UPLOAD_ROOT } from "../misc/constants.js";
 
 /**
@@ -43,7 +43,7 @@ export const initUpload = async (req, res, next) => {
     const upload = await UploadSession.create({
       userId: _id,
       parentId: req.parent._id,
-      filename: name,
+      name: name,
       size,
       mime,
       strategy,
@@ -245,7 +245,7 @@ export const completeUpload = async (req, res, next) => {
  *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
  */
 export const cancelUpload = async (req, res, next) => {
-  const { _id, strategy, filename } = req.uploadSession;
+  const { _id, strategy, name } = req.uploadSession;
 
   const session = await mongoose.startSession();
   try {
@@ -267,7 +267,7 @@ export const cancelUpload = async (req, res, next) => {
         console.error("cleanup failed:", err),
       );
     } else {
-      const filePath = path.resolve(tempDir, filename);
+      const filePath = path.resolve(tempDir, name);
       if (existsSync(filePath))
         unlink(filePath).catch((err) => console.error("cleanup failed:", err));
     }
@@ -275,10 +275,7 @@ export const cancelUpload = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "Upload cancelled.",
-      data: {
-        _id,
-        filename,
-      },
+      data: { _id, name },
     });
   } catch (err) {
     next(err);

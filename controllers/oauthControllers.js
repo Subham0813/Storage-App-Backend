@@ -218,7 +218,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
           const [root] = await Directory.create(
             [
               {
-                dirname: `root-${user.username}`,
+                name: `root-${user.username}`,
                 parentId: new mongoose.Types.ObjectId(),
                 userId: user._id,
               },
@@ -394,7 +394,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
           const [root] = await Directory.create(
             [
               {
-                dirname: `root-${user.username}`,
+                name: `root-${user.username}`,
                 parentId: new mongoose.Types.ObjectId(),
                 userId: user._id,
               },

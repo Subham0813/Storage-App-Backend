@@ -89,7 +89,7 @@ export const mergeFileChunks = async (uploadedChunks, tempDir, mergedPath) => {
  * Utility: finalizeStorageRecord
  * what it do: Handle file deduplication via hashing, create database records, update quotas, cleanup temp files.
  * requirements:
- *   - upload: UploadSession document with userId, parentId, filename, size, mime, tempDir
+ *   - upload: UploadSession document with userId, parentId, name, size, mime, tempDir
  *   - hash: computed hash of uploaded/merged file
  *   - status: upload status ('uploaded', 'imported', etc., defaults to 'uploaded')
  *   - existingRecord: DB record of physically stored file
@@ -144,7 +144,7 @@ export const finalizeStorageRecord = async ({
       [userFile] = await UserFile.create(
         [
           {
-            filename: upload.filename,
+            name: upload.name,
             userId,
             parentId,
             disposition,

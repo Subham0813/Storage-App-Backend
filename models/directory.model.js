@@ -7,7 +7,8 @@ export const shared = {
 
 const directorySchema = new Schema(
   {
-    dirname: {
+    ancestors: [{ type: Schema.Types.ObjectId, ref: "Directory", index: true }],
+    name: {
       type: String,
       minLength: 1,
       maxLength: 255,

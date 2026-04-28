@@ -84,7 +84,7 @@ export const previewFileHandler = async (req, res, next) => {
       isDeleted: false,
     })
       .select(
-        "filename userId sharedWith publicRole meta disposition force_inline_preview",
+        "name userId sharedWith publicRole meta disposition force_inline_preview",
       )
       .populate("meta", "detectedMime objectKey")
       .lean();
@@ -153,7 +153,7 @@ export const previewFileHandler = async (req, res, next) => {
         "Content-Range": `bytes ${start}-${end}/${stat.size}`,
         "Content-Length": end - start + 1,
         "Content-Type": safeMime,
-        "Content-Disposition": `${file.disposition}; filename="${file.filename}"`,
+        "Content-Disposition": `${file.disposition}; filename="${file.name}"`,
         "X-Content-Type-Options": "nosniff",
       });
 
@@ -170,7 +170,7 @@ export const previewFileHandler = async (req, res, next) => {
     res.writeHead(200, {
       "Content-Length": stat.size,
       "Content-Type": safeMime,
-      "Content-Disposition": `${file.disposition}; filename="${file.filename}"`,
+      "Content-Disposition": `${file.disposition}; filename="${file.name}"`,
     });
 
     const stream = createReadStream(filePath);
@@ -201,7 +201,7 @@ export const downloadFileHandler = async (req, res, next) => {
       _id: req.params.id,
       isDeleted: false,
     })
-      .select("filename userId sharedWith publicRole meta linkMeta")
+      .select("name userId sharedWith publicRole meta linkMeta")
       .populate("meta", "objectKey")
       .lean();
 
@@ -234,7 +234,7 @@ export const downloadFileHandler = async (req, res, next) => {
     res.writeHead(200, {
       "Content-Length": statSync(filePath).size,
       "Content-Type": "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${file.filename}"`,
+      "Content-Disposition": `attachment; filename="${file.name}"`,
       "X-Content-Type-Options": "nosniff",
     });
 
@@ -293,10 +293,10 @@ export const renameFileHandler = async (req, res, next) => {
 
     const renamed = await UserFile.findOneAndUpdate(
       { _id: file._id, isDeleted: false },
-      { $set: { filename: name } },
+      { $set: { name: name } },
       { returnDocument: "after" },
     )
-      .select("_id filename")
+      .select("_id name")
       .lean();
 
     if (!renamed) return next(getErrorObject("File not found.", 404));
@@ -356,11 +356,11 @@ export const copyFileHandler = async (req, res, next) => {
     if (!isShared && !isOwner)
       return next(getErrorObject("You don't have this permission.", 403));
 
-    let { filename, parentId, userId: fileUserId, ...rest } = getFileDoc(file);
+    let { name, parentId, userId: fileUserId, ...rest } = getFileDoc(file);
 
     if (targetParentId.toString() !== parentId.toString())
       parentId = targetParentId;
-    else filename = `Copy-${filename}`;
+    else name = `Copy-${name}`;
 
     if (!isOwner) fileUserId = targetUser._id;
 
@@ -383,7 +383,7 @@ export const copyFileHandler = async (req, res, next) => {
         [newFile] = await UserFile.create(
           [
             {
-              filename,
+              name,
               parentId,
               userId: fileUserId,
               ...rest,
@@ -557,7 +557,7 @@ export const moveToBinHandler = async (req, res, next) => {
       },
       { returnDocument: "after" },
     )
-      .select("_id filename parentId isDeleted")
+      .select("_id name parentId isDeleted")
       .lean();
 
     return res.status(200).json({
@@ -621,7 +621,7 @@ export const restoreFileHandler = async (req, res, next) => {
       },
       { returnDocument: "after" },
     )
-      .select("_id, filename, parentId isDeleted")
+      .select("_id name parentId isDeleted")
       .lean();
 
     return res.status(200).json({

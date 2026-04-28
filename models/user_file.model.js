@@ -1,8 +1,9 @@
 import { Schema, model } from "mongoose";
-import { sharedWithSchema } from "./directory.model.js";
+import { shared } from "./directory.model.js";
 
 const fileSchema = new Schema(
   {
+    ancestors: [{ type: Schema.Types.ObjectId, ref: "Directory", index: true }],
     userId: { type: Schema.Types.ObjectId, required: true, ref: "User" },
     parentId: { type: Schema.Types.ObjectId, ref: "Directory", required: true },
 
@@ -14,7 +15,7 @@ const fileSchema = new Schema(
       // iconLink: { type: String },
     },
 
-    filename: {
+    name: {
       type: String,
       minLength: [1, "originalname should be atleast one character long."],
       maxLength: [
@@ -61,7 +62,7 @@ const fileSchema = new Schema(
       enum: ["none", "user", "process"],
       default: "none",
     },
-    sharedWith: { type: [sharedWithSchema], default: [] },
+    sharedWith: { type: [shared], default: [] },
     sharedAt: { type: Date, default: Date.now(), require: true },
     shareToken: { type: String, default: null },
   },

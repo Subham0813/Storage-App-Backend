@@ -84,7 +84,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
         accepted.push({
           userId: parent.userId._id,
           parentId: parent._id,
-          filename: file.name || "new file" + file.mimeType,
+          name: file.name || "new file" + file.mimeType,
           size: parseInt(file.sizeBytes) || 0,
           mime: file.mimeType,
           strategy: "google-drive",
@@ -105,11 +105,11 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
     // 1. Create sessions for frontend polling
     const sessions = await Promise.all(
       accepted.map((file) => {
-        const { _id, filename, size, mime } = UploadSession.create({
+        const { _id, name, size, mime } = UploadSession.create({
           ...file,
           expiresAt: new Date(Date.now() + TIME.ONE_DAY),
         });
-        return { _id, filename, size, mime };
+        return { _id, name, size, mime };
       }),
     );
 
@@ -169,7 +169,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
                 )
               ) {
                 console.warn(
-                  `[Import] File too large: ${file.filename}. Saving as Link.`,
+                  `[Import] File too large: ${file.name}. Saving as Link.`,
                 );
 
                 if (existsSync(filePath))
@@ -194,7 +194,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
                     await UserFile.create(
                       [
                         {
-                          filename: file.filename,
+                          name: file.name,
                           userId: parent.userId._id,
                           parentId: parent._id,
                           disposition: "inline",
@@ -228,7 +228,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
           }
           // --- B. Handle Regular Files (PDF, Images) ---
           else {
-            console.info("Import started for ", file.filename);
+            console.info("Import started for ", file.name);
             driveRes = await drive.files.get(
               { fileId: file.id, alt: "media" },
               { responseType: "stream" },
@@ -266,7 +266,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
             await pipeline(driveRes.data, writeStream, {
               signal: controller.signal,
             });
-            console.info("Import finished for ", file.filename);
+            console.info("Import finished for ", file.name);
           } catch (pipeErr) {
             if (pipeErr.name === "AbortError")
               console.info(
@@ -293,7 +293,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
             { $set: { size: parseInt(stats.size), bytesRead } },
             { returnDocument: "after" },
           )
-            .select("filename parentId size")
+            .select("name parentId size")
             .populate("parentId", "_id userId publicRole sharedWith")
             .lean();
 
@@ -334,7 +334,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
             status: "imported",
           });
         } catch (err) {
-          console.error(`Import failed for ${file.filename}: ${err.message}`);
+          console.error(`Import failed for ${file.name}: ${err.message}`);
 
           // If file moved to storage, and DB failed -> Delete from storage
           if (finalPath) {

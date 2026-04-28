@@ -57,7 +57,7 @@ export const serveZip = async ({
     .lean();
 
   for (const file of files) {
-    const safeName = sanitizeName(file.filename);
+    const safeName = sanitizeName(file.name);
     const entryPath = zipPath + safeName;
 
     // Ensure meta exists before accessing objectKey
@@ -101,7 +101,7 @@ export const serveZip = async ({
   ).lean();
 
   for (const dir of dirs) {
-    const safeDirName = sanitizeName(dir.dirname);
+    const safeDirName = sanitizeName(dir.name);
 
     // Add empty dir entry to ZIP structure
     archive.append("", {
@@ -125,7 +125,7 @@ export const serveZip = async ({
  * Utility: sanitizeName
  * what it do: Sanitize file/directory names to prevent directory traversal attacks and invalid path characters.
  * requirements:
- *   - name: filename or directory name string
+ *   - name: file name or directory name string
  *   - Removes '/', '\', '..', and trims whitespace
  *   - Returns: sanitized name (defaults to 'Untitled' if name is empty)
  */

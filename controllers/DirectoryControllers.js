@@ -183,7 +183,7 @@ export const downloadDirectoryHandler = async (req, res, next) => {
       _id: req.params.id,
       isDeleted: false,
     })
-      .select("dirname size userId publicRole sharedWith")
+      .select("name size userId publicRole sharedWith")
       .lean();
 
     if (!directory) return next(getErrorObject("Directory not found.", 404));
@@ -195,7 +195,7 @@ export const downloadDirectoryHandler = async (req, res, next) => {
     if (!isShared && !isOwner)
       return next(getErrorObject("You do not have this permission.", 403));
 
-    const safeDirname = sanitizeName(directory.dirname);
+    const safeDirname = sanitizeName(directory.name);
     const safeTimeStamp = new Date().toISOString().replace(/[-:.]/g, "");
 
     // const zipName = `${safeDirname}-${new Date().toJSON()}-${dir.filesCount}-001.zip`; //google drive naming
@@ -298,7 +298,7 @@ export const createDirectoryHandler = async (req, res, next) => {
         [newDir] = await Directory.create(
           [
             {
-              dirname: name,
+              name: name,
               parentId: targetDirId,
               userId,
               isDeleted: false,
@@ -333,7 +333,7 @@ export const createDirectoryHandler = async (req, res, next) => {
       data: {
         directory: {
           _id: newDir._id,
-          dirname: newDir.dirname,
+          name: newDir.name,
           parentId: newDir.parentId,
         },
       },
@@ -380,10 +380,10 @@ export const renameDirectoryHandler = async (req, res, next) => {
       await session.withTransaction(async () => {
         updated = await Directory.findOneAndUpdate(
           { _id: directory._id, isDeleted: false },
-          { dirname: name },
+          { name: name },
           { session, returnDocument: "after" },
         )
-          .select("_id parentId dirname")
+          .select("_id parentId name")
           .lean();
       });
     } finally {
@@ -425,7 +425,7 @@ export const moveDirectoryHandler = async (req, res, next) => {
       _id: req.params.id,
       isDeleted: false,
     })
-      .select("userId dirname sharedWith parentId size")
+      .select("userId name sharedWith parentId size")
       .lean();
 
     if (!directory) {
@@ -498,7 +498,7 @@ export const moveDirectoryHandler = async (req, res, next) => {
       message: "Directory moved to the target directory.",
       directory: {
         _id: directory._id,
-        dirname: directory.dirname,
+        name: directory.name,
         parentId: targetDirId,
       },
     });
