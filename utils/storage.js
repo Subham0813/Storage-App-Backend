@@ -156,7 +156,7 @@ export const finalizeStorageRecord = async ({
             publicRole,
             sharedWith,
             sharedAt:
-              publicRole === "VIEWER" || sharedWith.length > 0
+              publicRole === "view" || sharedWith.length > 0
                 ? new Date()
                 : null,
           },

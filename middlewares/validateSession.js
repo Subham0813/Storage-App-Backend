@@ -10,7 +10,7 @@ import { User } from "../models/user.model.js";
 
 /**
  * Middleware: validateSession
- * what it do: Validate user session by verifying signed session cookie (sid), populating req.user object. Allows public access to files/directories with publicRole="VIEWER".
+ * what it do: Validate user session by verifying signed session cookie (sid), populating req.user object. Allows public access to files/directories with publicRole="view".
  * requirements:
  *   - req.signedCookies.sid: signed session id cookie (optional for public resources)
  *   - Session must exist in DB and be linked to a valid user

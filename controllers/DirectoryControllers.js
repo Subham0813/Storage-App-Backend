@@ -44,9 +44,9 @@ export const getDirectoryInfoHandler = async (req, res, next) => {
     if (!directory) return next(getErrorObject("Directory not found.", 404));
 
     const isOwner = directory.userId._id.toString() === req.user._id.toString();
-    const isPublic = directory.publicRole === "VIEWER";
+    const isPublic = directory.publicRole === "view";
     const isShared = req.user.email
-      ? hasAccess(directory, ["VIEWER", "EDITOR"], req.user.email)
+      ? hasAccess(directory, ["view", "edit"], req.user.email)
       : false;
 
     if (
@@ -93,9 +93,9 @@ export const getDirectoriesHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = directory.userId.toString() === userId.toString();
-    const isPublic = directory.publicRole === "VIEWER";
+    const isPublic = directory.publicRole === "view";
     const isShared = email
-      ? hasAccess(directory, ["VIEWER", "EDITOR"], email)
+      ? hasAccess(directory, ["view", "edit"], email)
       : false;
 
     if (
@@ -148,9 +148,9 @@ export const getAllFilesHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = directory.userId.toString() === userId.toString();
-    const isPublic = directory.publicRole === "VIEWER";
+    const isPublic = directory.publicRole === "view";
     const isShared = email
-      ? hasAccess(directory, ["VIEWER", "EDITOR"], email)
+      ? hasAccess(directory, ["view", "edit"], email)
       : false;
 
     if (
@@ -201,7 +201,7 @@ export const downloadDirectoryHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = directory.userId.toString() === userId.toString();
-    const isShared = email ? hasAccess(directory, ["EDITOR"], email) : false;
+    const isShared = email ? hasAccess(directory, ["edit"], email) : false;
 
     if (!isShared && !isOwner)
       return next(getErrorObject("You do not have this permission.", 403));
@@ -318,7 +318,7 @@ export const createDirectoryHandler = async (req, res, next) => {
               publicRole,
               sharedWith,
               sharedAt:
-                publicRole !== "NONE" || sharedWith.length > 0
+                publicRole !== "none" || sharedWith.length > 0
                   ? new Date()
                   : null,
             },
@@ -356,7 +356,7 @@ export const createDirectoryHandler = async (req, res, next) => {
 
 /**
  * path: /api/directories/rename/:id
- * what it do: Rename a directory if requester is owner or has EDITOR access.
+ * what it do: Rename a directory if requester is owner or has edit access.
  * requirements:
  *   - req.params: { id: string } (directory id)
  *   - req.body: { name: string }
@@ -381,7 +381,7 @@ export const renameDirectoryHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = directory.userId.toString() === userId.toString();
-    const isShared = email ? hasAccess(directory, ["EDITOR"], email) : false;
+    const isShared = email ? hasAccess(directory, ["edit"], email) : false;
     if (!isShared && !isOwner)
       return next(getErrorObject("You do not have this permission.", 403));
 
@@ -461,8 +461,8 @@ export const moveDirectoryHandler = async (req, res, next) => {
       directory.userId.toString() === userId.toString() &&
       targetUserId.toString() === userId.toString();
     const isShared = email
-      ? hasAccess(directory, ["EDITOR"], email) &&
-        hasAccess(req.parent, ["EDITOR"], email)
+      ? hasAccess(directory, ["edit"], email) &&
+        hasAccess(req.parent, ["edit"], email)
       : false;
     if (!isShared && !isOwner)
       return next(getErrorObject("You do not have this permission.", 403));
@@ -472,9 +472,9 @@ export const moveDirectoryHandler = async (req, res, next) => {
       publicRole,
       shareToken,
       sharedBy:
-        publicRole !== "NONE" || sharedWith.length > 0 ? "process" : "none",
+        publicRole !== "none" || sharedWith.length > 0 ? "process" : "none",
       sharedAt:
-        publicRole !== "NONE" || sharedWith.length > 0 ? new Date() : null,
+        publicRole !== "none" || sharedWith.length > 0 ? new Date() : null,
     };
     const session = await mongoose.startSession();
 
@@ -520,7 +520,7 @@ export const moveDirectoryHandler = async (req, res, next) => {
 
 /**
  * path: /api/directories/trash/:id
- * what it do: Move a directory to the bin (soft-delete) if requester is owner or has EDITOR access.
+ * what it do: Move a directory to the bin (soft-delete) if requester is owner or has edit access.
  * requirements:
  *   - req.params: { id: string } (directory id)
  *   - req.user: authenticated user object provided by `validateSession`
@@ -541,7 +541,7 @@ export const moveToBinDirectoryHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = directory.userId.toString() === userId.toString();
-    const isShared = email ? hasAccess(directory, ["EDITOR"], email) : false;
+    const isShared = email ? hasAccess(directory, ["edit"], email) : false;
     if (!isShared && !isOwner)
       return next(getErrorObject("You do not have this permission.", 403));
 
@@ -582,7 +582,7 @@ export const moveToBinDirectoryHandler = async (req, res, next) => {
 
 /**
  * path: /api/directories/restore/:id
- * what it do: Restore a previously soft-deleted directory if requester is owner or has EDITOR access.
+ * what it do: Restore a previously soft-deleted directory if requester is owner or has edit access.
  * requirements:
  *   - req.params: { id: string } (directory id)
  *   - req.user: authenticated user object provided by `validateSession`
@@ -610,7 +610,7 @@ export const restoreDirectoryHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = directory.userId.toString() === userId.toString();
-    const isShared = hasAccess(directory, ["EDITOR"], email);
+    const isShared = hasAccess(directory, ["edit"], email);
 
     if (!isShared && !isOwner)
       return next(getErrorObject("You do not have this permission.", 403));
@@ -801,7 +801,7 @@ export const shareDirectoryHandler = async (req, res, next) => {
  * what it do: Change the `publicRole` for a directory (make publicly viewable or revoke). Only the directory owner may perform this action.
  * requirements:
  *   - req.params: { id: string } (directory id)
- *   - req.body: { publicRole?: 'VIEWER'|'NONE' }
+ *   - req.body: { publicRole?: 'view'|'none' }
  *   - req.user: authenticated user object provided by `validateSession` (must be directory owner)
  */
 export const directoryPublicRoleHandler = async (req, res, next) => {
@@ -809,7 +809,7 @@ export const directoryPublicRoleHandler = async (req, res, next) => {
     return next(getErrorObject("Invalid id"));
 
   const { publicRole } = req.body;
-  const allowedPublicRoles = ["VIEWER", "NONE"];
+  const allowedPublicRoles = ["view", "none"];
 
   const formattedPublicRole = publicRole
     ? String(publicRole).toUpperCase()
@@ -836,7 +836,7 @@ export const directoryPublicRoleHandler = async (req, res, next) => {
         throw getErrorObject("You do not have this permission.", 403);
       }
 
-      if (formattedPublicRole !== "NONE") {
+      if (formattedPublicRole !== "none") {
         if (!directory.shareToken) {
           shareToken = base64URLEncode(crypto.randomBytes(32));
           updateQuery.$set.shareToken = shareToken;
@@ -955,12 +955,12 @@ export const revokeAccessDirectoryHandler = async (req, res, next) => {
           .lean();
 
         let emailsToPull = emailsToUpdate;
-        if (updated.sharedWith.length < 1 && updated.publicRole === "NONE") {
+        if (updated.sharedWith.length < 1 && updated.publicRole === "none") {
           updateQuery = {
             $set: {
               sharedBy: "none",
               sharedWith: [],
-              publicRole: "NONE",
+              publicRole: "none",
               sharedAt: null,
               shareToken: null,
             },

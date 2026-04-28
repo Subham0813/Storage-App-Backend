@@ -166,7 +166,7 @@ export const getUserPayload = (user) => {
  * what it do: Check if the provided email has one of the allowed roles on a shared item.
  * requirements:
  *   - item: directory or file document with sharedWith array
- *   - roles: array of role strings to check against (e.g., ['VIEWER', 'EDITOR'])
+ *   - roles: array of role strings to check against (e.g., ['view', 'edit'])
  *   - email: user email to check access for
  *   - Returns: boolean true if email found with one of the roles
  */

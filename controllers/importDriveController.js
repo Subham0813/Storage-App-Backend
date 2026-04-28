@@ -203,7 +203,7 @@ export const importFromGoogleDriveHandler = async (req, res, next) => {
                           inline_preview: false,
                           force_inline_preview: false,
                           meta: null, // No physical file
-                          publicRole: parent.publicRole || "NONE",
+                          publicRole: parent.publicRole || "none",
                           sharedWith: parent.sharedWith || [],
                           sharedAt: parent.publicRole ? new Date() : null,
                           // Custom Metadata for frontend to open link

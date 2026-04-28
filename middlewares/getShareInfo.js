@@ -23,7 +23,7 @@ export const getShareInfo = (path) => {
       if (!item) return next(getErrorObject("Item not found.", 404));
 
       const isOwner = item.userId.toString() === userId.toString();
-      const isShared = hasAccess(item, ["VIEWER", "EDITOR"], email);
+      const isShared = hasAccess(item, ["view", "edit"], email);
 
       if (!item.sharedAt)
         return next(getErrorObject("Item is not shared.", 204));

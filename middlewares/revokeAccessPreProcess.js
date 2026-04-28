@@ -18,7 +18,7 @@ export const revokeAccessPreProcessor = async (req, res, next) => {
   if (
     !emails ||
     !Array.isArray(emails) ||
-    (formattedPublicRole && formattedPublicRole !== "NONE")
+    (formattedPublicRole && formattedPublicRole !== "none")
   )
     return next(getErrorObject("Invalid payload."));
 

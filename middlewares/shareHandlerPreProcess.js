@@ -32,9 +32,9 @@ export const shareHandlerPreProcessor = async (req, res, next) => {
     const { success, data } = emailSchema.safeParse(email);
     const cr = String(role).toUpperCase();
 
-    if (success && ["VIEWER", "EDITOR"].includes(cr))
+    if (success && ["view", "edit"].includes(cr))
       validMap.set(data, { email: data, role: cr });
-    return success && ["VIEWER", "EDITOR"].includes(cr);
+    return success && ["view", "edit"].includes(cr);
   });
 
   if (!isValid) return next(getErrorObject("Invalid payload"));

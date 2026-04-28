@@ -53,8 +53,8 @@ const fileSchema = new Schema(
 
     publicRole: {
       type: String,
-      enum: ["VIEWER", "NONE"],
-      default: "NONE",
+      enum: ["view", "none"],
+      default: "none",
     },
     sharedBy: {
       type: String,

@@ -42,12 +42,12 @@ export const serveZip = async ({
     isDeleted: false,
     $or: [
       { userId: userId },
-      { publicRole: "VIEWER" },
+      { publicRole: "view" },
       {
         sharedWith: {
           $elemMatch: {
             email: userEmail,
-            role: { $in: ["VIEWER", "EDITOR"] },
+            role: { $in: ["view", "edit"] },
           },
         },
       },
@@ -86,12 +86,12 @@ export const serveZip = async ({
       isDeleted: false,
       $or: [
         { userId: userId },
-        { publicRole: "VIEWER" },
+        { publicRole: "view" },
         {
           sharedWith: {
             $elemMatch: {
               email: userEmail,
-              role: { $in: ["VIEWER", "EDITOR"] },
+              role: { $in: ["view", "edit"] },
             },
           },
         },

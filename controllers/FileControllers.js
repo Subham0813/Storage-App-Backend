@@ -40,8 +40,8 @@ export const getFileInfoHandler = async (req, res, next) => {
     if (!file) return next(getErrorObject("File not found.", 404));
 
     const isOwner = file.userId._id.toString() === req.user._id.toString();
-    const isPublic = file.publicRole === "VIEWER";
-    const isShared = hasAccess(file, ["VIEWER", "EDITOR"], req.user.email);
+    const isPublic = file.publicRole === "view";
+    const isShared = hasAccess(file, ["view", "edit"], req.user.email);
 
     if (
       !isPublic &&
@@ -100,8 +100,8 @@ export const previewFileHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = file.userId.toString() === userId.toString();
-    const isPublic = file.publicRole === "VIEWER";
-    const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
+    const isPublic = file.publicRole === "view";
+    const isShared = hasAccess(file, ["view", "edit"], email);
 
     if (
       !isPublic &&
@@ -220,8 +220,8 @@ export const downloadFileHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = file.userId.toString() === userId.toString();
-    const isPublic = file.publicRole === "VIEWER";
-    const isShared = hasAccess(file, ["VIEWER", "EDITOR"], email);
+    const isPublic = file.publicRole === "view";
+    const isShared = hasAccess(file, ["view", "edit"], email);
 
     if (
       !isPublic &&
@@ -267,7 +267,7 @@ export const downloadFileHandler = async (req, res, next) => {
 
 /**
  * path: /api/files/rename/:id
- * what it do: Rename a file if requester is owner or has EDITOR access.
+ * what it do: Rename a file if requester is owner or has edit access.
  * requirements:
  *   - req.params: { id: string }
  *   - req.body: { name: string }
@@ -293,7 +293,7 @@ export const renameFileHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = file.userId.toString() === userId.toString();
-    const isShared = hasAccess(file, ["EDITOR"], email);
+    const isShared = hasAccess(file, ["edit"], email);
     if (!isShared && !isOwner)
       return next(getErrorObject("You don't have this permission.", 403));
 
@@ -366,8 +366,8 @@ export const copyFileHandler = async (req, res, next) => {
       file.userId.toString() === userId.toString() &&
       targetUser._id.toString() === userId.toString();
     const isShared = email
-      ? hasAccess(file, ["EDITOR"], email) &&
-        hasAccess(req.parent, ["EDITOR"], email)
+      ? hasAccess(file, ["edit"], email) &&
+        hasAccess(req.parent, ["edit"], email)
       : false;
     if (!isShared && !isOwner)
       return next(getErrorObject("You don't have this permission.", 403));
@@ -407,11 +407,11 @@ export const copyFileHandler = async (req, res, next) => {
               publicRole,
               shareToken,
               sharedBy:
-                publicRole !== "NONE" || sharedWith.length > 0
+                publicRole !== "none" || sharedWith.length > 0
                   ? "process"
                   : "none",
               sharedAt:
-                publicRole !== "NONE" || sharedWith.length > 0
+                publicRole !== "none" || sharedWith.length > 0
                   ? new Date()
                   : null,
             },
@@ -483,8 +483,8 @@ export const moveFileHandler = async (req, res, next) => {
       file.userId.toString() === userId.toString() &&
       targetUser._id.toString() === userId.toString();
     const isShared = email
-      ? hasAccess(file, ["EDITOR"], email) &&
-        hasAccess(req.parent, ["EDITOR"], email)
+      ? hasAccess(file, ["edit"], email) &&
+        hasAccess(req.parent, ["edit"], email)
       : false;
     if (!isShared && !isOwner) return;
 
@@ -500,11 +500,11 @@ export const moveFileHandler = async (req, res, next) => {
               publicRole,
               shareToken,
               sharedBy:
-                publicRole !== "NONE" || sharedWith.length > 0
+                publicRole !== "none" || sharedWith.length > 0
                   ? "process"
                   : "none",
               sharedAt:
-                publicRole !== "NONE" || sharedWith.length > 0
+                publicRole !== "none" || sharedWith.length > 0
                   ? new Date()
                   : null,
             },
@@ -540,7 +540,7 @@ export const moveFileHandler = async (req, res, next) => {
 
 /**
  * path: /api/files/trash/:id
- * what it do: Move a file to the bin (soft-delete) if requester is owner or has EDITOR access.
+ * what it do: Move a file to the bin (soft-delete) if requester is owner or has edit access.
  * requirements:
  *   - req.params: { id: string }
  *   - req.user: authenticated user object provided by `validateSession`
@@ -562,7 +562,7 @@ export const moveToBinHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = file.userId.toString() === userId.toString();
-    const isShared = hasAccess(file, ["EDITOR"], email);
+    const isShared = hasAccess(file, ["edit"], email);
     if (!isShared && !isOwner)
       return next(getErrorObject("You don't have this permission.", 403));
 
@@ -594,7 +594,7 @@ export const moveToBinHandler = async (req, res, next) => {
 
 /**
  * path: /api/files/restore/:id
- * what it do: Restore a previously soft-deleted file if requester is owner or has EDITOR access.
+ * what it do: Restore a previously soft-deleted file if requester is owner or has edit access.
  * requirements:
  *   - req.params: { id: string }
  *   - req.user: authenticated user object provided by `validateSession`
@@ -625,7 +625,7 @@ export const restoreFileHandler = async (req, res, next) => {
 
     const { _id: userId, email } = req.user;
     const isOwner = file.userId.toString() === userId.toString();
-    const isShared = hasAccess(file, ["EDITOR"], email);
+    const isShared = hasAccess(file, ["edit"], email);
     if (!isShared && !isOwner)
       return next(getErrorObject("You don't have this permission.", 403));
 
@@ -751,7 +751,7 @@ export const deleteFileHandler = async (req, res, next) => {
  * what it do: Change sharing settings for a file — set `publicRole` and add/update `sharedWith` entries; only the file owner may perform this action.
  * requirements:
  *   - req.params: { id: string } (directory id)
- *   - req.body: { emailsWithRole?: [{ email, role }], publicRole?: 'VIEWER'|'NONE', notify?: boolean, message?; string}
+ *   - req.body: { emailsWithRole?: [{ email, role }], publicRole?: 'view'|'none', notify?: boolean, message?; string}
  *   - req.user: authenticated user object provided by `validateSession` (must be directory owner)
  *   - When used with `shareHandlerPreProcessor` middleware, expects `req.shareConfig` and responds with `{ accepted, skipped, shareToken }`
  */
@@ -825,12 +825,12 @@ export const shareFileHandler = async (req, res, next) => {
  * what it do: Change the `publicRole` for a file (e.g. make file publicly viewable or revoke public access).
  * requirements:
  *   - req.params: { id: string } (file id)
- *   - req.body: { publicRole?: 'VIEWER'|'NONE' }
+ *   - req.body: { publicRole?: 'view'|'none' }
  *   - req.user: authenticated user object provided by `validateSession` (must be file owner)
  */
 export const filePublicRoleHandler = async (req, res, next) => {
   const { publicRole } = req.body;
-  const allowedPublicRoles = ["VIEWER", "NONE"];
+  const allowedPublicRoles = ["view", "none"];
 
   if (!mongoose.isValidObjectId(req.params.id))
     return next(getErrorObject("Invalid id."));
@@ -860,7 +860,7 @@ export const filePublicRoleHandler = async (req, res, next) => {
         throw getErrorObject("You don't have this permission.", 403);
       }
 
-      if (formattedPublicRole === "NONE" && file.sharedWith.length < 1)
+      if (formattedPublicRole === "none" && file.sharedWith.length < 1)
         updateQuery.$set.sharedBy = "none";
       else updateQuery.$set.sharedBy = "user";
 
@@ -928,7 +928,7 @@ export const getNewFileShareToken = async (req, res, next) => {
 
 /**
  * path: /api/files/revoke-access/:id
- * what it do: Remove listed emails from a file's `sharedWith`. If no remaining shared users and `publicRole` is `NONE`, clears `shareToken`/`sharedAt`.
+ * what it do: Remove listed emails from a file's `sharedWith`. If no remaining shared users and `publicRole` is `none`, clears `shareToken`/`sharedAt`.
  * requirements:
  *   - req.params: { id: string } (file id)
  *   - req.body: { emails: [string] }
@@ -948,7 +948,7 @@ export const revokeAccessFileHandler = async (req, res, next) => {
       .lean();
 
     if (!file) return next(getErrorObject("file not found.", 404));
-    if (file.publicRole !== "VIEWER" && file.sharedWith.length < 1)
+    if (file.publicRole !== "view" && file.sharedWith.length < 1)
       return next(
         getErrorObject("Cannot perform revoke on a non-shared item.", 403),
       );
@@ -965,7 +965,7 @@ export const revokeAccessFileHandler = async (req, res, next) => {
           .select("_id sharedWith publicRole")
           .lean();
 
-        if (updated.sharedWith.length < 1 && updated.publicRole === "NONE")
+        if (updated.sharedWith.length < 1 && updated.publicRole === "none")
           await UserFile.updateOne(
             { _id: updated._id },
             { $set: { sharedAt: null, shareToken: "", sharedBy: "none" } },

@@ -123,7 +123,7 @@ export const getBinDirectoryHandler = async (req, res, next) => {
         sharedWith: {
           $elemMatch: {
             email: userEmail,
-            role: "EDITOR",
+            role: "edit",
           },
         },
       };
@@ -166,7 +166,7 @@ export const getSharedWithHandler = async (req, res, next) => {
     sharedWith: {
       $elemMatch: {
         email: userEmail,
-        role: { $in: ["EDITOR", "VIEWER"] },
+        role: { $in: ["edit", "view"] },
       },
     },
   };

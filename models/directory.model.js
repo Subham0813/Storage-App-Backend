@@ -1,24 +1,9 @@
 import { Schema, model } from "mongoose";
 
-export const sharedWithSchema = new Schema({
-  _id: { type: Schema.Types.ObjectId },
-  email: {
-    type: String,
-    match: [
-      /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/,
-      "please enter a valid email.",
-    ],
-    lowercase: true,
-    trim: true,
-    required: true,
-  },
-
-  role: {
-    type: String,
-    enum: ["VIEWER", "EDITOR"] /*VIEWER - only read, EDITOR - read,update, */,
-    required: true,
-  },
-});
+export const shared = {
+  email: { type: String, lowercase: true, trim: true, required: true },
+  role: { type: String, enum: ["view", "edit"], required: true },
+};
 
 const directorySchema = new Schema(
   {
@@ -51,15 +36,15 @@ const directorySchema = new Schema(
 
     publicRole: {
       type: String,
-      enum: ["VIEWER", "NONE"],
-      default: "NONE",
+      enum: ["view", "none"],
+      default: "none",
     },
     sharedBy: {
       type: String,
       enum: ["none", "user", "process"],
       default: "none",
     },
-    sharedWith: { type: [sharedWithSchema], default: [] },
+    sharedWith: { type: [shared], default: [] },
     sharedAt: { type: Date, default: null },
     shareToken: { type: String },
   },
