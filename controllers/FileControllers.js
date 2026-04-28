@@ -39,18 +39,14 @@ export const getFileInfoHandler = async (req, res, next) => {
 
     if (!file) return next(getErrorObject("File not found.", 404));
 
-    const isOwner = file.userId._id.toString() === req.user._id.toString();
-    const isPublic = file.publicRole === "view";
-    const isShared = hasAccess(file, ["view", "edit"], req.user.email);
+    if (!req.isTokenAuthorized) {
+      const isOwner = file.userId._id.toString() === req.user._id.toString();
+      const isPublic = file.publicRole === "view";
+      const isShared = hasAccess(file, ["view", "edit"], req.user.email);
 
-    if (
-      !isPublic &&
-      !isShared &&
-      !isOwner &&
-      !req.isTokenAuthorized &&
-      !SUPER_ROLES.includes(req.user.role)
-    )
-      return next(getErrorObject("You don't have this permission.", 403));
+      if (!isPublic && !isShared && !isOwner)
+        return next(getErrorObject("You don't have this permission.", 403));
+    }
 
     const { sharedWith, publicRole, userId, ...fileData } = file;
     const owner = {
@@ -58,13 +54,11 @@ export const getFileInfoHandler = async (req, res, next) => {
       email: userId.email,
       avatar: userId.avatar,
     };
-    return res
-      .status(200)
-      .json({
-        success: true,
-        message: "File found.",
-        data: { file: { ...fileData, owner } },
-      });
+    return res.status(200).json({
+      success: true,
+      message: "File found.",
+      data: { file: { ...fileData, owner } },
+    });
   } catch (err) {
     next(err);
   }
@@ -98,19 +92,15 @@ export const previewFileHandler = async (req, res, next) => {
     if (!file || !file.meta?.objectKey)
       return next(getErrorObject("File not found.", 404));
 
-    const { _id: userId, email } = req.user;
-    const isOwner = file.userId.toString() === userId.toString();
-    const isPublic = file.publicRole === "view";
-    const isShared = hasAccess(file, ["view", "edit"], email);
+    if (!req.isTokenAuthorized) {
+      const { _id: userId, email } = req.user;
+      const isOwner = file.userId.toString() === userId.toString();
+      const isPublic = file.publicRole === "view";
+      const isShared = hasAccess(file, ["view", "edit"], email);
 
-    if (
-      !isPublic &&
-      !isShared &&
-      !isOwner &&
-      !req.isTokenAuthorized &&
-      !SUPER_ROLES.includes(req.user.role)
-    )
-      return next(getErrorObject("You don't have this permission.", 403));
+      if (!isPublic && !isShared && !isOwner)
+        return next(getErrorObject("You don't have this permission.", 403));
+    }
 
     const filePath = path.resolve(
       UPLOAD_ROOT,
@@ -218,19 +208,15 @@ export const downloadFileHandler = async (req, res, next) => {
     if (!file && !file.meta?.objectKey && !file.linkMeta)
       return next(getErrorObject("File not found.", 404));
 
-    const { _id: userId, email } = req.user;
-    const isOwner = file.userId.toString() === userId.toString();
-    const isPublic = file.publicRole === "view";
-    const isShared = hasAccess(file, ["view", "edit"], email);
+    if (!req.isTokenAuthorized) {
+      const { _id: userId, email } = req.user;
+      const isOwner = file.userId.toString() === userId.toString();
+      const isPublic = file.publicRole === "view";
+      const isShared = hasAccess(file, ["view", "edit"], email);
 
-    if (
-      !isPublic &&
-      !isShared &&
-      !isOwner &&
-      !req.isTokenAuthorized &&
-      !SUPER_ROLES.includes(req.user.role)
-    )
-      return next(getErrorObject("You don't have this permission.", 403));
+      if (!isPublic && !isShared && !isOwner)
+        return next(getErrorObject("You don't have this permission.", 403));
+    }
 
     if (file.linkMeta) {
       return res.status(200).json({ data: file.linkMeta });
@@ -315,13 +301,11 @@ export const renameFileHandler = async (req, res, next) => {
 
     if (!renamed) return next(getErrorObject("File not found.", 404));
 
-    return res
-      .status(200)
-      .json({
-        success: true,
-        message: "File renamed",
-        data: { file: renamed },
-      });
+    return res.status(200).json({
+      success: true,
+      message: "File renamed",
+      data: { file: renamed },
+    });
   } catch (err) {
     next(err);
   }
@@ -432,13 +416,11 @@ export const copyFileHandler = async (req, res, next) => {
 
     if (!newFile) throw Error("Failed to create file entry");
     const fileDoc = getFileDoc(newFile);
-    return res
-      .status(201)
-      .json({
-        success: true,
-        message: "Copied to the target directory.",
-        data: { file: fileDoc },
-      });
+    return res.status(201).json({
+      success: true,
+      message: "Copied to the target directory.",
+      data: { file: fileDoc },
+    });
   } catch (err) {
     next(err);
   }
@@ -526,13 +508,11 @@ export const moveFileHandler = async (req, res, next) => {
       await session.endSession();
     }
 
-    return res
-      .status(200)
-      .json({
-        success: true,
-        message: "Moved to target directory.",
-        data: { file: { _id: req.params.id, parentId: targetParentId } },
-      });
+    return res.status(200).json({
+      success: true,
+      message: "Moved to target directory.",
+      data: { file: { _id: req.params.id, parentId: targetParentId } },
+    });
   } catch (err) {
     next(err);
   }
@@ -580,13 +560,11 @@ export const moveToBinHandler = async (req, res, next) => {
       .select("_id filename parentId isDeleted")
       .lean();
 
-    return res
-      .status(200)
-      .json({
-        success: true,
-        message: "File moved to bin.",
-        data: { file: binned },
-      });
+    return res.status(200).json({
+      success: true,
+      message: "File moved to bin.",
+      data: { file: binned },
+    });
   } catch (err) {
     next(err);
   }
@@ -646,13 +624,11 @@ export const restoreFileHandler = async (req, res, next) => {
       .select("_id, filename, parentId isDeleted")
       .lean();
 
-    return res
-      .status(200)
-      .json({
-        success: true,
-        message: "file restored.",
-        data: { file: restored },
-      });
+    return res.status(200).json({
+      success: true,
+      message: "file restored.",
+      data: { file: restored },
+    });
   } catch (err) {
     next(err);
   }
@@ -896,7 +872,7 @@ export const filePublicRoleHandler = async (req, res, next) => {
  * returns:
  *   - 200 with { shareToken, id }
  */
-export const getNewFileShareToken = async (req, res, next) => {
+export const createShareToken = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return next(getErrorObject("Invalid id."));
 

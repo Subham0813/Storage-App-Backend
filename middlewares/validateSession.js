@@ -68,7 +68,7 @@ export const validateSession = async (req, res, next) => {
     }
 
     //Guest Access
-    if (token) {
+    if (token && req.method === "GET") {
       const id = req.url.split("?")[0].split("/").pop();
 
       if (id && mongoose.isValidObjectId(id)) {

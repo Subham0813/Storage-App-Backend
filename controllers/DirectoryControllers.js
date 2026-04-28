@@ -43,20 +43,17 @@ export const getDirectoryInfoHandler = async (req, res, next) => {
 
     if (!directory) return next(getErrorObject("Directory not found.", 404));
 
-    const isOwner = directory.userId._id.toString() === req.user._id.toString();
-    const isPublic = directory.publicRole === "view";
-    const isShared = req.user.email
-      ? hasAccess(directory, ["view", "edit"], req.user.email)
-      : false;
+    if (!req.isTokenAuthorized) {
+      const isOwner =
+        directory.userId._id.toString() === req.user._id.toString();
+      const isPublic = directory.publicRole === "view";
+      const isShared = req.user.email
+        ? hasAccess(directory, ["view", "edit"], req.user.email)
+        : false;
 
-    if (
-      !isPublic &&
-      !isShared &&
-      !isOwner &&
-      !req.isTokenAuthorized &&
-      !SUPER_ROLES.includes(req.user.role)
-    )
-      return next(getErrorObject("You do not have this permission.", 403));
+      if (!isPublic && !isShared && !isOwner)
+        return next(getErrorObject("You do not have this permission.", 403));
+    }
 
     const { sharedWith, publicRole, userId, ...dirData } = directory;
     const owner = { name: userId.name, email: userId.email };
@@ -91,21 +88,17 @@ export const getDirectoriesHandler = async (req, res, next) => {
 
     if (!directory) return next(getErrorObject("Directory not found.", 404));
 
-    const { _id: userId, email } = req.user;
-    const isOwner = directory.userId.toString() === userId.toString();
-    const isPublic = directory.publicRole === "view";
-    const isShared = email
-      ? hasAccess(directory, ["view", "edit"], email)
-      : false;
+    if (!req.isTokenAuthorized) {
+      const { _id: userId, email } = req.user;
+      const isOwner = directory.userId.toString() === userId.toString();
+      const isPublic = directory.publicRole === "view";
+      const isShared = email
+        ? hasAccess(directory, ["view", "edit"], email)
+        : false;
 
-    if (
-      !isPublic &&
-      !isShared &&
-      !isOwner &&
-      !req.isTokenAuthorized &&
-      !SUPER_ROLES.includes(req.user.role)
-    )
-      return next(getErrorObject("You do not have this permission.", 403));
+      if (!isPublic && !isShared && !isOwner)
+        return next(getErrorObject("You do not have this permission.", 403));
+    }
 
     const directories = await Directory.find(
       {
@@ -146,21 +139,17 @@ export const getAllFilesHandler = async (req, res, next) => {
 
     if (!directory) return next(getErrorObject("Directory not found.", 404));
 
-    const { _id: userId, email } = req.user;
-    const isOwner = directory.userId.toString() === userId.toString();
-    const isPublic = directory.publicRole === "view";
-    const isShared = email
-      ? hasAccess(directory, ["view", "edit"], email)
-      : false;
+    if (!req.isTokenAuthorized) {
+      const { _id: userId, email } = req.user;
+      const isOwner = directory.userId.toString() === userId.toString();
+      const isPublic = directory.publicRole === "view";
+      const isShared = email
+        ? hasAccess(directory, ["view", "edit"], email)
+        : false;
 
-    if (
-      !isPublic &&
-      !isShared &&
-      !isOwner &&
-      !req.isTokenAuthorized &&
-      !SUPER_ROLES.includes(req.user.role)
-    )
-      return next(getErrorObject("You do not have this permission.", 403));
+      if (!isPublic && !isShared && !isOwner)
+        return next(getErrorObject("You do not have this permission.", 403));
+    }
 
     const files = await UserFile.find(
       {
@@ -874,7 +863,7 @@ export const directoryPublicRoleHandler = async (req, res, next) => {
  * returns:
  *   - { shareToken, id }
  */
-export const getNewDirectoryShareToken = async (req, res, next) => {
+export const createShareToken = async (req, res, next) => {
   if (!mongoose.isValidObjectId(req.params.id))
     return next(getErrorObject("Invalid id."));
 

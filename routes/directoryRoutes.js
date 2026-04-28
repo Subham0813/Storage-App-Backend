@@ -13,7 +13,7 @@ import {
   getDirectoryInfoHandler,
   shareDirectoryHandler,
   revokeAccessDirectoryHandler,
-  getNewDirectoryShareToken,
+  createShareToken,
   directoryPublicRoleHandler,
   makeDirectoryStarred,
   // GetChildrenHandler,
@@ -26,22 +26,22 @@ import { revokeAccessPreProcessor } from "../middlewares/revokeAccessPreProcess.
 
 const router = Router();
 
-router.get("/:id", getDirectoriesHandler);
+router.get("/all-dirs/:id", getDirectoriesHandler);
 router.get("/all-files/:id", getAllFilesHandler);
 router.get("/download/:id",  downloadDirectoryHandler);
-router.get("/new-token/:id", restrictRootOperations, getNewDirectoryShareToken);
 router.get("/info/:id", getDirectoryInfoHandler);
 router.get("/share-info/:id", restrictRootOperations, getShareInfo("dir"));
 
-router.post("/new", loadParentDir, createDirectoryHandler); //new-directory
-router.post( "/share/:id", restrictRootOperations, shareHandlerPreProcessor, shareDirectoryHandler); //share
+router.post("/new", loadParentDir, createDirectoryHandler); 
+router.post( "/share/:id", restrictRootOperations, shareHandlerPreProcessor, shareDirectoryHandler);
 
-router.patch("/rename/:id", restrictRootOperations, renameDirectoryHandler); //rename
-router.patch("/move/:id", restrictRootOperations, loadParentDir, moveDirectoryHandler); //move
-router.patch("/trash/:id", restrictRootOperations, moveToBinDirectoryHandler); //bin
-router.patch("/restore/:id", restrictRootOperations, restoreDirectoryHandler); //recover
-router.patch("/public-role/:id", restrictRootOperations, directoryPublicRoleHandler); //change public-role
-router.patch("/revoke-access/:id", restrictRootOperations, revokeAccessPreProcessor,revokeAccessDirectoryHandler); //revoke access
+router.patch("/new-token/:id", restrictRootOperations, createShareToken);
+router.patch("/rename/:id", restrictRootOperations, renameDirectoryHandler); 
+router.patch("/move/:id", restrictRootOperations, loadParentDir, moveDirectoryHandler);
+router.patch("/trash/:id", restrictRootOperations, moveToBinDirectoryHandler); 
+router.patch("/restore/:id", restrictRootOperations, restoreDirectoryHandler); 
+router.patch("/public-role/:id", restrictRootOperations, directoryPublicRoleHandler); 
+router.patch("/revoke-access/:id", restrictRootOperations, revokeAccessPreProcessor,revokeAccessDirectoryHandler); 
 router.patch("/starred/:id", restrictRootOperations, makeDirectoryStarred)
 router.delete("/delete/:id", restrictRootOperations, deleteDirectoryHandler);
 

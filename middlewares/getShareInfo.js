@@ -13,6 +13,11 @@ export const getShareInfo = (path) => {
 
       if (!mongoose.isValidObjectId(req.params.id))
         return next(getErrorObject("Invalid id."));
+
+      if (req.isTokenAuthorized && !req.user?._id) {
+        return next(getErrorObject("You do not have this permission.", 403));
+      }
+
       const { _id: userId, email } = req.user;
       const item = await Model.findOne({
         _id: req.params.id,

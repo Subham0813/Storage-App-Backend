@@ -13,35 +13,34 @@ import {
   shareFileHandler,
   revokeAccessFileHandler,
   filePublicRoleHandler,
-  getNewFileShareToken,
+  createShareToken,
   makeFileStarred,
 } from "../controllers/FileControllers.js";
 import { loadParentDir } from "../middlewares/loadParentDirectory.js";
 import { shareHandlerPreProcessor } from "../middlewares/shareHandlerPreProcess.js";
 import { getShareInfo } from "../middlewares/getShareInfo.js";
-import { restrictRootOperations } from "../middlewares/restrictOperations.js";
 import { revokeAccessPreProcessor } from "../middlewares/revokeAccessPreProcess.js";
 
 const router = Router();
 
-router.get("/preview/:id", previewFileHandler); //preview
-router.get("/download/:id", downloadFileHandler); //download
-router.get("/new-token/:id", getNewFileShareToken); //new-token
-router.get("/info/:id", getFileInfoHandler); //info
+router.get("/preview/:id", previewFileHandler);
+router.get("/download/:id", downloadFileHandler);
+router.get("/info/:id", getFileInfoHandler); 
 router.get("/share-info/:id", getShareInfo("file"));
 
-router.post("/share/:id", shareHandlerPreProcessor, shareFileHandler); //share
+router.post("/share/:id", shareHandlerPreProcessor, shareFileHandler); 
 
-router.patch("/copy/:id", loadParentDir, copyFileHandler); //copy
-router.patch("/rename/:id", renameFileHandler); //rename
-router.patch("/move/:id", loadParentDir, moveFileHandler); //move
-router.patch("/trash/:id", moveToBinHandler); //trash
-router.patch("/restore/:id", restoreFileHandler); //restore
-router.patch("/public-role/:id", filePublicRoleHandler); //change public-role
-router.patch("/revoke-access/:id", revokeAccessPreProcessor, revokeAccessFileHandler); //revoke access
+router.patch("/new-token/:id", createShareToken); 
+router.patch("/copy/:id", loadParentDir, copyFileHandler); 
+router.patch("/rename/:id", renameFileHandler);
+router.patch("/move/:id", loadParentDir, moveFileHandler); 
+router.patch("/trash/:id", moveToBinHandler); 
+router.patch("/restore/:id", restoreFileHandler); 
+router.patch("/public-role/:id", filePublicRoleHandler);
+router.patch("/revoke-access/:id", revokeAccessPreProcessor, revokeAccessFileHandler);
 router.patch("/starred/:id", makeFileStarred);
 
-router.delete("/delete/:id", deleteFileHandler); //delete
+router.delete("/delete/:id", deleteFileHandler); 
 
 //bulk operations
 // router.post("/bulk-move", moveHandler);
