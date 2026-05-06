@@ -12,7 +12,6 @@ import {
 
 const router = Router();
 
-//OAUTH
 router.get("/google/connect", googleOAuthHandler);
 router.get("/google/callback", googleOAuthCallbackHandler);
 

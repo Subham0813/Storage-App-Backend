@@ -1,48 +1,82 @@
 import { Router } from "express";
 
+// specific directory actions
 import {
-  getDirectoriesHandler,
-  downloadDirectoryHandler,
   createDirectoryHandler,
-  moveToBinDirectoryHandler,
-  restoreDirectoryHandler,
   deleteDirectoryHandler,
-  renameDirectoryHandler,
-  moveDirectoryHandler,
   getAllFilesHandler,
-  getDirectoryInfoHandler,
-  shareDirectoryHandler,
-  revokeAccessDirectoryHandler,
-  getNewDirectoryShareToken,
-  directoryPublicRoleHandler,
-  makeDirectoryStarred,
-  // GetChildrenHandler,
+  getDirectoriesHandler,
 } from "../controllers/DirectoryControllers.js";
-import { restrictRootOperations } from "../middlewares/restrictOperations.js";
+
+// Common Getters
+import {
+  getItemInfo,
+  getShareInfo,
+} from "../controllers/commonGetControllers.js";
+
+// Common Setters
+import {
+  moveItem,
+  moveToBin,
+  newShareToken,
+  renameItem,
+  restoreItem,
+  revokeAccess,
+  shareAccess,
+  starredItem,
+} from "../controllers/commonSetControllers.js";
+
 import { loadParentDir } from "../middlewares/loadParentDirectory.js";
-import { shareHandlerPreProcessor } from "../middlewares/shareHandlerPreProcess.js";
-import { getShareInfo } from "../middlewares/getShareInfo.js";
-import { revokeAccessPreProcessor } from "../middlewares/revokeAccessPreProcess.js";
+import { checkAccess } from "../middlewares/checkAccessControl.js";
+import { restrictRoot } from "../middlewares/restrictOperations.js";
 
 const router = Router();
 
-router.get("/:id", getDirectoriesHandler);
-router.get("/all-files/:id", getAllFilesHandler);
-router.get("/download/:id",  downloadDirectoryHandler);
-router.get("/new-token/:id", restrictRootOperations, getNewDirectoryShareToken);
-router.get("/info/:id", getDirectoryInfoHandler);
-router.get("/share-info/:id", restrictRootOperations, getShareInfo("dir"));
+// GET Routes
+router.get("/all-dirs/:id", checkAccess("dir", "view"), getDirectoriesHandler);
+router.get("/all-files/:id", checkAccess("dir", "view"), getAllFilesHandler);
+router.get("/info/:id", checkAccess("dir", "view"), getItemInfo("dir"));
+router.get(
+  "/share-info/:id",
+  restrictRoot,
+  checkAccess("dir", "view"),
+  getShareInfo,
+);
+// router.get("/download/:id", checkAccess("dir", "view"), downloadDirectoryHandler);
 
-router.post("/new", loadParentDir, createDirectoryHandler); //new-directory
-router.post( "/share/:id", restrictRootOperations, shareHandlerPreProcessor, shareDirectoryHandler); //share
+// POST Routes
+router.post("/new", loadParentDir, createDirectoryHandler);
+router.post("/share/:id", restrictRoot, shareAccess("dir"));
 
-router.patch("/rename/:id", restrictRootOperations, renameDirectoryHandler); //rename
-router.patch("/move/:id", restrictRootOperations, loadParentDir, moveDirectoryHandler); //move
-router.patch("/trash/:id", restrictRootOperations, moveToBinDirectoryHandler); //bin
-router.patch("/restore/:id", restrictRootOperations, restoreDirectoryHandler); //recover
-router.patch("/public-role/:id", restrictRootOperations, directoryPublicRoleHandler); //change public-role
-router.patch("/revoke-access/:id", restrictRootOperations, revokeAccessPreProcessor,revokeAccessDirectoryHandler); //revoke access
-router.patch("/starred/:id", restrictRootOperations, makeDirectoryStarred)
-router.delete("/delete/:id", restrictRootOperations, deleteDirectoryHandler);
+// PATCH Routes
+router.patch("/new-token/:id", restrictRoot, newShareToken("dir"));
+router.patch("/revoke-access/:id", restrictRoot, revokeAccess("dir"));
+
+router.patch("/starred/:id", restrictRoot, starredItem("dir"));
+router.patch(
+  "/rename/:id",
+  restrictRoot,
+  checkAccess("dir", "edit"),
+  renameItem("dir"),
+);
+router.patch("/move/:id", restrictRoot, loadParentDir, moveItem("dir"));
+// router.patch("/public-role/:id", restrictRoot, changePublicRole("dir"));
+
+//PUT Routes
+router.put(
+  "/trash/:id",
+  restrictRoot,
+  checkAccess("dir", "edit"),
+  moveToBin("dir"),
+);
+router.put(
+  "/restore/:id",
+  restrictRoot,
+  checkAccess("dir", "edit"),
+  restoreItem("dir"),
+);
+
+// DELETE Routes
+router.delete("/delete/:id", restrictRoot, deleteDirectoryHandler);
 
 export default router;

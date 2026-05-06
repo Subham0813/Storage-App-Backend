@@ -2,7 +2,6 @@ import { Router } from "express";
 import {
   changeUserRole,
   deleteUser,
-  getAllDeletedUsers,
   getAllUsers,
   getSingleUser,
   logoutUser,
@@ -13,11 +12,8 @@ import {
 const router = Router();
 
 router.get("/users", getAllUsers);
-router.get("/deleted-users", getAllDeletedUsers);
-router.get("/user/:id", getSingleUser);
 
-//NOTE: Admin & Super-admins can use GET /api/directories/ routes
-// router.get("/directory/:id", getDirectory);
+router.get("/user/:id", getSingleUser);
 
 // super-admin can promote/demote all users, admins are restricted to user and guests
 router.patch("/change-role/:id", changeUserRole);

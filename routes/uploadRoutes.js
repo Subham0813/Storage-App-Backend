@@ -1,23 +1,26 @@
-import express, { Router } from "express";
+import { Router } from "express";
 
 import {
   cancelUpload,
   completeUpload,
-  getUploadStatus,
-  initUpload,
-  saveChunk,
+  getPresignedUrlForPartNumber,
+  getRemainingPresignedUrls,
+  initiateUpload,
+  saveProgress,
 } from "../controllers/uploadControllers.js";
 
-import { uploadChunk } from "../middlewares/upload.js";
-import { loadUploadSession } from "../middlewares/loadUploadSession.js";
 import { loadParentDir } from "../middlewares/loadParentDirectory.js";
 
 const router = Router();
 
-router.get( "/session/:sessionId",express.json(),loadUploadSession, getUploadStatus); //upload-status
-router.post("/session/create", express.json(), loadParentDir, initUpload); //init-upload
-router.post("/session/chunk/:sessionId", loadUploadSession, uploadChunk, saveChunk); //upload-chunk
-router.post("/session/complete/:sessionId", express.json(), loadUploadSession, completeUpload); //complete
-router.delete("/session/cancel/:sessionId", express.json(), loadUploadSession, cancelUpload); //cancel-upload
+router.get("/part-url/:id", getPresignedUrlForPartNumber);
+router.get("/remaining-urls/:id", getRemainingPresignedUrls);
+
+router.post("/initiate", loadParentDir, initiateUpload);
+
+router.put("/save/:id", saveProgress);
+router.put("/complete/:id", completeUpload);
+
+router.delete("/cancel/:id", cancelUpload);
 
 export default router;
