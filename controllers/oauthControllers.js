@@ -2,42 +2,39 @@ import crypto from "crypto";
 import mongoose from "mongoose";
 
 import {
-  github_client_id,
-  github_client_secret,
-  github_redirect_uri,
-  google_client_id,
-  google_client_secret,
-  google_drive_redirect_uri,
-  google_redirect_uri,
+  GITHUB_CLIENT_ID,
+  GITHUB_CLIENT_SECRET,
+  GITHUB_REDIRECT_URI,
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_DRIVE_REDIRECT_URI,
+  GOOGLE_REDIRECT_URI,
   MAX_DEVICE_COUNT,
-  TIME,
+  t,
 } from "../misc/constants.js";
 import { google } from "googleapis";
 import { User } from "../models/user.model.js";
 import { Directory } from "../models/directory.model.js";
-import { DriveIntegration } from "../models/integration.model.js";
-import { Session } from "../models/session.model.js";
-import { getUserPayload } from "../utils/helper.js";
 import { redisClient } from "../configs/radis.js";
 
 const googleClient = new google.auth.OAuth2(
-  google_client_id,
-  google_client_secret,
-  google_redirect_uri,
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_REDIRECT_URI,
 );
 
 const googleDriveClient = new google.auth.OAuth2(
-  google_client_id,
-  google_client_secret,
-  google_drive_redirect_uri,
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_DRIVE_REDIRECT_URI,
 );
 
 export const base64URLEncode = (buffer) =>
   buffer
     .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
+    .replaceAll(/\+/g, "-")
+    .replaceAll(/\//g, "_")
+    .replaceAll(/=/g, "");
 
 const sha256 = (buffer) => crypto.createHash("sha256").update(buffer).digest();
 
@@ -46,6 +43,9 @@ const generatePKCE = () => {
   const codeChallenge = base64URLEncode(sha256(codeVerifier));
   return { codeVerifier, codeChallenge };
 };
+
+const fiveMinMs = 5 * t._min * t._ms
+const sevenDayMs = 7 * t._day * t._ms
 
 const getGithubAccesToken = async (code, codeVerifier) => {
   const message = "error=invalid_code";
@@ -58,8 +58,8 @@ const getGithubAccesToken = async (code, codeVerifier) => {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      client_id: github_client_id,
-      client_secret: github_client_secret,
+      client_id: GITHUB_CLIENT_ID,
+      client_secret: GITHUB_CLIENT_SECRET,
       code,
       code_verifier: codeVerifier,
     }),
@@ -95,12 +95,12 @@ const getGithubUserPayload = async (accessToken) => {
   return data;
 };
 
-const cookieOptions = (MAX_AGE) => ({
+const cookieOptions = (age) => ({
   httpOnly: true,
   signed: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: "lax",
-  maxAge: MAX_AGE,
+  maxAge: age,
   path: "/",
 });
 
@@ -123,7 +123,7 @@ export const googleOAuthHandler = async (req, res, next) => {
     res.cookie(
       "oauth_google",
       googleCookieData,
-      cookieOptions(TIME.FIVE_MINUTES),
+      cookieOptions(fiveMinMs),
     );
 
     const authUrl = googleClient.generateAuthUrl({
@@ -173,7 +173,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     const { tokens } = await googleClient.getToken({ code, codeVerifier });
 
     if (!tokens.id_token) {
-      throw new Error("error=no_token_found.");
+      throw new Error("error=no_token_found");
     }
 
     const ticket = await googleClient.verifyIdToken({
@@ -218,7 +218,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
           const [root] = await Directory.create(
             [
               {
-                dirname: `root-${user.username}`,
+                name: `root-${user.email}`,
                 parentId: new mongoose.Types.ObjectId(),
                 userId: user._id,
               },
@@ -248,7 +248,8 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
 
     if (!user) throw new Error("error=user_not_found");
 
-    const userdata = getUserPayload(user);
+    user.integrations = user.integrations?.map((i) => i.provider) || [];
+    const userdata = user;
     const userKey = `storageApp:user:${user._id}:userdata`;
     await Promise.all([
       redisClient.json.set(userKey, "$", userdata),
@@ -272,7 +273,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     res.cookie(
       "sessionId",
       { token, id: user._id },
-      cookieOptions(TIME.ONE_DAY * 7),
+      cookieOptions(sevenDayMs),
     );
 
     return res.redirect(`${process.env.CLIENT_URL}/google?google=connected`);
@@ -301,13 +302,13 @@ export const githubOAuthHandler = async (req, res, next) => {
     res.cookie(
       "oauth_github",
       githubCookieData,
-      cookieOptions(TIME.FIVE_MINUTES),
+      cookieOptions(fiveMinMs),
     );
 
     const authUrl =
       `https://github.com/login/oauth/authorize` +
-      `?client_id=${github_client_id}` +
-      `&redirect_uri=${github_redirect_uri}` +
+      `?client_id=${GITHUB_CLIENT_ID}` +
+      `&redirect_uri=${GITHUB_REDIRECT_URI}` +
       `&scope=user:email` +
       `&state=${state}` +
       `&code_challenge=${codeChallenge}` +
@@ -380,7 +381,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
               {
                 authProviders: ["github"],
                 githubId: id,
-                username: login,
+                // username: login,
                 email,
                 name: name.length > 0 ? name : login,
                 avatar: avatar_url,
@@ -394,7 +395,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
           const [root] = await Directory.create(
             [
               {
-                dirname: `root-${user.username}`,
+                name: `root-${user.email}`,
                 parentId: new mongoose.Types.ObjectId(),
                 userId: user._id,
               },
@@ -425,7 +426,8 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
 
     if (!user) throw new Error("error=user_not_found");
 
-    const userdata = getUserPayload(user);
+    user.integrations = user.integrations?.map((i) => i.provider) || [];
+    const userdata = user;
     const userKey = `storageApp:user:${user._id}:userdata`;
     await Promise.all([
       redisClient.json.set(userKey, "$", userdata),
@@ -449,7 +451,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
     res.cookie(
       "sessionId",
       { token, id: user._id },
-      cookieOptions(TIME.ONE_DAY * 7),
+      cookieOptions(sevenDayMs),
     );
 
     return res.redirect(`${process.env.CLIENT_URL}/github?github=connected`);
@@ -483,7 +485,7 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
     res.cookie(
       "oauth_google_drive",
       googleDriveCookieData,
-      cookieOptions(TIME.FIVE_MINUTES),
+      cookieOptions(fiveMinMs),
     );
 
     const authUrl = googleDriveClient.generateAuthUrl({

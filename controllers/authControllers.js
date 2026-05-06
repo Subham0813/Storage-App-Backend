@@ -3,12 +3,10 @@ import * as bcrypt from "bcrypt";
 import crypto from "crypto";
 import { z } from "zod/v4";
 
-import { TIME, EMAIL_REGEX, MAX_DEVICE_COUNT } from "../misc/constants.js";
+import { t, MAX_DEVICE_COUNT } from "../misc/constants.js";
 import { User } from "../models/user.model.js";
 import { Directory } from "../models/directory.model.js";
-import { OTP } from "../models/otp.model.js";
 import { getErrorObject, getUserPayload } from "../utils/helper.js";
-import { Session } from "../models/session.model.js";
 import {
   authTokenSchema,
   loginSchema,
@@ -18,12 +16,15 @@ import {
 } from "../Schemas/authSchema.js";
 import { redisClient } from "../configs/radis.js";
 
+const fiveMins = 5 * t._min;
+const sevenDays = 7 * t._day;
+
 const cookieOptions = {
   httpOnly: true,
   sameSite: "strict",
   secure: process.env.NODE_ENV === "production",
   signed: true,
-  maxAge: TIME.FIVE_MINUTES,
+  maxAge: fiveMins * 1000,
   path: "/",
 };
 
@@ -77,9 +78,9 @@ export const requestOtpHandler = async (req, res, next) => {
 
         const otpKey = `storageApp:user:${user._id}:otp:${purpose}`;
         await redisClient.json.set(otpKey, "$", { otp, email });
-        await redisClient.expire(otpKey, 300);
+        await redisClient.expire(otpKey, fiveMins);
 
-        otpExpiresAt = new Date(Date.now() + TIME.FIVE_MINUTES);
+        otpExpiresAt = new Date(Date.now() + fiveMins * 1000);
         deviceLoggedCount = user.deviceCount;
       });
     } finally {
@@ -137,15 +138,15 @@ export const verifyOtpHandler = async (req, res, next) => {
 
     if (!storedOtp) throw getErrorObject("OTP expired.", 410);
     else if (storedOtp.otp !== otp || storedOtp.email !== email)
-      throw getErrorObject("Invalid email or OTP.", 400);
+      throw getErrorObject("Invalid email or OTP.");
 
     await redisClient.del(otpKey);
     res.clearCookie("authToken");
 
     const token = crypto.randomBytes(32).toString("hex");
-    if (authToken.purpose === "forgot-password") {
+    if (authData.purpose === "forgot-password") {
       const resetKey = `storageApp:user:${userId}:resetPass:${token}`;
-      await redisClient.set(resetKey, email, { EX: 300 });
+      await redisClient.set(resetKey, email, { EX: fiveMins });
 
       return res
         .cookie("resetToken", { token, id: userId }, cookieOptions)
@@ -187,7 +188,7 @@ export const verifyOtpHandler = async (req, res, next) => {
           user._id,
           { $set: { isLogged: true }, $inc: { deviceCount: incr } },
           { returnDocument: "after" },
-        )
+        ).populate("root", "name size")
           .session(_session)
           .lean();
       });
@@ -201,11 +202,12 @@ export const verifyOtpHandler = async (req, res, next) => {
 
     await Promise.all([
       redisClient.json.set(userKey, "$", updatedUser),
-      redisClient.expire(userKey, 300),
-
-      redisClient.set(sessionKey, Date.now(), { EX: 7 * 86400 }),
+      redisClient.json.set(sessionKey, "$", { exp: sevenDays }),
       redisClient.sAdd(indexKey, sessionKey),
-      redisClient.expire(indexKey, 7 * 86400),
+
+      redisClient.expire(userKey, t._min),
+      redisClient.expire(sessionKey, sevenDays),
+      redisClient.expire(indexKey, sevenDays),
     ]);
 
     return res
@@ -217,7 +219,7 @@ export const verifyOtpHandler = async (req, res, next) => {
           sameSite: "lax",
           secure: process.env.NODE_ENV === "production",
           signed: true,
-          maxAge: TIME.ONE_DAY * 7,
+          maxAge: sevenDays * 1000,
           path: "/",
         },
       )
@@ -283,7 +285,7 @@ export const registerHandler = async (req, res, next) => {
       return next(getErrorObject(errorMessage));
     }
 
-    const { fullname, email, password } = data;
+    const { name, email, password } = data;
     const session = await mongoose.startSession();
     let user = null;
     try {
@@ -291,13 +293,13 @@ export const registerHandler = async (req, res, next) => {
         const existingUser = await User.findOne({ email }).session(session);
         if (existingUser) throw getErrorObject("User already registered.", 409);
 
-        [user] = await User.create([{ name: fullname, email, password }], {
+        [user] = await User.create([{ name, email, password }], {
           session,
         });
         const [root] = await Directory.create(
           [
             {
-              dirname: `root-${user.username}`,
+              name: `root-${user.email}`,
               parentId: new mongoose.Types.ObjectId(),
               userId: user._id,
             },

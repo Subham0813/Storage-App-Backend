@@ -1,50 +1,51 @@
 import mongoose from "mongoose";
 import { User } from "../models/user.model.js";
-import { getErrorObject } from "../utils/helper.js";
+import { getErrorObject, getUserPayload } from "../utils/helper.js";
 import { Directory } from "../models/directory.model.js";
-import { Session } from "../models/session.model.js";
 import { UserFile } from "../models/user_file.model.js";
-import { UploadSession } from "../models/uploadSession.model.js";
-import { DriveIntegration } from "../models/integration.model.js";
-import { File } from "../models/file.model.js";
+import { redisClient } from "../configs/radis.js";
+import { deleteS3Objects } from "../configs/s3Client.js";
 
 /**
  * path: /api/admin/users
- * what it do: Get all non-deleted users with their root directories.
+ * what it do: Get paginated list of non-deleted (or deleted) users.
  * requirements:
- *   - req.user: authenticated admin user
- *   - Only accessible by ADMIN or SUPER_ADMIN
+ *   - req.query: { limit?: number, cursor?: ObjectId string, isDeleted?: boolean }
+ *   - req.user: authenticated admin/super_admin user
  */
 export const getAllUsers = async (req, res, next) => {
+  let limit = parseInt(req.query.limit);
+  if (!limit || limit < 1) limit = 50;
+  else if (limit && limit > 100) limit = 100;
+
+  const cursor = req.query.cursor;
+  if (cursor && !mongoose.isValidObjectId(cursor))
+    return next(getErrorObject("Invalid cursor."));
+
+  const isDeleted = req.query.isDeleted || false;
+  if (typeof isDeleted !== "boolean")
+    return next(getErrorObject("Invalid query."));
+
+  const query = { isDeleted };
+  if (cursor) query._id = { $lt: cursor };
+
   try {
-    const users = await User.find({ isDeleted: false })
-      .select("-__v -googleId -githubId")
+    const users = await User.find(query)
+      .sort({ _id: -1 })
+      .limit(limit)
+      .select("-__v -googleId -githubId -password")
       .lean();
-    return res
-      .status(200)
-      .json({ success: true, message: "Users found.", data: { users } });
+
+    const nextCursor =
+      users.length < limit ? null : users[limit - 1]._id.toString();
+
+    return res.status(200).json({
+      success: true,
+      message: "Users found.",
+      data: { users, nextCursor },
+    });
   } catch (err) {
     console.log(err);
-    next(err);
-  }
-};
-
-/**
- * path: /api/admin/deleted-users
- * what it do: Get all deleted users.
- * requirements:
- *   - req.user: authenticated admin user
- *   - Only accessible by ADMIN or SUPER_ADMIN
- */
-export const getAllDeletedUsers = async (req, res, next) => {
-  try {
-    const users = await User.find({ isDeleted: true })
-      .select("-__v -googleId -githubId")
-      .lean();
-    return res
-      .status(200)
-      .json({ success: true, message: "Users found.", data: { users } });
-  } catch (err) {
     next(err);
   }
 };
@@ -59,11 +60,10 @@ export const getAllDeletedUsers = async (req, res, next) => {
  */
 export const getSingleUser = async (req, res, next) => {
   try {
-    const { uid } = req.params;
-    if (!mongoose.isValidObjectId(uid))
+    if (!mongoose.isValidObjectId(req.params.id))
       return next(getErrorObject("Invalid id."));
 
-    const user = await User.findById(uid)
+    const user = await User.findById(req.params.id)
       .select("-__v -googleId -githubId")
       .lean();
     if (!user) return next(getErrorObject("User not found."));
@@ -88,10 +88,9 @@ export const changeUserRole = async (req, res, next) => {
   try {
     const { id } = req.params;
     let requestedRole = req.body.role || req.query.role;
-    requestedRole = String(requestedRole).toUpperCase();
+    requestedRole = String(requestedRole).toLowerCase();
 
-    const allowedRoles = ["GUEST", "USER", "ADMIN"];
-    if (!requestedRole || !allowedRoles.includes(requestedRole))
+    if (!requestedRole || !["user", "admin"].includes(requestedRole))
       return next(getErrorObject("Invalid role."));
 
     if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
@@ -101,16 +100,16 @@ export const changeUserRole = async (req, res, next) => {
       { _id: id, isDeleted: false, role: { $ne: req.user.role } },
       { role: requestedRole },
       { returnDocument: "after" },
-    );
+    )
+      .select("_id, role")
+      .lean();
     if (!user)
       return next(getErrorObject("You don't have this permission.", 409));
 
     return res.status(201).json({
       success: true,
       message: "User role changed.",
-      data: {
-        user: { _id: user._id, role: requestedRole },
-      },
+      data: { user },
     });
   } catch (err) {
     next(err);
@@ -126,24 +125,39 @@ export const changeUserRole = async (req, res, next) => {
  *   - Only accessible by ADMIN or SUPER_ADMIN
  */
 export const logoutUser = async (req, res, next) => {
+  const { id } = req.params;
+  if (!mongoose.isValidObjectId(id)) return next(getErrorObject("Invalid id."));
+
+  if (id === req.user._id.toString())
+    return next(getErrorObject("You cannot logout yourself."));
+
+  if (req.user.role !== "super_admin" || req.user.role !== "admin")
+    return next(getErrorObject("You don't have this permission.", 409));
+
   try {
-    const { id } = req.params;
-    if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
-      return next(getErrorObject("Invalid id."));
+    const session = await mongoose.startSession();
+    const user = null;
+    await session.withTransaction(async () => {
+      user = User.findOneAndUpdate(
+        { _id: id, role: { $nin: ["admin", "super_admin"] } },
+        { isLogged: false, deviceCount: 0 },
+      ).session(session);
 
-    const user = await User.findOne({ _id: id, isDeleted: false })
-      .select("_id role")
-      .lean();
-    if (!user) return next(getErrorObject("User not found.", 404));
+      if (!user) throw getErrorObject("User not found.", 404);
 
-    if (user.role === req.user.role || user.role === "SUPER_ADMIN")
-      return next(getErrorObject("You don't have this permission.", 409));
+      const indexKey = `storageApp:user:${id}:session_index`;
+      const sessions = await redisClient.sMembers(indexKey);
+      if (sessions.length > 0) {
+        await redisClient.sRem(indexKey, sessions);
+        await redisClient.del(sessions);
+      }
+    });
 
-    await Session.deleteMany({ userId: user._id });
+    const payload = getUserPayload(user);
     return res.status(200).json({
       success: true,
-      message: "User logged out. Session deleted.",
-      data: { user },
+      message: "User logged out and all the user sessions are deleted.",
+      data: { user: payload },
     });
   } catch (err) {
     next(err);
@@ -164,37 +178,35 @@ export const tempRemoveUser = async (req, res, next) => {
     return next(getErrorObject("Invalid id."));
 
   try {
-    const user = await User.findOne({
+    let user = await User.findOne({
       _id: id,
       isDeleted: false,
       role: { $ne: req.user.role },
     });
 
     if (!user) return next(getErrorObject("User not found.", 404));
-    if (user.role === "SUPER_ADMIN")
+    if (user.role === "super_admin")
       return next(getErrorObject("You don't have this permission.", 409));
 
-    const session = await mongoose.startSession();
-    let updated = null;
-    try {
-      await session.withTransaction(async () => {
-        updated = await User.findByIdAndUpdate(
-          user._id,
-          { isDeleted: true },
-          { session, returnDocument: "after" },
-        )
-          .select("_id isDeleted")
-          .lean();
-        await Session.deleteMany({ userId: user._id }).session(session);
-      });
-    } finally {
-      await session.endSession();
+    user = await User.findOneAndUpdate(
+      { _id: user._id },
+      { isDeleted: true, isLogged: false, deviceCount: 0 },
+      { returnDocument: "after" },
+    )
+      .select("_id isDeleted")
+      .lean();
+
+    const indexKey = `storageApp:user:${user._id}:session_index`;
+    const sessions = await redisClient.sMembers(indexKey);
+    if (sessions.length > 0) {
+      await redisClient.sRem(indexKey, sessions);
+      await redisClient.del(sessions);
     }
 
     return res.status(200).json({
       success: true,
       message: "User banned.",
-      data: { user: updated },
+      data: { user },
     });
   } catch (err) {
     next(err);
@@ -212,7 +224,7 @@ export const recoverUser = async (req, res, next) => {
   const { id } = req.params;
   if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
     return next(getErrorObject("Invalid id."));
-  if (req.user.role !== "SUPER_ADMIN")
+  if (req.user.role !== "super_admin")
     return next(getErrorObject("You don't have this permission.", 409));
 
   try {
@@ -246,53 +258,43 @@ export const deleteUser = async (req, res, next) => {
   if (!mongoose.isValidObjectId(id) || id === req.user._id.toString())
     return next(getErrorObject("Invalid id."));
 
-  if (req.user.role !== "SUPER_ADMIN")
+  if (req.user.role !== "super_admin")
     return next(getErrorObject("You don't have this permission.", 409));
 
   try {
     const user = await User.find({ _id: id }).select("_id").lean();
     if (!user) return next(getErrorObject("User not found.", 404));
 
-    const files = await File.find({ userId: user._id })
-      .select("objectKey")
+    const files = await UserFile.find({ userId: user._id })
+      .select("key size")
       .lean();
+
+    const unique = new Set();
+    const filesToDelete = files.filter(({ key, size }) => {
+      if (key && !unique.has(key)) return { key, size };
+    });
+
+    await deleteS3Objects(filesToDelete);
 
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
-        await Directory.deleteMany({ userId: user._id });
-        await DriveIntegration.deleteMany({ userId: user._id });
-        await Session.deleteMany({ userId: user._id });
-        await UserFile.deleteMany({ userId: user._id });
-        await UploadSession.deleteMany({ userId: user._id });
-        await File.deleteMany({ userId: user._id });
+        await Promise.all([
+          User.deleteOne({ _id: user._id }),
+          Directory.deleteMany({ userId: user._id }),
+          UserFile.deleteMany({ userId: user._id }),
+        ]);
       });
     } finally {
       await session.endSession();
     }
 
-    const filesToDelete = [];
-    files.forEach((file) => {
-      const filePath = path.join(
-        path.resolve(UPLOAD_ROOT),
-        user._id.toString(),
-        file.objectKey,
-      );
-      filesToDelete.push(filePath);
-    });
-
-    Promise.allSettled(filesToDelete.map((filePath) => unlink(filePath))).then(
-      (results) => {
-        results.forEach((result, index) => {
-          if (result.status === "rejected") {
-            console.error(
-              `Failed to delete file: ${filesToDelete[index]}`,
-              result.reason,
-            );
-          }
-        });
-      },
-    );
+    const indexKey = `storageApp:user:${user._id}:session_index`;
+    const sessions = await redisClient.sMembers(indexKey);
+    if (sessions.length > 0) {
+      await redisClient.sRem(indexKey, sessions);
+      await redisClient.del(sessions);
+    }
 
     return res.status(200).json({
       success: true,

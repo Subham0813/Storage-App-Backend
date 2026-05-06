@@ -1,313 +1,449 @@
 import mongoose from "mongoose";
-import path from "node:path";
-import { fileTypeFromFile } from "file-type";
-import { existsSync } from "node:fs";
-import { mkdir, rename, rm, unlink } from "node:fs/promises";
-
-import { UploadSession } from "../models/uploadSession.model.js";
-import { File as FileModel } from "../models/file.model.js";
+import { redisClient } from "../configs/radis.js";
+import {
+  abortS3Upload,
+  completeMultipartUpload,
+  getS3UploadId,
+  getUploadS3PresignedUrls,
+} from "../configs/s3Client.js";
+import { Directory } from "../models/directory.model.js";
+import { UserFile } from "../models/user_file.model.js";
 import { uploadInitSchema } from "../Schemas/userSchema.js";
+import { CHUNK, t } from "../misc/constants.js";
+import { getErrorObject } from "../utils/helper.js";
 
-import { finalizeStorageRecord, mergeFileChunks } from "../utils/storage.js";
-import {  getErrorObject } from "../utils/helper.js";
-import { TIME, CHUNK_SIZE, TEMP_ROOT, UPLOAD_ROOT } from "../misc/constants.js";
+const batch_size = 10;
+const twoDaysMs = 2 * t._day * t._ms;
+const sixHrs = 6 * t._hr;
+
+export const createFileHandler = async (upload, ancestors) => {
+  const session = await mongoose.startSession();
+  let newfile = null;
+  try {
+    await session.withTransaction(async () => {
+      [newfile] = await UserFile.create(
+        [
+          {
+            ancestors,
+            userId: upload.userId,
+            parentId: upload.targetId,
+            key: upload.key,
+            name: upload.name,
+            mime: upload.mime,
+            size: upload.size,
+          },
+        ],
+        { session },
+      );
+
+      if (newfile.ancestors.length > 0) {
+        const bulkOps = newfile.ancestors.map((anc_id) => {
+          return {
+            updateOne: {
+              filter: { _id: anc_id },
+              update: { $inc: { size: newfile.size } },
+            },
+          };
+        });
+        await Directory.bulkWrite(bulkOps, { session });
+      }
+    });
+  } catch (dbErr) {
+    throw dbErr;
+  } finally {
+    await session.endSession();
+  }
+
+  const { __v, deletedBy, deletedAt, key, publicRole, ...file } =
+    newfile.toObject();
+  return file;
+};
 
 /**
- * path: /api/uploads/session/create
- * what it do: Initialize a new upload session, validating file size and storage quota, determining chunk strategy.
+ * path: /api/uploads/initiate
+ * what it do: Initialize a new S3 multipart upload session, validate file size and storage quota,
+ *             determine chunk strategy, and return the first batch of pre-signed PUT URLs.
  * requirements:
- *   - req.body: { name: string, size: number, mime: string }
+ *   - req.body: { file: { name: string, size: number, mime: string }, targetId: string (valid MongoDB ObjectId) }
  *   - req.user: authenticated user object provided by `validateSession`
- *   - req.parentDir: directory object provided by `loadParentDirectory` middleware
+ *   - req.target: populated directory object provided by `loadParentDir` middleware
  */
-export const initUpload = async (req, res, next) => {
+export const initiateUpload = async (req, res, next) => {
   try {
-    const { success, data, error } = uploadInitSchema.safeParse(req.body);
+    const { success, data, error } = uploadInitSchema.safeParse(req.body.file);
     if (!success) {
       const errorMessage = error.issues.map((err) => err.message).join(", ");
       return next(getErrorObject(errorMessage));
     }
 
     const { name, size, mime } = data;
-    const { _id, allotedStorage, usedStorage } = req.parent.userId;
+    const { _id: uid, root, maxQuota } = req.target.userId;
+    const userId = req.user._id.toString();
 
-    if (allotedStorage - usedStorage < size)
-      return next(getErrorObject("Storage limit exceeded"));
+    if (maxQuota - root.size < size)
+      return next(getErrorObject("Insufficient storage."));
 
-    const { role } = req.user;
-    const strategy = size > CHUNK_SIZE[role] ? "chunked" : "direct";
-    const chunkSize = strategy === "chunked" ? CHUNK_SIZE[role] : size;
-    const totalChunks =
-      strategy === "chunked" ? Math.ceil(size / chunkSize) : 1;
+    const partSize = size > CHUNK[req.user.tier] ? CHUNK[req.user.tier] : size;
+    const totalParts = Math.ceil(size / partSize) || 1;
+    const lastPartSize = size - (totalParts - 1) * partSize;
 
-    const upload = await UploadSession.create({
-      userId: _id,
-      parentId: req.parent._id,
-      filename: name,
-      size,
-      mime,
-      strategy,
-      chunkSize,
-      totalChunks,
-      expiresAt: new Date(Date.now() + TIME.ONE_DAY),
+    const extension = name.split(".").pop();
+    const key = `${uid}/${uid}_${Date.now()}.${extension}`;
+    const uploadId = await getS3UploadId(key, mime);
+
+    const initArrayLen = Math.min(totalParts, batch_size);
+    const initialParts = Array.from({ length: initArrayLen }, (_, i) => {
+      const contentLength = i + 1 === totalParts ? lastPartSize : partSize;
+      return { partNumber: i + 1, contentLength };
     });
 
-    // res.setHeader("x-chunk-index", 0);
-    res.status(200).json({
-      success: true,
-      message: "Upload record created.",
-      data: {
-        uploadId: upload._id,
-        strategy,
-        expectedChunkSize: chunkSize,
-        totalChunks,
-      },
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * path: /api/uploads/session/:sessionId/chunk
- * what it do: Receive a single chunk of an upload, rename and store in session temp directory, track uploaded chunks.
- * requirements:
- *   - req.params: { sessionId: string }
- *   - req.headers: { x-chunk-index: number }
- *   - req.file: multipart form file from upload middleware
- *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
- */
-export const saveChunk = async (req, res, next) => {
-  try {
-    const { _id, tempDir, uploadedChunks, totalChunks, chunkSize } =
-      req.uploadSession;
-    const chunkIndex = Number(req.headers["x-chunk-index"]);
-    if (
-      chunkIndex === undefined ||
-      !Number.isInteger(chunkIndex) ||
-      chunkIndex < 0
-    )
-      return next(getErrorObject("Wrong chunk indexing."));
-
-    const file = req.file;
-    if (!file || file.size === 0 || !file.path)
-      return next(getErrorObject("No chunk received."));
-
-    const filePath = path.resolve(file.path);
-    let error = null;
-    if (totalChunks === uploadedChunks.length) {
-      error = { status: 409, message: "All chunks are already uploaded." };
-    } else if (uploadedChunks.includes(chunkIndex)) {
-      error = { status: 409, message: "Chunk already exists." };
-    } else if (uploadedChunks.length !== chunkIndex) {
-      error = {
-        status: 403,
-        message: "Wrong indexed file. Index should always be continuous.",
-      };
-    } else if (file.size > chunkSize) {
-      error = { status: 403, message: "Chunk size not matched." };
-    }
-
-    if (error) {
-      if (filePath && existsSync(filePath)) await unlink(filePath);
-      return next(getErrorObject(error.message, error.status));
-    }
-
-    const status =
-      totalChunks === uploadedChunks.length + 1 ? "uploaded" : "uploading";
-    const td = path.resolve(TEMP_ROOT, _id.toString());
-
-    if (!td.startsWith(path.resolve(TEMP_ROOT) + path.sep))
-      return next(getErrorObject("Invalid session path."));
-
-    const chunkPath = path.resolve(td, `chunk-${chunkIndex}`);
-    if (!chunkPath.startsWith(td + path.sep))
-      return next(getErrorObject("Invalid chunk path."));
-
-    const uq = {
-      $addToSet: { uploadedChunks: chunkIndex }, //prevents duplicate indices
-      $set: { status, tempDir: td },
-    };
-    if (chunkIndex == 0) {
-      const detected = await fileTypeFromFile(filePath);
-      uq.$set.mime = detected?.mime || "application/octet-stream";
-    }
-
-    const updatedUpload = await UploadSession.findByIdAndUpdate(_id, uq, {
-      returnDocument: "after",
-    })
-      .select("uploadedChunks")
-      .lean();
-
-    await mkdir(td, { recursive: true });
-    await rename(filePath, chunkPath);
-
-    const progress = Math.round(
-      (updatedUpload.uploadedChunks.length / totalChunks) * 100,
+    const presignedUrls = await getUploadS3PresignedUrls(
+      key,
+      uploadId,
+      initialParts,
     );
 
-    return res.status(200).json({
+    const record = {
+      ancestors: req.target.ancestors,
+      id: uploadId,
+      userId: uid.toString(),
+      targetId: req.target._id.toString(),
+      ...data,
+      key,
+      partSize,
+      lastPartSize,
+      totalParts,
+      uploadedParts: [],
+      expire: Date.now() + twoDaysMs,
+    };
+
+    const uploadKey = `storageApp:user:${userId}:upload:${uploadId}`;
+    await Promise.all([
+      redisClient.json.set(uploadKey, "$", record),
+      redisClient.expire(uploadKey, 200 * t._min),
+    ]);
+
+    res.status(201).json({
       success: true,
-      message: "chunk uploaded.",
+      message: "Upload initiated.",
       data: {
-        status,
-        progress,
-        isCompleted: progress < 100 ? true : false,
+        session: {
+          id: uploadId,
+          userId: uid,
+          ...data,
+          status: "initiated",
+          totalParts,
+          partSize,
+          urls: presignedUrls,
+          requestType: "PUT",
+          sessionAlive: Date.now() + 200 * t._min * 1000,
+          expire: record.expire,
+        },
       },
     });
   } catch (err) {
-    try {
-      if (file?.path) await unlink(path.resolve(file.path));
-    } catch (cErr) {}
-
     next(err);
   }
 };
 
 /**
- * path: /api/uploads/session/:sessionId/complete
- * what it do: Verify all chunks uploaded, merge chunks into final file, finalize storage record, deduplicate via hashing.
+ * path: /api/uploads/save/:id
+ * what it do: Acknowledge uploaded S3 parts by storing their ETags in Redis, extend session TTL, and return updated progress.
  * requirements:
- *   - req.params: { sessionId: string }
- *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
- *   - All chunks must be uploaded (uploadedChunks.length === totalChunks)
+ *   - req.params: { id: string } (S3 multipart uploadId)
+ *   - req.body: { ETagsWithPartNumbers: Array<{ partNumber: number, ETag: string }> }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
+export const saveProgress = async (req, res, next) => {
+  const uploadId = req.params.id;
+  const { ETagsWithPartNumbers } = req.body; //zod schema validation - later
+  if (!Array.isArray(ETagsWithPartNumbers) || ETagsWithPartNumbers.length < 1) {
+    return next(getErrorObject("ETags with part numbers are required."));
+  }
+
+  try {
+    const uploadKey = `storageApp:user:${req.user._id.toString()}:upload:${uploadId}`;
+    const upload = await redisClient.json.get(uploadKey);
+
+    if (!upload) {
+      return next(
+        getErrorObject("Invalid session id or already expired.", 404),
+      );
+    }
+
+    const { status, totalParts, uploadedParts, expire } = upload;
+
+    if (expire < Date.now()) {
+      await abortS3Upload(upload.key, uploadId);
+      await redisClient.del(uploadKey);
+      return next(getErrorObject("Upload session expired.", 404));
+    } else if (status === "can_complete") {
+      return next(getErrorObject("Upload ready to be completed."));
+    }
+
+    const existingParts = new Set(uploadedParts.map((p) => p.PartNumber));
+    const filteredParts = ETagsWithPartNumbers.filter(
+      ({ ETag, partNumber }) =>
+        ETag &&
+        partNumber > 0 &&
+        partNumber <= totalParts &&
+        !existingParts.has(partNumber),
+    );
+
+    const count = totalParts - (uploadedParts.length + filteredParts.length);
+    const progress = Math.floor((count / totalParts) * 100) || 0;
+    const isReady = count === totalParts;
+    const newStatus = isReady ? "can_complete" : "on_progress";
+    
+    if (isReady) {
+      await redisClient.json.set(uploadKey, "$.status", newStatus);
+    }
+
+    if (filteredParts.length > 0) {
+      await redisClient.json.arrAppend(
+        uploadKey,
+        "$.uploadedParts",
+        ...filteredParts,
+      );
+    } else
+      return next(getErrorObject("Invalid or already acknowledged parts."));
+
+    await redisClient.expire(uploadKey, sixHrs);
+
+    return res.status(200).json({
+      success: true,
+      message: "Parts acknowledged.",
+      data: {
+        session: {
+          id: uploadId,
+          status: newStatus,
+          progress,
+          sessionAlive: Date.now() + sixHrs * 1000,
+          expire: upload.expire,
+        },
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * path: /api/uploads/complete/:id
+ * what it do: Finalize S3 multipart upload, create UserFile record in MongoDB, and clean up Redis session.
+ * requirements:
+ *   - req.params: { id: string } (S3 multipart uploadId)
+ *   - req.user: authenticated user object provided by `validateSession`
+ *   - All parts must be acknowledged (uploadedParts.length === totalParts)
  */
 export const completeUpload = async (req, res, next) => {
-  const upload = req.uploadSession;
-  const { _id, uploadedChunks, totalChunks, parentId } = upload;
-
-  if (uploadedChunks.length !== totalChunks)
-    return next(getErrorObject("Chunks missing."));
-
-  const mergedPath = path.resolve(TEMP_ROOT, `${_id.toString()}-merged`);
-  const tempDir = path.resolve(TEMP_ROOT, _id.toString());
+  const uploadId = req.params.id;
+  const uploadKey = `storageApp:user:${req.user._id.toString()}:upload:${uploadId}`;
 
   try {
-    // 1. Optimized Merge via Streams
-    const hash = await mergeFileChunks(uploadedChunks, tempDir, mergedPath);
+    const upload = await redisClient.json.get(uploadKey);
 
-    //2. Pre-Process
-    // const detected = await fileTypeFromFile(mergedPath);
-    const detectedMime = upload.mime || "application/octet-stream";
+    if (!upload) {
+      return next(
+        getErrorObject("Invalid session id or already expired.", 404),
+      );
+    }
 
-    const existingRecord = await FileModel.findOne({ hash })
-      .select("_id refCount")
-      .lean();
+    const { totalParts, uploadedParts, expire } = upload;
 
-    // 3. Finalize via Shared Service
-    const file = await finalizeStorageRecord({
-      upload,
-      hash,
-      existingRecord,
-      detectedMime,
-      status: "uploaded",
-    });
+    if (expire < Date.now()) {
+      await abortS3Upload(upload.key, uploadId);
+      await redisClient.del(uploadKey);
+      return next(getErrorObject("Upload session expired.", 410));
+    } else if (totalParts > uploadedParts.length) {
+      return next(getErrorObject("All parts must be uploaded first."));
+    }
 
-    //4. Post-Process (storage manage)
-    if (file) {
-      await mkdir(path.resolve(UPLOAD_ROOT, parentId.userId.toString()), {
-        recursive: true,
-      });
+    const sorted = uploadedParts.sort((a, b) => a.partNumber - b.partNumber);
 
-      const finalPath = path.resolve(
-        UPLOAD_ROOT,
-        parentId.userId.toString(),
-        hash,
+    let file;
+    try {
+      const { $metadata } = await completeMultipartUpload(
+        upload.key,
+        uploadId,
+        sorted,
       );
 
-      if (existingRecord) {
-        await unlink(mergedPath);
-      } else {
-        rename(mergedPath, finalPath).catch((err) =>
-          console.error("rename failed:", err),
-        );
+      if ($metadata.httpStatusCode !== 200) {
+        throw getErrorObject("Failed to complete multipart upload.", 500);
       }
 
-      if (tempDir)
-        rm(tempDir, { recursive: true, force: true }).catch((err) =>
-          console.error("cleanup failed:", err),
-        );
+      file = await createFileHandler(upload, upload.ancestors);
+      await redisClient.del(uploadKey);
+    } catch (s3OrDbError) {
+      console.error("Error during upload completion, aborting:", s3OrDbError);
+
+      await abortS3Upload(upload.key, uploadId).catch(console.error);
+      await redisClient.del(uploadKey).catch(console.error);
+
+      throw s3OrDbError;
     }
 
-    return res
-      .status(201)
-      .json({ success: true, message: "File uploaded.", data: { file } });
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * path: /api/uploads/session/:sessionId/cancel
- * what it do: Delete the upload session and clean up temporary chunks directory.
- * requirements:
- *   - req.params: { sessionId: string }
- *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
- */
-export const cancelUpload = async (req, res, next) => {
-  const { _id, strategy, filename } = req.uploadSession;
-
-  const session = await mongoose.startSession();
-  try {
-    await session.withTransaction(async () => {
-      await UploadSession.updateOne(
-        { _id },
-        {
-          status: "cancelled",
-          expiresAt: new Date(Date.now() + TIME.ONE_MINUTE),
-        },
-      ).session(session);
-    });
-    const tempDir =
-      strategy === "google-drive"
-        ? path.resolve(TEMP_ROOT, `google_${req.user._id.toString()}`)
-        : path.resolve(TEMP_ROOT, _id.toString());
-    if (tempDir && strategy !== "google-drive") {
-      rm(tempDir, { recursive: true, force: true }).catch((err) =>
-        console.error("cleanup failed:", err),
-      );
-    } else {
-      const filePath = path.resolve(tempDir, filename);
-      if (existsSync(filePath))
-        unlink(filePath).catch((err) => console.error("cleanup failed:", err));
-    }
-
-    return res.status(200).json({
+    return res.status(201).json({
       success: true,
-      message: "Upload cancelled.",
+      message: "File uploaded.",
       data: {
-        _id,
-        filename,
+        file: {
+          _id: file._id,
+          parentId: file.parentId,
+          userId: file.userId,
+          name: file.name,
+          mime: file.mime,
+          size: file.size,
+          isDeleted: false,
+          isStarred: false,
+          createdAt: file.createdAt,
+          updatedAt: file.updatedAt,
+        },
       },
     });
   } catch (err) {
     next(err);
-  } finally {
-    session.endSession();
   }
 };
 
 /**
- * path: /api/uploads/session/:sessionId
- * what it do: Return current upload progress, uploaded chunk indices, and completion status.
+ * path: /api/uploads/cancel/:id
+ * what it do: Abort the S3 multipart upload and delete the Redis session.
  * requirements:
- *   - req.params: { sessionId: string }
- *   - req.uploadSession: upload session object provided by `loadUploadSession` middleware
+ *   - req.params: { id: string } (S3 multipart uploadId)
+ *   - req.user: authenticated user object provided by `validateSession`
  */
-export const getUploadStatus = async (req, res, next) => {
+export const cancelUpload = async (req, res, next) => {
   try {
-    const { status, uploadedChunks, totalChunks, strategy, size, bytesRead } =
-      req.uploadSession;
-    const isCompleted = status === "uploaded" || status === "imported";
-    const progress = isCompleted
-      ? 100
-      : strategy === "google-drive"
-        ? Math.round((bytesRead / size) * 100) || 0
-        : Math.round((uploadedChunks.length / totalChunks) * 100);
+    const uploadKey = `storageApp:user:${req.user._id.toString()}:upload:${req.params.id}`;
+    const upload = await redisClient.json.get(uploadKey);
+    if (!upload) {
+      return next(
+        getErrorObject("Invalid session id or already expired.", 404),
+      );
+    }
+
+    await abortS3Upload(upload.key, upload.id);
+    await redisClient.del(uploadKey);
 
     return res
       .status(200)
-      .json({ success: true, data: { status, progress, isCompleted } });
+      .json({ success: true, message: "Upload cancelled." });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * path: /api/uploads/part-url/:id
+ * what it do: Generate a single pre-signed S3 PUT URL for a specific part number. Used to retry a failed part.
+ * requirements:
+ *   - req.params: { id: string } (S3 multipart uploadId)
+ *   - req.query: { partNumber: number }
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
+export const getPresignedUrlForPartNumber = async (req, res, next) => {
+  const uploadId = req.params.id;
+  const partNumber = Number(req.query.partNumber);
+  const uploadKey = `storageApp:user:${req.user._id.toString()}:upload:${uploadId}`;
+  try {
+    const upload = await redisClient.json.get(uploadKey);
+    if (!upload) {
+      return next(getErrorObject("Upload session already expired.", 404));
+    }
+
+    const { uploadedParts, totalParts, key, expire, partSize, lastPartSize } =
+      upload;
+    if (expire < Date.now()) {
+      await abortS3Upload(upload.key, uploadId);
+      await redisClient.del(uploadKey);
+      return next(getErrorObject("Upload session expired.", 404));
+    } else if (uploadedParts.length === totalParts) {
+      return next(getErrorObject("Upload session already completed."));
+    }
+
+    const existingParts = new Set(uploadedParts.map((p) => p.PartNumber));
+    if (
+      !partNumber ||
+      partNumber < 1 ||
+      partNumber > totalParts ||
+      existingParts.has(partNumber)
+    ) {
+      return next(
+        getErrorObject("Invalid part number or already acknowledged."),
+      );
+    }
+
+    const contentLength = partNumber === totalParts ? lastPartSize : partSize;
+    const presignedUrl = await getUploadS3PresignedUrls(key, uploadId, [
+      { partNumber, contentLength },
+    ]);
+
+    await redisClient.expire(uploadKey, sixHrs);
+    return res.status(200).json({ success: true, data: { url: presignedUrl } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * path: /api/uploads/remaining-urls/:id
+ * what it do: Generate pre-signed S3 PUT URLs for all remaining (not yet uploaded) parts, up to batch_size at a time.
+ * requirements:
+ *   - req.params: { id: string } (S3 multipart uploadId)
+ *   - req.user: authenticated user object provided by `validateSession`
+ */
+export const getRemainingPresignedUrls = async (req, res, next) => {
+  const uploadId = req.params.id;
+  const uploadKey = `storageApp:user:${req.user._id.toString()}:upload:${uploadId}`;
+  try {
+    const upload = await redisClient.json.get(uploadKey);
+    if (!upload) {
+      return next(getErrorObject("Upload session already expired.", 404));
+    }
+
+    const { totalParts, uploadedParts, partSize, lastPartSize, key, expire } =
+      upload;
+
+    if (expire < Date.now()) {
+      await abortS3Upload(upload.key, uploadId);
+      await redisClient.del(uploadKey);
+      return next(getErrorObject("Upload session expired.", 404));
+    } else if (uploadedParts.length === totalParts) {
+      return next(getErrorObject("Upload session already completed."));
+    }
+
+    const uploadedSet = new Set(uploadedParts.map((p) => p.PartNumber));
+    const remainingParts = [];
+    for (let part = 1; part <= totalParts; part++) {
+      if (remainingParts.length > batch_size) break;
+
+      if (!uploadedSet.has(part)) {
+        const contentLength = part === totalParts ? lastPartSize : partSize;
+        remainingParts.push({ partNumber: part, contentLength });
+      }
+    }
+
+    const presignedUrls = await getUploadS3PresignedUrls(
+      key,
+      uploadId,
+      remainingParts,
+    );
+
+    await redisClient.expire(uploadKey, sixHrs);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        file: {
+          id: uploadId,
+          urls: presignedUrls,
+          requestType: "PUT",
+          remainingPartsCount: totalParts - remainingParts.length,
+        },
+      },
+    });
   } catch (err) {
     next(err);
   }
