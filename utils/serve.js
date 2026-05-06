@@ -63,6 +63,7 @@ export const serveZip = async ({
 
   for (const dir of dirs) {
     const safeDirName = sanitizeName(dir.name);
+    const safeDirName = sanitizeName(dir.name);
 
     // Add empty dir entry to ZIP structure
     archive.append("", { name: zipPath + safeDirName + "/" });

@@ -202,6 +202,7 @@ export const createDirectoryHandler = async (req, res, next) => {
         item: {
           _id: newDir._id,
           name: newDir.name,
+          name: newDir.name,
           parentId: newDir.parentId,
           userId: newDir.userId,
           ancestors: newDir.ancestors,

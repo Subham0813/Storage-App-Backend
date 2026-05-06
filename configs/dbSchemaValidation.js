@@ -297,7 +297,7 @@ await db.command({
         },
         publicRole: {
           bsonType: "string",
-          enum: ["VIEWER", "NONE"],
+          enum: ["view", "none"],
           description: "Permissions for general audience",
         },
         sharedAt: {
@@ -314,7 +314,7 @@ await db.command({
               email: { bsonType: "string", description: "Recipient email." },
               role: {
                 bsonType: "string",
-                enum: ["VIEWER", "EDITOR"],
+                enum: ["view", "edit"],
                 description: "Permission roles.",
               },
             },
@@ -382,7 +382,7 @@ await db.command({
         isStarred: { bsonType: "bool", description: "Flag for favorites." },
         publicRole: {
           bsonType: "string",
-          enum: ["VIEWER", "NONE"],
+          enum: ["view", "none"],
           description: "Permissions for general audience",
         },
         sharedAt: {
@@ -399,7 +399,7 @@ await db.command({
               email: { bsonType: "string", description: "Recipient email." },
               role: {
                 bsonType: "string",
-                enum: ["VIEWER", "EDITOR"],
+                enum: ["view", "edit"],
                 description: "Permission roles.",
               },
             },
