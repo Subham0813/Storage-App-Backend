@@ -1,13 +1,10 @@
 import mongoose, { MongooseError } from "mongoose";
-import { MulterError } from "multer";
 /**
  * Middleware: errorHandler
  * what it do: Centralized error handler that catches and formats various error types (Multer, Mongoose, MongoDB) and logs them.
  */
 export const errorHandler = async (err, req, res, next) => {
-  if (err instanceof MulterError) {
-    console.error("Multer error", err.name, err.message, "\n", err);
-  } else if (err instanceof MongooseError) {
+  if (err instanceof MongooseError) {
     console.error({
       name: err.name,
       message: err.message,
@@ -37,6 +34,7 @@ export const errorHandler = async (err, req, res, next) => {
         keyPattern: err.keyPattern,
         keyValue: err.keyValue,
       });
+      err.statusCode = 409
     } else {
       console.error(err);
     }

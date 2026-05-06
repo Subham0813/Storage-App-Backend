@@ -2,20 +2,20 @@ import mongoose from "mongoose";
 import { getErrorObject } from "../utils/helper.js";
 
 /**
- * Middleware: restrictRootOperations
+ * Middleware: restrictRoot
  * what it do: Prevent operations on user's root directory by checking if req.params.id matches user's root.
  * requirements:
  *   - req.params.id: directory id to check (Mongo ObjectId)
  *   - req.user.root: authenticated user's root directory id
  *   - Blocks if id matches root or id is invalid
  */
-export const restrictRootOperations = async (req, res, next) => {
+export const restrictRoot = async (req, res, next) => {
   try {
     const rootId = req.user?.root?.toString();
     const paramId = req.params?.id.toString();
 
     if ((paramId && !mongoose.isValidObjectId(paramId)) || rootId === paramId) {
-      return next(getErrorObject("You do not have this permission", 403));
+      return next(getErrorObject("Forbidden: request denied for root", 403));
     }
 
     next();

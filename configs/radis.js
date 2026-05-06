@@ -1,8 +1,8 @@
 import { createClient } from "redis";
 
-export const redisClient = await createClient({ url: "redis://127.0.0.1:6379" })
+export const redisClient = await createClient({ url: process.env.REDIS_URL })
   .on("connect", (err) => console.info("RedisClient Connected."))
-  .on("error", (err) => console.info("RedisClient Error", err))
+  .on("error", (err) => console.error("RedisClient Error", err))
   .connect();
 
 process.once("SIGINT", async () => {

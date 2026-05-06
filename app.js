@@ -8,7 +8,7 @@ import authRoutes from "./routes/authRoutes.js";
 import oauthRoutes from "./routes/oauthRoutes.js";
 import directoryRoutes from "./routes/directoryRoutes.js";
 import fileRoutes from "./routes/fileRoutes.js";
-import homeRoutes from "./routes/homeRoutes.js";
+import homeRoutes from "./routes/userRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import importDriveRoutes from "./routes/importDriveRoutes.js";
 
@@ -31,13 +31,14 @@ try {
   app.use(cookieParser(process.env.COOKIE_SECRET));
   app.use(helmet());
 
-  app.use("/api/auth", express.json(), authRoutes);
-  app.use("/api/oauth", express.json(), oauthRoutes);
-  app.use("/api/uploads", verifyCsrfOrigin, validateSession, uploadRoutes);
+  app.use(express.json());
+  app.use("/api/auth", authRoutes);
+  app.use("/api/oauth", oauthRoutes);
 
-  app.use(express.json(), verifyCsrfOrigin, validateSession);
+  app.use(verifyCsrfOrigin, validateSession);
+  app.use("/api/uploads", uploadRoutes);
   app.use("/api/import", importDriveRoutes);
-  app.use("/api/home", homeRoutes);
+  app.use("/api/user", homeRoutes);
   app.use("/api/files", fileRoutes);
   app.use("/api/directories", directoryRoutes);
   app.use("/api/admin", adminRoutes);
