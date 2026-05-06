@@ -13,7 +13,6 @@ const fileSchema = new Schema(
     webViewLink: { type: String, default: "" },
 
     name: {
-    name: {
       type: String,
       minLength: [1, "originalname should be atleast one character long."],
       maxLength: [
