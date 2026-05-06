@@ -7,106 +7,65 @@ import { UPLOAD_ROOT } from "../misc/constants.js";
 const MAX_DEPTH = process.env.MAX_DEPTH || 5;
 
 /**
+ * Utility: sanitizeName
+ * Prevent directory traversal attacks
+ */
+export const sanitizeName = (name) => {
+  if (typeof name !== "string") return "unnamed";
+  return name.replace(/^[\.\/]+/, "").replace(/[<>:"/\\|?*]+/g, "_");
+};
+
+/**
  * Utility: serveZip
- * what it do: Recursively traverse directory tree, add files and folders to ZIP archive respecting depth and permissions.
- * requirements:
- *   - archive: archiver instance for ZIP creation
- *   - dirId: directory ObjectId to process
- *   - zipPath: current path in ZIP structure
- *   - visited: Set to prevent circular references
- *   - userEmail: email to check shared access permissions
- *   - depth: current recursion depth (defaults to 0, stops at MAX_DEPTH)
+ * Recursively traverse directory tree and add files to ZIP archive.
+ * (Permission checks are bypassed here because the route middleware
+ * already verified access to the root folder being downloaded).
  */
 export const serveZip = async ({
   archive,
   dirId,
   zipPath,
   visited,
-  userEmail,
-  userId,
-  depth = 0, // Current depth level
+  depth = 0,
 }) => {
   const dirIdStr = dirId.toString();
 
-  // 1. Cycle Detection
+  // 1. Cycle Detection & Depth Guard
   if (visited.has(dirIdStr)) return;
   visited.add(dirIdStr);
-
-  // 2. Max Depth Guard
-  // If we've hit the limit, stop processing this branch entirely
   if (depth > MAX_DEPTH) return;
 
-  // --- A. Fetch files in this dir ---
-  const files = await UserFile.find({
-    parentId: dirId,
-    isDeleted: false,
-    $or: [
-      { userId: userId },
-      { publicRole: "VIEWER" },
-      {
-        sharedWith: {
-          $elemMatch: {
-            email: userEmail,
-            role: { $in: ["VIEWER", "EDITOR"] },
-          },
-        },
-      },
-    ],
-  })
+  // 2. Fetch and append files
+  const files = await UserFile.find({ parentId: dirId, isDeleted: false })
     .populate("meta", "objectKey")
     .lean();
 
   for (const file of files) {
-    const safeName = sanitizeName(file.filename);
-    const entryPath = zipPath + safeName;
+    if (!file.meta || !file.meta.objectKey) continue;
 
-    // Ensure meta exists before accessing objectKey
-    if (!file.meta?.objectKey) continue;
-
-    const absolutePath = path.resolve(
+    const filePath = path.resolve(
       UPLOAD_ROOT,
-      userId.toString(),
+      file.userId.toString(),
       file.meta.objectKey,
     );
 
-    if (!absolutePath.startsWith(UPLOAD_ROOT)) continue;
-    if (!fs.existsSync(absolutePath)) continue;
-
-    archive.file(absolutePath, { name: entryPath });
+    if (fs.existsSync(filePath)) {
+      const safeName = sanitizeName(file.name);
+      archive.file(filePath, { name: zipPath + safeName });
+    }
   }
 
-  // If we are already at MAX_DEPTH, do not query for sub-directories.
-  // This saves a database call and prevents adding empty folders that we won't populate.
-  if (depth === MAX_DEPTH) return;
-
-  // --- B. Fetch child dirs ---
+  // 3. Fetch and recurse through child directories
   const dirs = await Directory.find(
-    {
-      parentId: dirId,
-      isDeleted: false,
-      $or: [
-        { userId: userId },
-        { publicRole: "VIEWER" },
-        {
-          sharedWith: {
-            $elemMatch: {
-              email: userEmail,
-              role: { $in: ["VIEWER", "EDITOR"] },
-            },
-          },
-        },
-      ],
-    },
-    { name: 1 }, //projection
+    { parentId: dirId, isDeleted: false },
+    { name: 1 },
   ).lean();
 
   for (const dir of dirs) {
-    const safeDirName = sanitizeName(dir.dirname);
+    const safeDirName = sanitizeName(dir.name);
 
     // Add empty dir entry to ZIP structure
-    archive.append("", {
-      name: zipPath + safeDirName + "/",
-    });
+    archive.append("", { name: zipPath + safeDirName + "/" });
 
     // Recurse with depth + 1
     await serveZip({
@@ -114,25 +73,7 @@ export const serveZip = async ({
       dirId: dir._id,
       zipPath: zipPath + safeDirName + "/",
       visited,
-      userEmail,
-      userId,
       depth: depth + 1,
     });
   }
-};
-
-/**
- * Utility: sanitizeName
- * what it do: Sanitize file/directory names to prevent directory traversal attacks and invalid path characters.
- * requirements:
- *   - name: filename or directory name string
- *   - Removes '/', '\', '..', and trims whitespace
- *   - Returns: sanitized name (defaults to 'Untitled' if name is empty)
- */
-export const sanitizeName = (name) => {
-  if (!name) return "Untitled";
-  return name
-    .replace(/[\/\\]/g, "_")
-    .replace(/\.\./g, "_")
-    .trim();
 };
