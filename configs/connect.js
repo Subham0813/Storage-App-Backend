@@ -3,17 +3,17 @@ import mongoose from "mongoose";
 const connectMongoose = async () => {
   try {
     const mongooseConnect = await mongoose.connect(process.env.MONGO_URI);
-    console.log("Database connected..");
+    console.info("Database Connected.");
     return mongooseConnect;
   } catch (err) {
-    console.log("Database connection failed!");
+    console.info("Database Connection Failed.");
     throw err;
   }
 };
 
 process.once("SIGINT", async () => {
   await mongoose.disconnect();
-  console.log("Database disconnected!");
+  console.info("Database Disconnected!");
   process.exit(1);
 });
 

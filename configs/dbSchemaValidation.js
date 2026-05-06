@@ -226,7 +226,7 @@ await db.command({
         "userId",
         "parentId",
         "meta",
-        "filename",
+        "name",
         "mimetype",
         "disposition",
         "size",
@@ -258,7 +258,7 @@ await db.command({
         linkMeta: {
           bsonType: "object",
         },
-        filename: {
+        name: {
           bsonType: "string",
           minLength: 1,
           maxLength: 255,
@@ -354,13 +354,13 @@ await db.command({
   validator: {
     $jsonSchema: {
       bsonType: "object",
-      required: ["dirname", "userId", "parentId", "isDeleted", "createdAt"],
+      required: ["name", "userId", "parentId", "isDeleted", "createdAt"],
       properties: {
         _id: {
           bsonType: "objectId",
           description: "Unique directory identifier.",
         },
-        dirname: {
+        name: {
           bsonType: "string",
           minLength: 1,
           maxLength: 255,
@@ -368,7 +368,7 @@ await db.command({
           description:
             "Folder name; restricted characters for file system compatibility.",
         },
-        parentId: { bsonType: "objectId", description: "Parent directory ID." },
+        parentId: { bsonType: ["objectId", "null"], description: "Parent directory ID." },
         userId: {
           bsonType: "objectId",
           description: "Owner of the directory.",
@@ -522,7 +522,7 @@ await db.command({
       required: [
         "userId",
         "parentId",
-        "filename",
+        "name",
         "size",
         "strategy",
         "status",
@@ -536,7 +536,7 @@ await db.command({
           bsonType: "objectId",
           description: "User initiating the upload.",
         },
-        filename: {
+        name: {
           bsonType: "string",
           description: "Name of the file being uploaded.",
         },

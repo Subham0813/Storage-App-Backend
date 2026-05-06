@@ -1,38 +1,25 @@
 import { Schema, model } from "mongoose";
 
-export const sharedWithSchema = new Schema({
-  _id: { type: Schema.Types.ObjectId },
-  email: {
-    type: String,
-    match: [
-      /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/,
-      "please enter a valid email.",
-    ],
-    lowercase: true,
-    trim: true,
-    required: true,
-  },
-
-  role: {
-    type: String,
-    enum: ["VIEWER", "EDITOR"] /*VIEWER - only read, EDITOR - read,update, */,
-    required: true,
-  },
-});
-
 const directorySchema = new Schema(
   {
-    dirname: {
+    name: {
       type: String,
       minLength: 1,
       maxLength: 255,
-      match: [/^[^\\\\/:*?"<>|]+$/, "Invalid folder name."],
+      match: [/^[^\\/:*?"<>|]+$/, "Invalid folder name."],
       default: "Untitled Folder",
       required: true,
       trim: true,
     },
-    parentId: { type: Schema.Types.ObjectId, ref: "Directory", required: true },
+
+    parentId: {
+      type: Schema.Types.ObjectId,
+      ref: "Directory",
+      default: null,
+      required: true,
+    },
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    ancestors: [{ type: Schema.Types.ObjectId, ref: "Directory", index: true }],
     size: { type: Number, default: 0 },
     isStarred: { type: Boolean, default: false },
 
@@ -42,28 +29,20 @@ const directorySchema = new Schema(
       enum: ["none", "user", "process"],
       default: "none",
     },
+    deletedAt: { type: Date, default: null, expires: 15 * 24 * 3600 },
 
-    deletedAt: {
-      type: Date,
-      default: null,
-      expires: 15 * 24 * 3600,
-    },
-
+    // Public Link Sharing Only
     publicRole: {
-      type: String,
-      enum: ["VIEWER", "NONE"],
-      default: "NONE",
+      role: { type: String, enum: ["view", "none"], default: "none" },
+      sharedAt: { type: Date, default: null },
+      shareToken: { type: String, default: null },
     },
-    sharedBy: {
-      type: String,
-      enum: ["none", "user", "process"],
-      default: "none",
-    },
-    sharedWith: { type: [sharedWithSchema], default: [] },
-    sharedAt: { type: Date, default: null },
-    shareToken: { type: String },
   },
   { strict: "throw", timestamps: true },
 );
+
+// Indexes for fast lookups
+directorySchema.index({ parentId: 1, isDeleted: 1 });
+directorySchema.index({ userId: 1, isDeleted: 1 });
 
 export const Directory = model("Directory", directorySchema);

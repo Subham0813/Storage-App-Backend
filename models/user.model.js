@@ -4,8 +4,23 @@ import * as bcrypt from "bcrypt";
 const userSchema = new Schema(
   {
     root: { type: Schema.Types.ObjectId, ref: "Directory" },
-    integration: {
+    integrations: {
       googleDrive: {
+        accessToken: String,
+        refreshToken: String,
+        tokenExpiry: Date,
+      },
+      github: {
+        accessToken: String,
+        refreshToken: String,
+        tokenExpiry: Date,
+      },
+      dropbox: {
+        accessToken: String,
+        refreshToken: String,
+        tokenExpiry: Date,
+      },
+      onedrive: {
         accessToken: String,
         refreshToken: String,
         tokenExpiry: Date,
@@ -39,18 +54,16 @@ const userSchema = new Schema(
       minLength: [8, "password should atleast 8 characters long."],
       select: false,
     },
-    username: {
-      type: String,
-      unique: true,
-    },
-    avatar: {
-      type: String,
-      default: "../public/favicon.ico",
-    },
+    avatar: { type: String, default: "" },
     role: {
       type: String,
-      enum: ["SUPER_ADMIN", "ADMIN", "GUEST", "USER"],
-      default: "GUEST",
+      enum: ["super_admin", "admin", "manager", "user"],
+      default: "user",
+    },
+    tier: {
+      type: String,
+      enum: ["free", "lite", "plus", "pro", "super"],
+      default: "free",
     },
 
     googleId: { type: String },
@@ -61,18 +74,9 @@ const userSchema = new Schema(
       required: true,
       default: ["email"],
     },
-
-    isEmailVerified: { type: Boolean, default: false },
     theme: { type: String, default: "Light" },
-
-    deviceCount: {
-      type: Number,
-      default: 0,
-    },
-
-    allotedStorage: { type: Number, default: 1024 * 1024 * 1024 },
-    usedStorage: { type: Number, default: 0 },
-
+    deviceCount: { type: Number, default: 0 },
+    maxQuota: { type: Number, default: 1024 * 1024 * 1024 },
     isLogged: { type: Boolean, default: false },
     isDeleted: { type: Boolean, default: false },
   },
@@ -83,16 +87,6 @@ userSchema.pre("save", async function () {
   // Hash password
   if (this.isModified("password")) {
     this.password = await bcrypt.hash(this.password, 12);
-  }
-
-  // Set username if it doesn't exist
-  if (this.email && !this.username) {
-    const random = String(this.password)
-      .substring(45, 60)
-      .replaceAll("/", "-")
-      .replaceAll(".", "_");
-    const username = this.email.split("@")[0].concat(random);
-    this.username = username;
   }
 });
 
