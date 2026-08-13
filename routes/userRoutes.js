@@ -12,29 +12,42 @@ import {
   getSharedBy,
   getSharedWith,
   getStarredItems,
+  searchItems,
 } from "../controllers/commonGetControllers.js";
 
 // User specific actions
 import {
   deleteIntegration,
   deleteProfileHandler,
+  emptyTrash,
+  feedbackHandler,
+  getActivity,
+  getActiveSessionsHandler,
+  getUsage,
+  getUserInfo,
+  getUserStats,
   LogoutAllHandler,
   LogoutHandler,
+  revokeSessionHandler,
+  updateAvatar,
+  updateName,
 } from "../controllers/userControllers.js";
 
 import { checkAuthProviderStatus } from "../middlewares/restrictOperations.js";
-import { getUserPayload } from "../utils/helper.js";
+import { getErrorObject, getUserPayload } from "../utils/helper.js";
 
 const router = Router();
 
-router.get("/info", async (req, res, next) => {
-  try {
-    const user = getUserPayload(req.user);
-    return res.status(200).json({ success: true, data: { user } });
-  } catch (err) {
-    next(err);
-  }
-});
+router.get("/info", getUserInfo);
+
+router.get("/sessions", getActiveSessionsHandler);
+
+router.get("/stats", getUserStats);
+router.get("/usage", getUsage);
+router.get("/activity", getActivity);
+
+router.get("/search/files", searchItems("file"));
+router.get("/search/dirs", searchItems("dir"));
 
 router.get("/bin/files", getBinnedItems("file"));
 router.get("/bin/dirs", getBinnedItems("dir"));
@@ -45,11 +58,11 @@ router.get("/recents/dirs", getRecentItems("dir"));
 router.get("/starred/files", getStarredItems("file"));
 router.get("/starred/dirs", getStarredItems("dir"));
 
-router.get("/shared/files", getSharedBy("file"));
-router.get("/shared/dirs", getSharedBy("dir"));
+router.get("/shared-by-me/files", getSharedBy("file"));
+router.get("/shared-by-me/dirs", getSharedBy("dir"));
 
-router.get("/shared-with/files", getSharedWith("file"));
-router.get("/shared-with/dirs", getSharedWith("dir"));
+router.get("/shared-with-me/files", getSharedWith("file"));
+router.get("/shared-with-me/dirs", getSharedWith("dir"));
 
 router.get(
   "/link-google",
@@ -62,10 +75,16 @@ router.get(
   githubOAuthHandler,
 );
 
+router.post("/feedback", feedbackHandler);
+router.patch("/update-name", updateName);
+
+router.put("/update-avatar", updateAvatar);
 router.put("/logout", LogoutHandler);
 router.put("/logout-all", LogoutAllHandler);
-router.delete("/revoke-drive-integration", deleteIntegration);
+router.put("/revoke-drive-integration", deleteIntegration);
+router.put("/empty-trash", emptyTrash);
 
+router.delete("/sessions/:sessionId", revokeSessionHandler);
 router.delete("/delete-profile", deleteProfileHandler);
 
 export default router;

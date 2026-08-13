@@ -1,28 +1,32 @@
 import { Schema, model } from "mongoose";
 import * as bcrypt from "bcrypt";
+import { decryptToken, encryptToken } from "../utils/encryption.js";
 
 const userSchema = new Schema(
   {
     root: { type: Schema.Types.ObjectId, ref: "Directory" },
     integrations: {
       googleDrive: {
-        accessToken: String,
-        refreshToken: String,
+        accessToken: { type: String, set: encryptToken, get: decryptToken },
+        refreshToken: { type: String, set: encryptToken, get: decryptToken },
+        scope: String,
+        idToken: String,
+        expiryDate: Date,
         tokenExpiry: Date,
       },
       github: {
-        accessToken: String,
-        refreshToken: String,
+        accessToken: { type: String, set: encryptToken, get: decryptToken },
+        refreshToken: { type: String, set: encryptToken, get: decryptToken },
         tokenExpiry: Date,
       },
       dropbox: {
-        accessToken: String,
-        refreshToken: String,
+        accessToken: { type: String, set: encryptToken, get: decryptToken },
+        refreshToken: { type: String, set: encryptToken, get: decryptToken },
         tokenExpiry: Date,
       },
       onedrive: {
-        accessToken: String,
-        refreshToken: String,
+        accessToken: { type: String, set: encryptToken, get: decryptToken },
+        refreshToken: { type: String, set: encryptToken, get: decryptToken },
         tokenExpiry: Date,
       },
     },
@@ -54,17 +58,11 @@ const userSchema = new Schema(
       minLength: [8, "password should atleast 8 characters long."],
       select: false,
     },
-    avatar: { type: String, default: "" },
-    role: {
-      type: String,
-      enum: ["super_admin", "admin", "manager", "user"],
-      default: "user",
-    },
-    tier: {
-      type: String,
-      enum: ["free", "lite", "plus", "pro", "super"],
-      default: "free",
-    },
+
+    isTwoFactorEnabled: { type: Boolean, default: false },
+    twoFactorSecret: { type: String, select: false },
+
+    avatarKey: { type: String, default: "" },
 
     googleId: { type: String },
     githubId: { type: String },
@@ -74,11 +72,45 @@ const userSchema = new Schema(
       required: true,
       default: ["email"],
     },
-    theme: { type: String, default: "Light" },
-    deviceCount: { type: Number, default: 0 },
-    maxQuota: { type: Number, default: 1024 * 1024 * 1024 },
-    isLogged: { type: Boolean, default: false },
+
+    role: {
+      type: String,
+      enum: ["super_admin", "admin", "manager", "user"],
+      default: "user",
+    },
+    plan: {
+      type: String,
+      enum: [
+        "FREE",
+        "PRO_MONTHLY",
+        "PRO_YEARLY",
+        "ULTRA_MONTHLY",
+        "ULTRA_YEARLY",
+        "PREMIUM_MONTHLY",
+        "PREMIUM_YEARLY",
+        "ELITE_MONTHLY",
+        "ELITE_YEARLY",
+      ],
+      default: "FREE",
+    },
+    subscription: {
+      type: Schema.Types.ObjectId,
+      ref: "Subscription",
+    },
+    subscriptionExpiresAt: { type: Date },
+
+    maxQuota: { type: Number, default: 5 * 1e9 },
+
+    usedBandwidthQuota: { type: Number, default: 0 },
+    maxBandwidthQuota: { type: Number, default: 10 * 1e9 },
+    bandwidthResetAt: { type: Date },
+
+    lastLogin: { type: Date, default: Date.now },
+    lastActiveAt: { type: Date },
+
     isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { strict: "throw", timestamps: true },
 );

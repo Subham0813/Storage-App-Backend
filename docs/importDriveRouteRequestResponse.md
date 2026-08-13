@@ -1,8 +1,8 @@
 # Import Drive Routes — Request & Response Reference
 
-**Base path:** `/api/import`
-**Auth required:** ✅ All routes require a valid `sessionId` signed cookie
-**Prerequisite:** User must have Google Drive connected via `/api/oauth/google-drive/connect`
+**Base path:** `/api/import`  
+**Auth required:** ✅ All routes require a valid `sessionId` signed cookie  
+**Prerequisite:** User must have Google Drive connected via `/api/oauth/google-drive/connect`  
 
 ---
 
@@ -45,17 +45,19 @@ Stored in Redis during the import process.
   "id": "<hex string — 24 chars>",
   "userId": "<ObjectId>",
   "targetId": "<directory ObjectId>",
-  "ancestors": ["<ObjectId>", "..."],
-  "key": "<userId>/<timestamp>-<filename>",
+  "path": ["<ObjectId>", "..."],
+  "key": "<userId>/<timestamp>.<extension>",
   "name": "presentation.pptx",
   "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "size": 5242880,
   "googleId": "<Google Drive file id>",
   "bytesRead": 2097152,
-  "status": "on_progress",   // "initiated" | "on_progress" | "can_complete" | "failed"
-  "expire": 1700000000000    // Unix ms — hard expiry (2 days)
+  "status": "on_progress",
+  "expire": 1700000000000
 }
 ```
+
+> `status` values: `"initiated"` | `"on_progress"` | `"can_complete"` | `"completed"` | `"failed"`
 
 ---
 
@@ -75,22 +77,23 @@ No body. Just `sessionId` cookie.
 {
   "success": true,
   "data": {
-    "accessToken": "ya29.a0AfH6SMB..."   // Google OAuth access token — pass to Google Picker
+    "accessToken": "ya29.a0AfH6SMB..."
   }
 }
 ```
 
 ### Error Responses
 
-| Status | Condition | message |
-|--------|-----------|---------|
-| 400 | Google Drive not connected | `"Google Drive is not connected."` |
+| Status | Condition                  | message                                                        |
+| ------ | -------------------------- | -------------------------------------------------------------- |
+| 400    | Google Drive not connected | `"Google Drive is not connected."`                             |
+| 401    | Drive session expired      | `"Drive session expired. Please re-link your Google account."` |
 
 ---
 
 ## 2. POST `/api/import/google/initiate`
 
-Creates a new import session in Redis. Validates storage quota. Does **not** start the actual import yet.
+Creates a new import session in Redis. Validates storage quota and plan file size limit. Does **not** start the actual import yet.
 
 ### Request
 
@@ -98,14 +101,22 @@ Creates a new import session in Redis. Validates storage quota. Does **not** sta
 // Body (JSON)
 {
   "file": {
-    "id": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",  // Google Drive file id
-    "name": "presentation.pptx",                              // string, 1–255 chars
+    "id": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
+    "name": "presentation.pptx",
     "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "sizeBytes": "5242880"                                    // string or number
+    "sizeBytes": "5242880"
   },
-  "targetId": "64f1a2b3c4d5e6f7a8b9c0d2"                    // ObjectId — destination directory
+  "targetId": "64f1a2b3c4d5e6f7a8b9c0d2"
 }
 ```
+
+| Field           | Type            | Notes                                    |
+| --------------- | --------------- | ---------------------------------------- |
+| `file.id`       | string          | Google Drive file id                     |
+| `file.name`     | string          | 1–255 chars                              |
+| `file.mimeType` | string          | valid MIME type                          |
+| `file.sizeBytes`| string or number| file size in bytes                       |
+| `targetId`      | string          | ObjectId — destination directory         |
 
 ### Success Response — `201 Created`
 
@@ -115,11 +126,11 @@ Creates a new import session in Redis. Validates storage quota. Does **not** sta
   "message": "Import initiated.",
   "data": {
     "file": {
-      "id": "a1b2c3d4e5f6a1b2c3d4e5f6",   // import session id — use as :id in subsequent calls
+      "id": "a1b2c3d4e5f6a1b2c3d4e5f6",
       "userId": "64f1a2b3c4d5e6f7a8b9c0d1",
       "targetId": "64f1a2b3c4d5e6f7a8b9c0d2",
-      "ancestors": ["..."],
-      "key": "64f1.../1700000000000-presentation.pptx",
+      "path": ["..."],
+      "key": "64f1.../1700000000000.pptx",
       "name": "presentation.pptx",
       "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       "size": 5242880,
@@ -127,31 +138,34 @@ Creates a new import session in Redis. Validates storage quota. Does **not** sta
       "bytesRead": 0,
       "status": "initiated",
       "expire": 1700000000000,
-      "sessionAlive": 1700000000000   // Unix ms — Redis TTL (6 hrs from now)
+      "sessionAlive": 1700021600000
     }
   }
 }
 ```
 
+> `sessionAlive` is the Redis TTL (6 hrs from now). `expire` is the hard deadline (same as `sessionAlive` on initiation).
+
 ### Error Responses
 
-| Status | Condition | message |
-|--------|-----------|---------|
-| 400 | Validation failed | e.g. `"Invalid mimetype"` |
-| 400 | Insufficient storage quota | `"Insufficient storage."` |
+| Status | Condition                  | message                                                                  |
+| ------ | -------------------------- | ------------------------------------------------------------------------ |
+| 400    | Validation failed          | validation message                                                       |
+| 400    | Insufficient storage quota | `"Insufficient storage."`                                                |
+| 413    | File exceeds plan limit    | `"File exceeds your plan's maximum single-file size limit of <N>GB."`   |
 
 ---
 
 ## 3. PUT `/api/import/google/start-import/:id`
 
-Starts the actual file import from Google Drive to S3. This is **fire-and-forget** — the backend starts the stream asynchronously and returns `202` immediately. The frontend must poll `/progress/:id` to track completion.
+Starts the actual file import from Google Drive to S3. **Fire-and-forget** — the backend starts the stream asynchronously and returns `202` immediately. Poll `/progress/:id` to track completion.
 
 ### Request
 
-| Part | Value |
-|------|-------|
+| Part      | Value                                      |
+| --------- | ------------------------------------------ |
 | URL param | `:id` — import session id from `/initiate` |
-| Cookie | `sessionId` |
+| Cookie    | `sessionId`                                |
 
 No body required.
 
@@ -168,25 +182,25 @@ No body required.
 
 ### Error Responses
 
-| Status | Condition | message |
-|--------|-----------|---------|
-| 400 | Google Drive not connected | `"Drive not connected."` |
-| 404 | Session not found or expired | `"Import session not found or expired."` |
-| 409 | Import already started | `"Import already started or completed."` |
-| 410 | Session hard-expired | `"Import session expired."` |
+| Status | Condition                    | message                                  |
+| ------ | ---------------------------- | ---------------------------------------- |
+| 400    | Google Drive not connected   | `"Drive not connected."`                 |
+| 404    | Session not found or expired | `"Import session not found or expired."` |
+| 409    | Import already started       | `"Import already started or completed."` |
+| 410    | Session hard-expired         | `"Import session expired."`              |
 
 ---
 
 ## 4. GET `/api/import/google/progress/:id`
 
-Returns the current status and progress of an import session. **Poll this every 1–2 seconds** after calling `/start-import/:id`.
+Returns the current status and progress of an import session. **Poll every 1–2 seconds** after calling `/start-import/:id`.
 
 ### Request
 
-| Part | Value |
-|------|-------|
+| Part      | Value                     |
+| --------- | ------------------------- |
 | URL param | `:id` — import session id |
-| Cookie | `sessionId` |
+| Cookie    | `sessionId`               |
 
 ### Success Response — `200 OK` (in progress)
 
@@ -198,7 +212,7 @@ Returns the current status and progress of an import session. **Poll this every 
     "file": {
       "id": "a1b2c3d4e5f6a1b2c3d4e5f6",
       "status": "on_progress",
-      "progress": 42,           // 0–100 integer
+      "progress": 42,
       "size": 5242880,
       "bytesRead": 2202009
     }
@@ -242,13 +256,11 @@ Returns the current status and progress of an import session. **Poll this every 
 }
 ```
 
-> On `status === "failed"`, show an error to the user. The session will auto-expire.
-
 ### Error Responses
 
-| Status | Condition | message |
-|--------|-----------|---------|
-| 404 | Session not found or expired | `"Invalid session id or already expired."` |
+| Status | Condition                    | message                                    |
+| ------ | ---------------------------- | ------------------------------------------ |
+| 404    | Session not found or expired | `"Invalid session id or already expired."` |
 
 ---
 
@@ -260,10 +272,10 @@ Finalizes the import. Creates the `UserFile` record in MongoDB and deletes the R
 
 ### Request
 
-| Part | Value |
-|------|-------|
+| Part      | Value                     |
+| --------- | ------------------------- |
 | URL param | `:id` — import session id |
-| Cookie | `sessionId` |
+| Cookie    | `sessionId`               |
 
 No body required.
 
@@ -274,13 +286,21 @@ No body required.
   "success": true,
   "message": "Import completed.",
   "data": {
-    "file": {
-      "_id": "64f1a2b3c4d5e6f7a8b9c0d9",
+    "item": {
+      "id": "64f1a2b3c4d5e6f7a8b9c0d9",
       "parentId": "64f1a2b3c4d5e6f7a8b9c0d2",
       "name": "presentation.pptx",
       "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       "size": 5242880,
-      "createdAt": "2026-01-01T00:00:00.000Z"
+      "isStarred": false,
+      "isDeleted": false,
+      "owner": {
+        "id": "64f1a2b3c4d5e6f7a8b9c0d1",
+        "name": "John Doe",
+        "email": "user@example.com"
+      },
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
     }
   }
 }
@@ -288,11 +308,10 @@ No body required.
 
 ### Error Responses
 
-| Status | Condition | message |
-|--------|-----------|---------|
-| 400 | Import not finished yet | `"Import not completed yet."` |
-| 400 | Already completed | `"Import session already completed."` |
-| 404 | Session not found or expired | `"Invalid id or session already expired."` |
+| Status | Condition                    | message                                    |
+| ------ | ---------------------------- | ------------------------------------------ |
+| 400    | Import not finished yet      | `"Import not completed yet."`              |
+| 404    | Session not found or expired | `"Invalid id or session already expired."` |
 
 ---
 
@@ -300,7 +319,7 @@ No body required.
 
 Google Docs, Sheets, Slides, etc. (`application/vnd.google-apps.*`) cannot be downloaded directly — they are exported to an equivalent format (e.g. `.docx`, `.xlsx`, `.pdf`).
 
-If the file is too large to export (Google's export size limit), the backend saves it as a **link-only file** with a `webViewLink` pointing to the Google Docs URL. The file will appear in the user's storage but will open in Google Docs when previewed.
+If the file is too large to export (Google's 403 export limit), the backend saves it as a **link-only file** with a `webviewLink` pointing to the Google Docs URL. The file will appear in the user's storage but will open in Google Docs when previewed. Its `size` will be `0`.
 
 ---
 
@@ -308,5 +327,5 @@ If the file is too large to export (Google's export size limit), the backend sav
 
 - **Google Picker UI** — use the `accessToken` from `/picker-token` to initialize the Google Picker. The Picker returns `{ id, name, mimeType, sizeBytes }` for the selected file.
 - **Polling** — after `/start-import/:id`, poll `/progress/:id` every 1–2 seconds. Stop polling when `status` is `"can_complete"` or `"failed"`.
-- **Session expiry** — `sessionAlive` is the Redis TTL (6 hrs, refreshed on activity). `expire` is the hard deadline (2 days). If the session expires mid-import, start over.
+- **Session expiry** — `sessionAlive` is the Redis TTL (6 hrs, refreshed on activity). If the session expires mid-import, start over.
 - **Drive not connected** — if `/picker-token` returns an error, redirect the user to `/api/oauth/google-drive/connect` to connect their Drive.

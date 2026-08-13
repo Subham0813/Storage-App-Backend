@@ -3,46 +3,27 @@ import crypto from "crypto";
 
 import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
-import { getErrorObject } from "../utils/helper.js";
+import {
+  getErrorObject,
+  attachPermissionsCount,
+  getFileDoc,
+} from "../utils/helper.js";
 import { base64URLEncode } from "./oauthControllers.js";
 import { Permission } from "../models/permission.model.js";
 
 /**
  * path: /api/files/info/:id or /api/directories/info/:id
- * what it do: Return full metadata for a file or directory, including populated ancestors and owner.
- * requirements:
- *   - model: "file" | "dir"
- *   - req.params: { id: string }
- *   - req.Item: item object populated by `checkAccess` middleware
+ * what it do: Return full metadata for a file or directory, including populated path and owner.
  */
-export const getItemInfo = (model) => {
-  return async (req, res, next) => {
-    const Model =
-      model === "file" ? UserFile : model === "dir" ? Directory : null;
-    if (!Model) return next(getErrorObject("No `model` param found.", 400));
-
-    try {
-      // req.Item is populated by checkAccess middleware!
-      const item = await Model.findOne({ _id: req.Item._id, isDeleted: false })
-        .select("-__v -deletedBy -deletedAt -key")
-        .populate("userId", "-_id name email")
-        .populate("ancestors", "_id name", { isDeleted: false })
-        .lean();
-
-      if (!item) return next(getErrorObject("Item not found.", 404));
-
-      const { userId, publicRole, ...itemData } = item;
-      if (itemData.ancestors.length < 1) itemData.parentId = null;
-      return res.status(200).json({
-        success: true,
-        data: {
-          item: { ...itemData, publicRole: publicRole.role, owner: userId },
-        },
-      });
-    } catch (err) {
-      next(err);
-    }
-  };
+export const getItemInfo = (req, res, next) => {
+  try {
+    if (!req.Item) return next(getErrorObject("Item not found.", 404));
+    const file = getFileDoc(req.Item);
+    if (req.tokenAuth) delete file.owner;
+    return res.status(200).json({ success: true, data: { item: file } });
+  } catch (err) {
+    next(err);
+  }
 };
 
 /**
@@ -51,40 +32,77 @@ export const getItemInfo = (model) => {
  * requirements:
  *   - req.Item: item object populated by `checkAccess` middleware
  *   - req.user: authenticated user (must be item owner, no token/guest access)
- *   - req.query: { limit?: number, cursor?: ObjectId string }
+ *   - req.query: { limit?: number, cursor?: ObjectId string, public?:number }
  */
 export const getShareInfo = async (req, res, next) => {
-  if (req.tokenAuth) return next(getErrorObject("Unauthorized.", 403));
+  const lim = parseInt(req.query?.limit);
+  const limit = lim > 0 && lim <= 100 ? lim : 50;
 
-  const Item = req.Item;
-  if (!Item) return next(getErrorObject("Item not found.", 404));
-
-  if (Item.userId.toString() !== req.user._id.toString())
-    return next(getErrorObject("Unauthorized.", 403));
-
-  let limit = parseInt(req.query.limit) || 50;
-
-  const cursor = req.query.cursor;
+  const cursor = req.query?.cursor;
   if (cursor && !mongoose.isValidObjectId(cursor))
     return next(getErrorObject("Invalid cursor."));
 
-  const query = { itemId: Item._id };
+  const query = { itemId: req.Item._id };
   if (cursor) query._id = { $gt: cursor };
 
   try {
-    const items = await Permission.find(query)
-      .populate("userId", "name email")
-      // .populate("grantedBy", "name email")
+    const permissions = await Permission.find(query)
+      .populate("userId", "_id name email avatarUrl")
+      .populate("grantedBy", "_id name email")
+      .select("itemId userId grantedBy permission")
       .sort({ _id: 1 })
       .limit(limit)
-      .select("-_id userId permission")
       .lean();
 
     const nextCursor =
-      items.length < limit ? null : items[items.length - 1]._id;
+      permissions.length < limit
+        ? null
+        : permissions[permissions.length - 1]._id;
+
+    const formattedPermissions = permissions.map((p) => {
+      const pObj = { ...p };
+      delete pObj._id;
+      if (pObj.userId && typeof pObj.userId === "object") {
+        const u = { ...pObj.userId };
+        if (u._id) {
+          u.id = u._id.toString();
+          delete u._id;
+        }
+        pObj.userId = u;
+      }
+      if (pObj.grantedBy && typeof pObj.grantedBy === "object") {
+        const g = { ...pObj.grantedBy };
+        if (g._id) {
+          g.id = g._id.toString();
+          delete g._id;
+        }
+        pObj.grantedBy = g;
+      }
+      pObj.id = p.itemId.toString();
+      delete pObj.itemId;
+      return pObj;
+    });
+
+    const isPublic = parseInt(req.query?.public) || "";
+    const publicPermission = {};
+    if (isPublic === 1) {
+      if (req.Item.accessLevel === "public") {
+        publicPermission["permission"] = req.Item.publicRole;
+        publicPermission["token"] = req.Item.shareToken;
+        publicPermission["sharedAt"] = req.Item.sharedAt;
+        publicPermission["expiresAt"] = req.Item.shareTokenExpiresAt;
+      } else {
+        publicPermission["permission"] = "none";
+      }
+    }
+
     return res.status(200).json({
       success: true,
-      data: { items, publicRole: Item.publicRole, nextCursor },
+      data: {
+        permissions: formattedPermissions,
+        nextCursor,
+        publicPermission,
+      },
     });
   } catch (err) {
     next(err);
@@ -134,9 +152,10 @@ export const getNewShareToken = (model) => {
  */
 export const getBinnedItems = (model) => {
   return async (req, res, next) => {
-    let limit = parseInt(req.query.limit) || 50;
+    const lim = parseInt(req.query?.limit);
+    const limit = lim > 0 && lim <= 100 ? lim : 50;
 
-    const cursor = req.query.cursor;
+    const cursor = req.query?.cursor;
     if (cursor && !mongoose.isValidObjectId(cursor))
       return next(getErrorObject("Invalid cursor."));
 
@@ -150,17 +169,14 @@ export const getBinnedItems = (model) => {
     if (cursor) query._id = { $gt: cursor };
 
     try {
-      const items = await Model.find(query)
-        .sort({ _id: 1 })
-        .limit(limit)
-        .select(projectionStr)
-        .lean();
+      let items = await Model.find(query).populate("path", "_id name").populate("parentId", "_id name").sort({ _id: 1 }).limit(limit).lean();
       const nextCursor =
         items.length < limit ? null : items[items.length - 1]._id;
 
+      const itemDocs = items.map((f) => getFileDoc(f));
       return res
         .status(200)
-        .json({ success: true, data: { items, nextCursor } });
+        .json({ success: true, data: { items: itemDocs, nextCursor } });
     } catch (err) {
       next(err);
     }
@@ -177,9 +193,10 @@ export const getBinnedItems = (model) => {
  */
 export const getStarredItems = (model) => {
   return async (req, res, next) => {
-    let limit = parseInt(req.query.limit) || 50;
+    const lim = parseInt(req.query?.limit);
+    const limit = lim > 0 && lim <= 100 ? lim : 50;
 
-    const cursor = req.query.cursor;
+    const cursor = req.query?.cursor;
     if (cursor && !mongoose.isValidObjectId(cursor))
       return next(getErrorObject("Invalid cursor."));
 
@@ -193,18 +210,19 @@ export const getStarredItems = (model) => {
 
     if (cursor) query._id = { $gt: cursor };
     try {
-      const items = await Model.find(query)
+      let items = await Model.find(query)
         .sort({ _id: 1 })
         .limit(limit)
-        .populate("ancestors", "_id name", { isDeleted: false })
-        .select(projectionStr)
+        .populate("path", "_id name", { isDeleted: false })
         .lean();
+
       const nextCursor =
         items.length < limit ? null : items[items.length - 1]._id;
 
+      const itemDocs = items.map((f) => getFileDoc(f));
       return res
         .status(200)
-        .json({ success: true, data: { items, nextCursor } });
+        .json({ success: true, data: { items: itemDocs, nextCursor } });
     } catch (err) {
       next(err);
     }
@@ -212,7 +230,7 @@ export const getStarredItems = (model) => {
 };
 
 /**
- * path: /api/user/shared-with/files or /api/user/shared-with/dirs
+ * path: /api/user/shared-with-me/files or /api/user/shared-with-me/dirs
  * what it do: Return paginated list of items shared with the authenticated user (via Permission records).
  * requirements:
  *   - model: "file" | "dir"
@@ -221,9 +239,10 @@ export const getStarredItems = (model) => {
  */
 export const getSharedWith = (model) => {
   return async (req, res, next) => {
-    let limit = parseInt(req.query.limit) || 50;
+    const lim = parseInt(req.query?.limit);
+    const limit = lim > 0 && lim <= 100 ? lim : 50;
 
-    const cursor = req.query.cursor;
+    const cursor = req.query?.cursor;
     if (cursor && !mongoose.isValidObjectId(cursor))
       return next(getErrorObject("Invalid cursor."));
 
@@ -247,21 +266,21 @@ export const getSharedWith = (model) => {
       const projectionStr =
         "userId parentId name mime size createdAt updatedAt";
       const query = { _id: { $in: sharedItemIds }, isDeleted: false };
-
       if (cursor) query._id = { $gt: cursor };
 
-      const items = await Model.find(query)
+      let items = await Model.find(query)
         .sort({ _id: 1 })
-        .populate("userId", "-_id name email")
-        .select(projectionStr)
+        .populate("userId", "_id name email avatarUrl")
         .limit(limit)
         .lean();
-
       const nextCursor =
         items.length < limit ? null : items[items.length - 1]._id;
-      return res
-        .status(200)
-        .json({ success: true, data: { items, nextCursor } });
+
+      const itemDocs = items.map((f) => getFileDoc(f));
+      return res.status(200).json({
+        success: true,
+        data: { items: itemDocs, nextCursor },
+      });
     } catch (err) {
       next(err);
     }
@@ -269,7 +288,7 @@ export const getSharedWith = (model) => {
 };
 
 /**
- * path: /api/user/shared/files or /api/user/shared/dirs
+ * path: /api/user/shared-by-me/files or /api/user/shared-by-me/dirs
  * what it do: Return paginated list of items the authenticated user has shared with others.
  * requirements:
  *   - model: "file" | "dir"
@@ -278,9 +297,10 @@ export const getSharedWith = (model) => {
  */
 export const getSharedBy = (model) => {
   return async (req, res, next) => {
-    let limit = parseInt(req.query.limit) || 50;
+    const lim = parseInt(req.query?.limit);
+    const limit = lim > 0 && lim <= 100 ? lim : 50;
 
-    const cursor = req.query.cursor;
+    const cursor = req.query?.cursor;
     if (cursor && !mongoose.isValidObjectId(cursor))
       return next(getErrorObject("Invalid cursor."));
 
@@ -290,31 +310,38 @@ export const getSharedBy = (model) => {
     if (!Model) return next(getErrorObject("No `model` param found.", 400));
 
     try {
-      // 1. Ask the ACL: "What item IDs have I granted permission for?"
-      // `.distinct()` returns an array of unique itemIds!
       const itemsIShared = await Permission.distinct("itemId", {
         grantedBy: req.user._id,
         onModel: onModelType,
-      });
+      }).lean();
 
-      // 2. Fetch those specific items
       const projectionStr =
         "userId parentId name mime size createdAt updatedAt";
-      const query = { _id: { $in: itemsIShared }, isDeleted: false };
+
+      const query = {
+        $or: [
+          { _id: { $in: itemsIShared } },
+          { userId: req.user._id, publicRole: { $in: ["view", "edit"] } },
+        ],
+        isDeleted: false,
+      };
 
       if (cursor) query._id = { $gt: cursor };
 
-      const items = await Model.find(query)
+      let items = await Model.find(query)
         .sort({ _id: 1 })
-        .select(projectionStr)
+        .populate("userId", "_id name email avatarUrl")
+        .populate("path", "_id name")
         .limit(limit)
         .lean();
-
       const nextCursor =
         items.length < limit ? null : items[items.length - 1]._id;
+
+      const itemDocs = items.map((f) => getFileDoc(f));
+
       return res
         .status(200)
-        .json({ success: true, data: { items, nextCursor } });
+        .json({ success: true, data: { items: itemDocs, nextCursor } });
     } catch (err) {
       next(err);
     }
@@ -329,11 +356,13 @@ export const getSharedBy = (model) => {
  *   - req.user: authenticated user object
  *   - req.query: { limit?: number, cursor?: ObjectId string, days?: number (default 7) }
  */
+
 export const getRecentItems = (model) => {
   return async (req, res, next) => {
-    let limit = parseInt(req.query.limit) || 50;
+    const lim = parseInt(req.query?.limit);
+    const limit = lim > 0 && lim <= 100 ? lim : 50;
 
-    const cursor = req.query.cursor;
+    const cursor = req.query?.cursor;
     if (cursor && !mongoose.isValidObjectId(cursor))
       return next(getErrorObject("Invalid cursor."));
 
@@ -346,7 +375,7 @@ export const getRecentItems = (model) => {
 
       // Calculate the cutoff date
       // If req.body.days is 3, we go back 3 days. Default is 7.
-      const days = parseInt(req.query.days) || 7;
+      const days = parseInt(req.query?.days) || 7;
       const cutoffDate = new Date(Date.now() - days * 24 * 3600 * 1000);
 
       const projectionStr =
@@ -359,17 +388,77 @@ export const getRecentItems = (model) => {
       };
       if (cursor) query.$and.push({ _id: { $gt: cursor } });
 
-      const items = await Model.find(query)
-        .sort({ _id: 1 })
-        .select(projectionStr)
+      let items = await Model.find(query)
+        .populate("userId", "_id name")
+        .populate("path", "_id name")
+        .sort({ _id: -1 })
         .limit(limit)
         .lean();
       const nextCursor =
         items.length < limit ? null : items[items.length - 1]._id;
 
+      const itemDocs = items.map((f) => getFileDoc(f));
       return res
         .status(200)
-        .json({ success: true, data: { items, nextCursor } });
+        .json({ success: true, data: { items: itemDocs, nextCursor } });
+    } catch (err) {
+      next(err);
+    }
+  };
+};
+
+/**
+ * path: /api/user/search/files or /api/user/search/dirs
+ * what it do: Search files or directories by name for the authenticated user. Factory pattern.
+ * requirements:
+ *   - model: "file" | "dir"
+ *   - req.user: authenticated user object
+ *   - req.query: { q: string, limit?: number, cursor?: ObjectId string }
+ */
+export const searchItems = (model) => {
+  return async (req, res, next) => {
+    const q = req.query?.q?.trim();
+    if (!q) return next(getErrorObject("Search query is required.", 400));
+
+    const lim = parseInt(req.query?.limit);
+    const limit = lim > 0 && lim <= 100 ? lim : 50;
+
+    const cursor = req.query?.cursor;
+    if (cursor && !mongoose.isValidObjectId(cursor))
+      return next(getErrorObject("Invalid cursor."));
+
+    const Model =
+      model === "file" ? UserFile : model === "dir" ? Directory : null;
+    if (!Model) return next(getErrorObject("No `model` param found.", 400));
+
+    const escapedQ = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const nameRegex = new RegExp(escapedQ, "i");
+    const projectionStr =
+      "userId parentId name mime size extension createdAt updatedAt";
+
+    try {
+      const query = {
+        userId: req.user._id,
+        _id: { $ne: req.user.root._id },
+        isDeleted: false,
+        name: nameRegex,
+      };
+      if (cursor) query._id = { $gt: cursor };
+
+      let items = await Model.find(query)
+        .populate("path", "_id name")
+        .populate("userId", "_id name email avatarUrl")
+        .sort({ _id: 1 })
+        .limit(limit)
+        .lean();
+
+      const nextCursor =
+        items.length < limit ? null : items[items.length - 1]._id;
+
+      const itemDocs = items.map((f) => getFileDoc(f));
+      return res
+        .status(200)
+        .json({ success: true, data: { items: itemDocs, nextCursor } });
     } catch (err) {
       next(err);
     }

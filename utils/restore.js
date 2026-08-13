@@ -7,19 +7,19 @@ export const restoreDescendants = async (dirId, session) => {
     isDeleted: false,
     deletedBy: "none",
     deletedAt: null,
+    permanentDeleteAt: null,
   };
 
   await Promise.all([
     Directory.updateMany(
-      { ancestors: dirId, deletedBy: "process" },
+      { path: dirId, deletedBy: "process" },
       { $set: restoredFields },
       { session },
     ),
     UserFile.updateMany(
-      { ancestors: dirId, deletedBy: "process" },
+      { path: dirId, deletedBy: "process" },
       { $set: restoredFields },
       { session },
     ),
   ]);
 };
-

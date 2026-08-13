@@ -1,13 +1,29 @@
+import crypto from "crypto";
 import mongoose from "mongoose";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
-import { getErrorObject } from "../utils/helper.js";
-import { s3Client, deleteS3Objects } from "../configs/s3Client.js";
+import { getErrorObject, getFileDoc, getUserLimits } from "../utils/helper.js";
+import {
+  s3Client,
+  deleteS3Objects,
+  BUCKET_NAME,
+} from "../services/s3Client.js";
+import { redisClient } from "../configs/redis.js";
+import { PLAN_DETAILS, IS_SAAS_MODE } from "../misc/constants.js";
+import { User } from "../models/user.model.js";
+import { UserFile as File } from "../models/user_file.model.js";
+import { Permission } from "../models/permission.model.js";
+import { generateSecureDownloadUrl } from "../services/cdnRouter.js";
+import { logActivity } from "../utils/activityLogger.js";
+import { ensureBandwidthWindow } from "../utils/bandwidthWindow.js";
 
-const S3_BUCKET = process.env.S3_BUCKET_NAME;
+// The Cloudflare worker/webhook bandwidth path is SaaS-only. In self-hosted
+// mode the server always tracks bandwidth server-side (fallback), even if
+// CDN_PROVIDER=cloudflare is configured.
+const isCloudflare = IS_SAAS_MODE && process.env.CDN_PROVIDER === "cloudflare";
 
 /**
  * path: /api/files/preview/:id
@@ -18,25 +34,70 @@ const S3_BUCKET = process.env.S3_BUCKET_NAME;
  */
 export const previewFileHandler = async (req, res, next) => {
   try {
-    const file = await UserFile.findOne({
-      _id: req.params.id,
-      isDeleted: false,
-    })
-      .select("name key mime")
-      .lean();
+    const owner = req.itemOwner || req.user;
+    const limits = getUserLimits(owner);
 
-    if (!file || !file.key) return next(getErrorObject("File not found.", 404));
-    console.log(file.mime, file.key);
+    await ensureBandwidthWindow(owner);
+
+    const usedBandwidth = owner.usedBandwidthQuota || 0;
+    const bandwidthLimit = limits?.monthlyBandwidth;
+
+    if (usedBandwidth >= bandwidthLimit) {
+      return next(
+        getErrorObject(
+          "Bandwidth limit exceeded. Please upgrade your plan.",
+          403,
+        ),
+      );
+    }
+
+    let file =
+      req.Item ||
+      (await UserFile.findOne({ _id: req.params.id, isDeleted: false })
+        .select("name key size mime webviewLink userId")
+        .lean());
+
+    if (!file || (!file.key && !file.webviewLink))
+      return next(getErrorObject("File not found.", 404));
+
+    // Handle Google Drive linked files
+    if (file.webviewLink)
+      return res
+        .status(200)
+        .json({ success: true, data: { url: file.webviewLink } });
 
     const command = new GetObjectCommand({
-      Bucket: S3_BUCKET,
+      Bucket: BUCKET_NAME,
       Key: file.key,
       ResponseContentDisposition: `inline; filename="${encodeURIComponent(file.name)}"`,
       ResponseContentType: file.mime,
     });
 
-    const url = await getSignedUrl(s3Client, command, { expiresIn: 300 });
-    return res.status(200).json({ success: true, data: { url } });
+    const secureUrl = await generateSecureDownloadUrl(
+      s3Client,
+      command,
+      file,
+      owner._id,
+      "preview",
+    );
+
+    // Hybrid Tracking
+    await File.findByIdAndUpdate(file._id, {
+      $inc: { accessCount: 1 },
+      $set: { lastAccessedAt: new Date() },
+    });
+
+    if (!isCloudflare) {
+      await User.findByIdAndUpdate(owner._id, {
+        $inc: { usedBandwidthQuota: file.size || 0 },
+      });
+
+      redisClient
+        .del(`storageApp:user:${owner._id.toString()}:userdata`)
+        .catch(console.error);
+    }
+
+    return res.status(200).json({ success: true, data: { url: secureUrl } });
   } catch (err) {
     next(err);
   }
@@ -51,24 +112,64 @@ export const previewFileHandler = async (req, res, next) => {
  */
 export const downloadFileHandler = async (req, res, next) => {
   try {
-    const file = await UserFile.findOne({
-      _id: req.params.id,
-      isDeleted: false,
-    })
-      .select("name key mime")
-      .lean();
+    const owner = req.itemOwner || req.user;
 
+    await ensureBandwidthWindow(owner);
+
+    const usedBandwidth = owner.usedBandwidthQuota || 0;
+    const bandwidthLimit =
+      owner?.subscription?.limits?.monthlyBandwidthLimit ||
+      PLAN_DETAILS[owner.plan].monthlyBandwidthLimit;
+
+    // 1. Hard Quota Check
+    if (usedBandwidth >= bandwidthLimit) {
+      return next(
+        getErrorObject(
+          "Bandwidth limit exceeded. Please upgrade your plan.",
+          403,
+        ),
+      );
+    }
+
+    let file =
+      req.Item ||
+      (await UserFile.findOne({ _id: req.params.id, isDeleted: false })
+        .select("name key size userId")
+        .lean());
     if (!file || !file.key) return next(getErrorObject("File not found.", 404));
 
     const command = new GetObjectCommand({
-      Bucket: S3_BUCKET,
+      Bucket: BUCKET_NAME,
       Key: file.key,
       ResponseContentDisposition: `attachment; filename="${encodeURIComponent(file.name)}"`,
       ResponseContentType: file.mime,
     });
 
-    const url = await getSignedUrl(s3Client, command, { expiresIn: 300 });
-    return res.status(200).json({ success: true, data: { url } });
+    const secureUrl = await generateSecureDownloadUrl(
+      s3Client,
+      command,
+      file,
+      owner._id,
+      "download",
+    );
+
+    // Hybrid Tracking
+    await File.findByIdAndUpdate(file._id, {
+      $inc: { accessCount: 1 },
+      $set: { lastAccessedAt: new Date() },
+    });
+
+    if (!isCloudflare) {
+      await User.findByIdAndUpdate(owner._id, {
+        $inc: { usedBandwidthQuota: file.size || 0 },
+      });
+
+      redisClient
+        .del(`storageApp:user:${owner._id.toString()}:userdata`)
+        .catch(console.error);
+    }
+
+    return res.status(200).json({ success: true, data: { url: secureUrl } });
   } catch (err) {
     next(err);
   }
@@ -110,40 +211,55 @@ export const copyFileHandler = async (req, res, next) => {
       }
 
       // 2. Create new virtual user file (Sharing the exact same S3 key!)
-      const { key, webViewLink, mime, size } = file;
+      const { key, webviewLink, extension, mime, size, thumbnailKey } = file;
       const newFileObj = {
         userId: fileUserId,
         parentId: req.target._id,
-        ancestors: req.target.ancestors,
+        path: req.target.path,
         name: `Copy of ${file.name}`,
         key,
-        webViewLink,
+        webviewLink,
         mime,
         size,
+        extension,
+        thumbnailKey,
+        lastModifiedBy: targetUser._id,
       };
 
       [copy] = await UserFile.create([newFileObj], { session });
 
+      const targetAncestors = [...req.target.path, req.target._id];
       // 3. Update Target Directory AND its Ancestors Size
       await Directory.updateMany(
-        { _id: { $in: req.target.ancestors } },
-        { $inc: { size: file.size } },
+        { _id: { $in: targetAncestors } },
+        { $inc: { size: file.size }, lastModifiedBy: targetUser._id },
         { session },
       );
     });
 
-    return res.status(201).json({
-      success: true,
-      data: {
-        item: {
-          _id: copy._id,
-          parentId: copy.parentId,
-          name: copy.name,
-          mime: copy.mime,
-          size: copy.size,
-        },
-      },
+    const fileUserKey = `storageApp:user:${fileUserId}:userdata`;
+    const targetUserKey = `storageApp:user:${targetUser._id}:userdata`;
+    await Promise.all([
+      redisClient.del(fileUserKey),
+      redisClient.del(targetUserKey),
+    ]);
+
+    const copyWithUser = await UserFile.findById(copy._id)
+      .populate("userId", "_id name email avatarUrl")
+      .lean();
+
+    logActivity({
+      userId: req.user._id,
+      action: "copy",
+      itemType: "file",
+      itemId: copy._id,
+      parentId: copy.parentId || undefined,
+      itemName: file.name,
     });
+
+    return res
+      .status(201)
+      .json({ success: true, data: { item: getFileDoc(copyWithUser) } });
   } catch (err) {
     next(err);
   } finally {
@@ -163,49 +279,69 @@ export const deleteFileHandler = async (req, res, next) => {
     return next(getErrorObject("Invalid id."));
 
   const session = await mongoose.startSession();
-  let s3KeyToDelete = [];
+  let key, thumbnailKey, fileName, fileParentId;
 
   try {
-    await session.withTransaction(async () => {
-      // 1. Delete the user's virtual file
-      const file = await UserFile.findOneAndDelete({
-        _id: req.params.id,
-        userId: req.user._id,
-      })
-        .select("ancestors parentId key size")
-        .session(session)
+    [key, thumbnailKey] = await session.withTransaction(async () => {
+      const file = await UserFile.findOneAndDelete(
+        {
+          _id: req.params.id,
+          userId: req.user._id,
+        },
+        { session },
+      )
+        .select("name path parentId key thumbnailKey size")
         .lean();
 
       if (!file)
         throw getErrorObject("File not found or already deleted.", 404);
 
-      // 2. Update Parent Directory AND Ancestors Size (Decrement)
-      const dirsToUpdate = [...(file.ancestors || []), file.parentId];
+      fileName = file.name;
+      fileParentId = file.parentId;
+
+      await Permission.deleteMany({ itemId: file._id }).session(session);
+      const dirsToUpdate = [...(file.path || []), file.parentId];
+
       await Directory.updateMany(
         { _id: { $in: dirsToUpdate } },
-        { $inc: { size: -file.size } },
+        { $inc: { size: -file.size }, lastModifiedBy: req.user._id },
         { session },
       );
 
-      // 3. remaining copy count
-      const remainingCopies = await UserFile.countDocuments({
+      const count = await UserFile.countDocuments({
         key: file.key,
       }).session(session);
 
-      // 4. If no one else owns it, mark for physical deletion
-      if (remainingCopies === 0) {
-        s3KeyToDelete.push({ key: file.key });
-      }
+      await redisClient.del(`storageApp:user:${req.user._id}:userdata`);
+      return count === 0 && file.key ? [file.key, file.thumbnailKey] : [];
+    });
 
-      // Trigger S3 deletion outside of DB transaction
-      if (s3KeyToDelete.length > 0) {
-        await deleteS3Objects(s3KeyToDelete);
+    // S3 deletion AFTER transaction
+    if (key && thumbnailKey) {
+      try {
+        await Promise.all([
+          deleteS3Objects([key]),
+          deleteS3Objects([thumbnailKey], true),
+        ]);
+      } catch (s3Err) {
+        console.error("S3 Deletion failed:", s3Err);
+        throw s3Err;
       }
+    }
+
+    logActivity({
+      userId: req.user._id,
+      action: "delete",
+      itemType: "file",
+      itemId: req.params.id,
+      parentId: fileParentId || undefined,
+      itemName: fileName,
     });
 
     return res.status(200).json({
       success: true,
-      message: "File permanently deleted.",
+      message: "File permanently deleted and no longer available.",
+      data: { id: req.params.id },
     });
   } catch (err) {
     next(err);

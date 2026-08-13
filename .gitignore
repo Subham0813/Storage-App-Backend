@@ -16,6 +16,7 @@ yarn-error.log*
 # Environment variables
 .env
 .env.*
+.pem
 
 # OS files
 .DS_Store
@@ -78,3 +79,7 @@ Desktop.ini
 
 # Ignore old scripts
 z*
+
+# OAuth client credential files downloaded from Google Cloud Console
+client_secret_*.json
+*.apps.googleusercontent.com.json

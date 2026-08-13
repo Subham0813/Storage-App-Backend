@@ -1,8 +1,8 @@
 # Auth Routes — Request & Response Reference
 
-**Base path:** `/api/auth`
-**Auth required:** ❌ None (these are public routes)
-**Cookie engine:** `cookie-parser` with `COOKIE_SECRET` — all cookies are **signed**
+**Base path:** `/api/auth`  
+**Auth required:** ❌ None (these are public routes)  
+**Cookie engine:** `cookie-parser` with `COOKIE_SECRET` — all cookies are **signed**  
 
 ---
 
@@ -72,7 +72,8 @@ Validates credentials and sets an `authToken` cookie to begin OTP verification.
 ```json
 {
   "success": true,
-  "message": "Login token created."
+  "message": "Login token created.",
+  "data": { "isTwoFactorEnabled": false },
 }
 ```
 
@@ -80,10 +81,9 @@ Validates credentials and sets an `authToken` cookie to begin OTP verification.
 
 ### Error Responses
 
-| Status | Condition         | message                          |
-| ------ | ----------------- | -------------------------------- |
-| 400    | Validation failed | `"Incorrect email or password."` |
-| 400    | Wrong credentials | `"Incorrect email or password."` |
+| Status | Condition         | message                           |
+| ------ | ----------------- | --------------------------------- |
+| 400    | Wrong credentials | `"Incorrect email or password."`  |
 
 ---
 
@@ -111,7 +111,7 @@ Reads the `authToken` cookie and sends a 6-digit OTP to the user's email for the
   "message": "An One Time Password has been sent to your Email address.",
   "data": {
     "otpExpiresAt": "2026-01-01T12:05:00.000Z",  // Date — OTP valid for 5 minutes
-    "deviceLoggedCount": 1                         // number — current active sessions
+    "activeSessions": 1                            // number — current active sessions
   }
 }
 ```
@@ -151,20 +151,34 @@ Verifies the OTP. On success for `login`/`register`: creates a session and sets 
   "message": "Session created.",
   "data": {
     "user": {
-      "_id": "64f1a2b3c4d5e6f7a8b9c0d1",
+      "id": "64f1a2b3c4d5e6f7a8b9c0d1",
       "name": "John Doe",
       "email": "user@example.com",
-      "avatar": "",
+      "avatarUrl": "https://cdn.storage-app.dev/avatar/...",
       "role": "user",                        // "super_admin" | "admin" | "manager" | "user"
-      "tier": "free",                        // "free" | "lite" | "plus" | "pro" | "super"
-      "root": {"_id": "64f1a2b3c4d5e6f7a8b9c0d2", "size": 0, "parentId": null},   // Object — user's root directory
-      "authProviders": ["email"],            // ["email", "google", "github"]
-      "deviceCount": 1,                      // number of active sessions
-      "maxQuota": 1073741824,                // bytes — 1 GB default
+      "rootId": "64f1a2b3c4d5e6f7a8b9c0d2",  // user's root directory ObjectId string
+      "usedQuota": 0,                        // bytes — storage used
+      "authProviders": "email",              // string — connected providers (e.g. "email&google")
+      "maxQuota": 5000000000,                // bytes — plan storage limit
+      "maxBandwidthQuota": 10000000000,      // bytes — plan bandwidth limit
+      "usedBandwidthQuota": 0,               // bytes — bandwidth used
+      "plan": "FREE",                        // "FREE" | "PRO_MONTHLY" | "PRO_YEARLY" | "ULTRA_MONTHLY" | "ULTRA_YEARLY" | "PREMIUM_MONTHLY" | "PREMIUM_YEARLY" | "ELITE_MONTHLY" | "ELITE_YEARLY"
+      "subscription": {},                    // {} for FREE users, or full subscription object
+      "limits": {
+        "quotaBytes": 5000000000,
+        "maxFileSize": 100000000,
+        "chunkSize": 5242880,
+        "monthlyBandwidthLimit": 10000000000,
+        "maxUploadConcurrency": 2,
+        "maxDevices": 1,
+        "canCreatePublicLinks": false,
+        "trashRetentionDays": 7,
+        "gracePeriod": 7
+      },
+      "integrations": "",                    // string — connected integration keys (e.g. "googleDrive")
       "isLogged": true,
-      "theme": "Light",
-      "createdAt": "2026-01-01T00:00:00.000Z",
-      "updatedAt": "2026-01-01T00:00:00.000Z"
+      "isActive": true,
+      "createdAt": "2026-01-01T00:00:00.000Z"
     }
   }
 }
@@ -213,7 +227,7 @@ Initiates the forgot-password flow. Verifies the email exists and sets an `authT
 ```json
 {
   "success": true,
-  "message": "Password changing token created."
+  "message": "Reset token created. Proceed to create otp."
 }
 ```
 
@@ -237,7 +251,7 @@ Resets the user's password using the `resetToken` cookie set after OTP verificat
 ```json
 // Body (JSON)
 {
-  "newPassword": "NewSecret@456"  // same rules as password: min 8, uppercase, lowercase, number, symbol
+  "newPassword": "NewSecret@456"  // password format
 }
 ```
 
@@ -263,6 +277,95 @@ Resets the user's password using the `resetToken` cookie set after OTP verificat
 
 ---
 
+## 7. GET `/api/auth/2fa/generate`
+
+Generates a TOTP secret and returns a QR code base64 string for setup. This temporarily saves the secret to the user but does not enable 2FA until it is verified.
+
+### Request
+
+No body required. Must be an authenticated user (requires `sessionId`).
+
+### Success Response — `200 OK`
+
+```json
+{
+  "success": true,
+  "data": {
+    "qrCode": "data:image/png;base64,...",
+    "manualSecret": "ABCDEF123456"
+  }
+}
+```
+
+---
+
+## 8. POST `/api/auth/2fa/enable`
+
+Verifies the first scanned code and locks 2FA to true.
+
+### Request
+
+```json
+// Body (JSON)
+{
+  "token": "123456"  // 6-digit TOTP code
+}
+```
+
+Requires `sessionId` cookie.
+
+### Success Response — `200 OK`
+
+```json
+{
+  "success": true,
+  "message": "2FA successfully enabled."
+}
+```
+
+### Error Responses
+
+| Status | Condition | message |
+| ------ | --------- | ------- |
+| 400    | 2FA setup not initiated | `"2FA setup not initiated."` |
+| 401    | Invalid code | `"Invalid code. Try again."` |
+
+---
+
+## 9. POST `/api/auth/verify-totp`
+
+Verifies Authenticator code during login and creates the Redis stateful session. Used instead of `verify-otp` for users with 2FA enabled.
+
+### Request
+
+```json
+// Body (JSON)
+{
+  "token": "123456",            // 6-digit TOTP code
+  "logoutLastSession": false    // boolean, optional
+}
+```
+
+**Requires:** Signed cookie `authToken` (with purpose `login`)
+
+### Success Response — `201 Created`
+
+Same as `verify-otp` success response, returns the user object and sets `sessionId`.
+
+**Side effect:** Clears `authToken` cookie. Sets signed cookie `sessionId` (httpOnly, 7 days, sameSite: lax).
+
+### Error Responses
+
+| Status | Condition | message |
+| ------ | --------- | ------- |
+| 400    | Missing `authToken` or wrong purpose | `"Invalid cookies."` / `"Invalid session state."` |
+| 400    | `token` not provided | `"Authenticator code required."` |
+| 400    | 2FA not enabled on user | `"2FA not enabled."` |
+| 400    | Invalid TOTP code | `"Invalid Authenticator code."` |
+| 413    | Max device sessions reached | `"Session creation failed. Max. limit reached."` |
+
+---
+
 ## Cookie Reference
 
 | Cookie Name  | Set By                                         | Purpose                            | TTL    | Cleared By                      |
@@ -270,28 +373,3 @@ Resets the user's password using the `resetToken` cookie set after OTP verificat
 | `authToken`  | `/login`, `/register`, `/forgot-password-init` | Authorizes OTP request/verify      | 5 min  | `verify-otp` (on success)       |
 | `sessionId`  | `verify-otp` (login/register)                  | Authenticates all protected routes | 7 days | `/api/user/logout`              |
 | `resetToken` | `verify-otp` (forgot-password)                 | Authorizes password reset          | 5 min  | `/forgot-password` (on success) |
-
----
-
-## Frontend Flow Diagram
-
-```
-Register/Login:
-  POST /register or /login
-    → sets authToken cookie
-  POST /request-otp  (reads authToken)
-    → OTP sent to email
-  POST /verify-otp   (reads authToken + OTP)
-    → clears authToken, sets sessionId cookie
-    → returns user object
-
-Forgot Password:
-  POST /forgot-password-init
-    → sets authToken cookie (purpose: forgot-password)
-  POST /request-otp  (reads authToken)
-    → OTP sent to email
-  POST /verify-otp   (reads authToken + OTP)
-    → clears authToken, sets resetToken cookie
-  POST /forgot-password  (reads resetToken)
-    → clears resetToken, password updated
-```

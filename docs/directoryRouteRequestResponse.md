@@ -1,16 +1,16 @@
 # Directory Routes — Request & Response Reference
 
-**Base path:** `/api/directories`
-**Auth required:** ✅ Session cookie (`sessionId`) OR public share token (`?token=<shareToken>`)
-**Mounted after:** `validateSession` middleware
+**Base path:** `/api/directories`  
+**Auth required:** ✅ Session cookie (`sessionId`)  
+**Mounted after:** `validateSession` middleware  
 
 ---
 
 ## Access Control
 
-- `checkAccess("dir", "view"|"edit")` middleware — same as file routes, checks ownership, Permission records, or public share token.
-- `restrictRoot` middleware — blocks operations on the user's root directory (the top-level folder). Root cannot be renamed, moved, starred, trashed, shared, or deleted.
-- Guest access via `?token=<shareToken>` works only on `view`-level routes.
+- `checkAccess("dir", "view"|"owner")` middleware — checks ownership, Permission records, or a valid `?token=` for limited view routes.
+- `restrictRoot` middleware — blocks operations on the user's root directory. Root cannot be renamed, moved, starred, trashed, shared, or deleted.
+- Logged-in access is still required for browsing folder contents and downloading folders by design.
 
 ---
 
@@ -18,14 +18,21 @@
 
 ```json
 {
-  "_id": "64f1a2b3c4d5e6f7a8b9c0d2",
+  "id": "64f1a2b3c4d5e6f7a8b9c0d2",
   "name": "Documents",
-  "size": 10485760,                        // bytes — total size of all contents
+  "size": 10485760,
   "parentId": "64f1a2b3c4d5e6f7a8b9c0d0",
-  "ancestors": [                           // populated on info endpoint
-    { "_id": "...", "name": "root-user@example.com", "..." , "..." } //for breadcrumbs/path
+  "path": [
+    { "id": "...", "name": "root-user@example.com" }
   ],
-  "userId": "64f1a2b3c4d5e6f7a8b9c0d1",
+  "accessLevel": "private",
+  "filesCount": 5,
+  "dirsCount": 2,
+  "owner": {
+    "id": "64f1a2b3c4d5e6f7a8b9c0d1",
+    "name": "John Doe",
+    "email": "user@example.com"
+  },
   "isStarred": false,
   "isDeleted": false,
   "createdAt": "2026-01-01T00:00:00.000Z",
@@ -33,19 +40,21 @@
 }
 ```
 
+> `filesCount` and `dirsCount` are attached by `checkAccess` middleware — present on all directory responses that go through it.
+
 ---
 
 ## 1. GET `/api/directories/all-dirs/:id`
 
-Returns all **child directories** directly inside the given directory. Used to render folder contents.
+Returns all **child directories** directly inside the given directory.
 
 ### Request
 
-| Part | Value |
-|------|-------|
-| URL param | `:id` — parent directory ObjectId |
-| Cookie | `sessionId` OR query `?token=<shareToken>` |
-| Query | `?limit=50&cursor=<ObjectId>` (optional pagination) |
+| Part      | Value                                               |
+| --------- | --------------------------------------------------- |
+| URL param | `:id` — parent directory ObjectId                   |
+| Cookie    | `sessionId` |
+| Query     | `?limit=50&cursor=<ObjectId>` (optional pagination) |
 
 ### Success Response — `200 OK`
 
@@ -55,24 +64,28 @@ Returns all **child directories** directly inside the given directory. Used to r
   "data": {
     "items": [
       {
-        "_id": "...",
+        "id": "...",
         "name": "Work",
         "size": 5242880,
         "parentId": "...",
-        "ancestors": ["..."],
-        "userId": "...",
+        "path": [{ "id": "...", "name": "Documents" }],
+        "filesCount": 3,
+        "dirsCount": 1,
         "isStarred": false,
         "isDeleted": false,
         "createdAt": "...",
-        "updatedAt": "..."
+        "updatedAt": "...",
+        "owner": {
+          "id": "...",
+          "name": "John Doe",
+          "email": "user@example.com"
+        }
       }
     ],
-    "nextCursor": null   // null = no more pages
+    "nextCursor": null
   }
 }
 ```
-
-> `publicRole` and `deletedBy`/`deletedAt` are excluded from this list.
 
 ---
 
@@ -82,7 +95,7 @@ Returns all **files** directly inside the given directory.
 
 ### Request
 
-Same as `all-dirs/:id` — URL param `:id`, optional pagination, `sessionId` or `?token`.
+Same as `all-dirs/:id`.
 
 ### Success Response — `200 OK`
 
@@ -92,17 +105,23 @@ Same as `all-dirs/:id` — URL param `:id`, optional pagination, `sessionId` or 
   "data": {
     "items": [
       {
-        "_id": "...",
+        "id": "...",
         "name": "report.pdf",
         "mime": "application/pdf",
         "size": 204800,
+        "extension": "pdf",
+        "thumbnailUrl":"https://cdn.yj....",
         "parentId": "...",
-        "ancestors": ["..."],
-        "userId": "...",
+        "path": [{ "id": "...", "name": "Documents" }],
         "isStarred": false,
         "isDeleted": false,
         "createdAt": "...",
-        "updatedAt": "..."
+        "updatedAt": "...",
+        "owner": {
+          "id": "...",
+          "name": "John Doe",
+          "email": "user@example.com"
+        }
       }
     ],
     "nextCursor": null
@@ -110,20 +129,18 @@ Same as `all-dirs/:id` — URL param `:id`, optional pagination, `sessionId` or 
 }
 ```
 
-> `key`, `webViewLink`, `publicRole`, `deletedBy`, `deletedAt` are excluded.
-
 ---
 
 ## 3. GET `/api/directories/info/:id`
 
-Returns full metadata for a directory including populated ancestors (breadcrumb path) and owner info.
+Returns full metadata for a directory including populated path (breadcrumb) and owner info.
 
 ### Request
 
-| Part | Value |
-|------|-------|
-| URL param | `:id` — directory ObjectId |
-| Cookie | `sessionId` OR query `?token=<shareToken>` |
+| Part      | Value                                      |
+| --------- | ------------------------------------------ |
+| URL param | `:id` — directory ObjectId                 |
+| Cookie    | `sessionId` |
 
 ### Success Response — `200 OK`
 
@@ -131,24 +148,7 @@ Returns full metadata for a directory including populated ancestors (breadcrumb 
 {
   "success": true,
   "data": {
-    "item": {
-      "_id": "...",
-      "name": "Documents",
-      "size": 10485760,
-      "parentId": "...",                   // null if root
-      "ancestors": [
-        { "_id": "...", "name": "root-user@example.com" }
-      ],
-      "publicRole": "none",                // "view" | "none" — flattened
-      "owner": {
-        "name": "John Doe",
-        "email": "user@example.com"
-      },
-      "isStarred": false,
-      "isDeleted": false,
-      "createdAt": "...",
-      "updatedAt": "..."
-    }
+    "item": { /* full directory object — see shape above */ }
   }
 }
 ```
@@ -157,15 +157,17 @@ Returns full metadata for a directory including populated ancestors (breadcrumb 
 
 ## 4. GET `/api/directories/share-info/:id`
 
-Returns the sharing state of a directory — list of users with permissions and the public link role. **Owner only. Root directory is blocked.**
+Returns the sharing state of a directory — list of Permission records. **Owner only. Root directory is blocked.**
 
 ### Request
 
-| Part | Value |
-|------|-------|
-| URL param | `:id` — directory ObjectId |
-| Cookie | `sessionId` (owner only, no guest access) |
-| Query | `?limit=50&cursor=<ObjectId>` (optional pagination) |
+| Part      | Value                                               |
+| --------- | --------------------------------------------------- |
+| URL param | `:id` — directory ObjectId                          |
+| Cookie    | `sessionId` (owner only)                            |
+| Query     | `?limit=50&cursor=<ObjectId>&public=1` (optional)   |
+
+> Pass `?public=1` to include the `publicPermission` object in the response. Without it, `publicPermission` is returned as an empty object `{}`.
 
 ### Success Response — `200 OK`
 
@@ -173,40 +175,94 @@ Returns the sharing state of a directory — list of users with permissions and 
 {
   "success": true,
   "data": {
-    "items": [
+    "permissions": [
       {
-        "userId": { "_id": "...", "name": "Jane", "email": "jane@example.com" },
-        "permission": "view"   // "view" | "edit"
+        "id": "64f1a2b3c4d5e6f7a8b9c0d1",
+        "userId": { "id": "...", "name": "Jane", "email": "jane@example.com" },
+        "grantedBy": { "id": "...", "name": "John Doe", "email": "user@example.com" },
+        "permission": "view"
       }
     ],
-    "publicRole": {
-      "role": "view",
+    "nextCursor": null,
+    "publicPermission": {
+      "token": "aB3xZ9qR...",
+      "permission": "view",
       "sharedAt": "2026-01-01T00:00:00.000Z",
-      "shareToken": "abc123xyz"
-    },
-    "nextCursor": null
+      "expiresAt": "2026-02-01T00:00:00.000Z"
+    }
   }
 }
 ```
 
+> `publicPermission` is only populated when `?public=1` is passed. If the item is not public, `publicPermission` will be `{ "permission": "none" }`.  
+> `id` is the `itemId` (the directory's ObjectId). `onModel` is not included in the response.
+
 ---
 
-## 5. POST `/api/directories/new`
+## 5. GET `/api/directories/download-info/:id`
 
-Creates a new directory inside a target parent directory.
+Returns the name and total recursive size of a directory before downloading.
 
 ### Request
 
-| Part | Value |
-|------|-------|
-| Cookie | `sessionId` |
+| Part      | Value                                      |
+| --------- | ------------------------------------------ |
+| URL param | `:id` — directory ObjectId                 |
+| Cookie    | `sessionId` |
+
+### Success Response — `200 OK`
+
+```json
+{
+  "success": true,
+  "data": {
+    "name": "My Projects",
+    "size": 1048576000
+  }
+}
+```
+
+### Error Responses
+
+| Status | Condition           | message                  |
+| ------ | ------------------- | ------------------------ |
+| 404    | Directory not found | `"Directory not found."` |
+
+---
+
+## 6. GET `/api/directories/download/:id`
+
+Streams the entire directory tree as a ZIP file directly to the client. Max recursion depth is controlled by `MAX_DEPTH` env var (default 5).
+
+### Request
+
+| Part      | Value                                      |
+| --------- | ------------------------------------------ |
+| URL param | `:id` — directory ObjectId                 |
+| Cookie    | `sessionId` |
+
+### Success Response — `200 OK` (binary stream)
+
+```
+Content-Type: application/zip
+Content-Disposition: attachment; filename="<dirname>-<timestamp>.zip"
+```
+
+Response body is a binary ZIP stream. No JSON response.
+
+---
+
+## 7. POST `/api/directories/new`
+
+Creates a new directory under the provided `targetId`. Also accepts `parentId` as an alias for `targetId`.
+
+### Request
 
 ```json
 // Body (JSON)
 {
-  "targetId": "64f1a2b3c4d5e6f7a8b9c0d2",  // ObjectId — parent directory
-  "name": "New Folder"                        // optional, 1–100 chars, no special chars: \ / : * ? " < > |
-                                              // defaults to "Untitled Folder" if omitted
+  "targetId": "64f1a2b3c4d5e6f7a8b9c0d2",
+  "name": "Projects"
 }
 ```
 
@@ -218,27 +274,41 @@ Creates a new directory inside a target parent directory.
   "message": "Directory created.",
   "data": {
     "item": {
-      "_id": "64f1a2b3c4d5e6f7a8b9c0d9",
-      "name": "New Folder",
+      "id": "64f1a2b3c4d5e6f7a8b9c0d9",
+      "name": "Projects",
       "parentId": "64f1a2b3c4d5e6f7a8b9c0d2",
-      "userId": "64f1a2b3c4d5e6f7a8b9c0d1",
-      "ancestors": [
-        { "_id": "...", "name": "root-user@example.com" }
-      ],
+      "path": ["..."],
+      "size": 0,
       "isDeleted": false,
       "isStarred": false,
-      "updatedAt": "...",
+      "filesCount": 0,
+      "dirsCount": 0,
+      "owner": {
+        "id": "64f1a2b3c4d5e6f7a8b9c0d1",
+        "name": "John Doe",
+        "email": "user@example.com"
+      },
       "createdAt": "...",
+      "updatedAt": "..."
     }
   }
 }
 ```
 
+### Error Responses
+
+| Status | Condition                       | message                                                             |
+| ------ | ------------------------------- | ------------------------------------------------------------------- |
+| 400    | Validation failed               | validation message                                                  |
+| 400    | Directory with same name exists | `"Directory with same name already exists."`                        |
+| 403    | Target not owned by user        | `"Unauthorized to write to this directory. Owner access required."` |
+| 404    | Target directory not found      | `"Target directory not found."`                                     |
+
 ---
 
-## 6. POST `/api/directories/share/:id`
+## 8. POST `/api/directories/share/:id`
 
-Shares a directory with specific users by email and/or sets a public share link. **Root directory is blocked.**
+Shares the directory with specific users by email and/or sets a public share link. **Owner only. Root directory is blocked.**
 
 ### Request
 
@@ -249,9 +319,10 @@ Shares a directory with specific users by email and/or sets a public share link.
     { "email": "jane@example.com", "role": "view" },
     { "email": "bob@example.com",  "role": "edit" }
   ],
-  "publicRole": "view",    // optional — "view" only
+  "publicRole": "view",
   "notify": false,
-  "message": "Sharing this folder with you"
+  "message": "Sharing this folder with you",
+  "expiresIn": 7
 }
 ```
 
@@ -264,76 +335,85 @@ Shares a directory with specific users by email and/or sets a public share link.
 }
 ```
 
+### Error Responses
+
+| Status | Condition                       | message                                                                                    |
+| ------ | ------------------------------- | ------------------------------------------------------------------------------------------ |
+| 400    | Validation failed               | validation message                                                                         |
+| 400    | No valid share target           | `"No valid share target provided. Provide at least one email or set a public share role."` |
+| 403    | Plan doesn't allow public links | `"Your current plan does not support public link sharing. Please upgrade."`                |
+| 404    | Directory not found             | `"Item does not exist."`                                                                   |
+
 ---
 
-## 7. PATCH `/api/directories/rename/:id`
+## 9. PATCH `/api/directories/new-token/:id`
 
-Renames a directory. **Root directory is blocked.**
+Regenerates the public share token for the directory. The old share link becomes invalid. **Owner only. Root directory is blocked.**
 
 ### Request
 
 ```json
-// Body (JSON)
+// Body (JSON) — all fields optional
 {
-  "newname": "My Documents"   // 1–100 chars, no special chars
+  "expiresIn": 1296000000  // number (ms) — new expiry from now. Pass null to clear expiry. Omit to leave unchanged.
 }
 ```
 
-### Success Response — `200 OK`
+### Success Response — `201 Created`
 
 ```json
 {
   "success": true,
   "data": {
-    "item": {
-      "_id": "64f1a2b3c4d5e6f7a8b9c0d2",
-      "name": "My Documents"
-    }
-  }
-}
-```
-
----
-
-## 8. PATCH `/api/directories/move/:id`
-
-Moves a directory to a different parent directory. **Root directory is blocked.**
-
-### Request
-
-```json
-// Body (JSON)
-{
-  "targetId": "64f1a2b3c4d5e6f7a8b9c0d5"  // ObjectId — destination directory
-}
-```
-
-### Success Response — `200 OK`
-
-```json
-{
-  "success": true,
-  "message": "Item moved to the target directory.",
-  "data": {
-    "item": {
-      "_id": "64f1a2b3c4d5e6f7a8b9c0d2",
-      "parentId": "64f1a2b3c4d5e6f7a8b9c0d5"
-    }
+    "newToken": "aB3xZ9qR..."
   }
 }
 ```
 
 ### Error Responses
 
-| Status | Condition | message |
-|--------|-----------|---------|
-| 400 | Insufficient quota | `"Can not perform operation due to insufficient quota."` |
-| 403 | Target is a child of the item being moved | `"Item can not be moved to child."` |
-| 409 | Already in target | `"Item already exists in the target."` |
+| Status | Condition           | message             |
+| ------ | ------------------- | ------------------- |
+| 404    | Directory not found | `"item not found."` |
 
 ---
 
-## 9. PATCH `/api/directories/starred/:id`
+## 10. PATCH `/api/directories/revoke-access/:id`
+
+Revokes permissions for specific users and/or disables the public share link. **Owner only. Root directory is blocked.**
+
+### Request
+
+```json
+// Body (JSON)
+{
+  "emails": ["jane@example.com", "bob@example.com"],
+  "publicRole": "none",
+  "notify": false,
+  "message": "Access has been revoked."
+}
+```
+
+> `emails` is an array of plain email strings (not objects). At least one of `emails` or `publicRole` must be provided.
+
+### Success Response — `200 OK`
+
+```json
+{
+  "success": true,
+  "message": "Permissions revoked.",
+  "data": {
+    "item": { /* updated directory object via getFileDoc */ },
+    "revoked": ["jane@example.com"]
+  }
+}
+```
+
+> `revoked` is `null` if no emails were provided.
+
+---
+
+## 11. PATCH `/api/directories/starred/:id`
 
 Toggles the starred state of a directory. **Root directory is blocked.**
 
@@ -342,7 +422,7 @@ Toggles the starred state of a directory. **Root directory is blocked.**
 ```json
 // Body (JSON)
 {
-  "starred": true   // boolean
+  "starred": true
 }
 ```
 
@@ -354,7 +434,7 @@ Toggles the starred state of a directory. **Root directory is blocked.**
   "message": "Properties changed.",
   "data": {
     "item": {
-      "_id": "64f1a2b3c4d5e6f7a8b9c0d2",
+      "id": "64f1a2b3c4d5e6f7a8b9c0d2",
       "isStarred": true
     }
   }
@@ -363,41 +443,16 @@ Toggles the starred state of a directory. **Root directory is blocked.**
 
 ---
 
-## 10. PATCH `/api/directories/new-token/:id`
+## 12. PATCH `/api/directories/rename/:id`
 
-Regenerates the public share token for the directory. Old share link becomes invalid. **Root directory is blocked.**
-
-### Request
-
-No body. Just `sessionId` cookie and URL param.
-
-### Success Response — `201 Created`
-
-```json
-{
-  "success": true,
-  "data": {
-    "item": { 
-      "_id": "64f1a2b3c4d5e6f7a8b9c0d2",
-      "newToken": "aB3xZ9qR..."
-    }
-  }
-}
-```
-
----
-
-## 11. PATCH `/api/directories/revoke-access/:id`
-
-Revokes permissions for specific users and/or disables the public share link. **Root directory is blocked.**
+Renames a directory. **Owner only. Root directory is blocked.**
 
 ### Request
 
 ```json
 // Body (JSON)
 {
-  "emails": ["jane@example.com"],   // optional
-  "publicRole": "none"              // optional — "none" to disable public link
+  "newname": "Work Projects"
 }
 ```
 
@@ -406,15 +461,58 @@ Revokes permissions for specific users and/or disables the public share link. **
 ```json
 {
   "success": true,
-  "message": "Permissions revoked."
+  "data": {
+    "item": {
+      "id": "64f1a2b3c4d5e6f7a8b9c0d2",
+      "name": "Work Projects"
+    }
+  }
 }
 ```
 
 ---
 
-## 12. PUT `/api/directories/trash/:id`
+## 13. PATCH `/api/directories/move/:id`
 
-Moves a directory and all its contents to the bin (soft delete). **Root directory is blocked.** Recoverable for 15 days.
+Moves a directory and all its descendants to a different parent. **Owner only. Root directory is blocked.**
+
+### Request
+
+```json
+// Body (JSON)
+{
+  "targetId": "64f1a2b3c4d5e6f7a8b9c0d0"
+}
+```
+
+### Success Response — `200 OK`
+
+```json
+{
+  "success": true,
+  "message": "Item moved to the target directory.",
+  "data": {
+    "item": {
+      "id": "64f1a2b3c4d5e6f7a8b9c0d2",
+      "parentId": "64f1a2b3c4d5e6f7a8b9c0d0"
+    }
+  }
+}
+```
+
+### Error Responses
+
+| Status | Condition                        | message                                                  |
+| ------ | -------------------------------- | -------------------------------------------------------- |
+| 403    | Target is a child of the item    | `"Item can not be moved to child."`                      |
+| 409    | Item already in target directory | `"Item already exists in the target."`                   |
+| 400    | Insufficient quota               | `"Can not perform operation due to insufficient quota."` |
+
+---
+
+## 14. PUT `/api/directories/trash/:id`
+
+Soft-deletes a directory and all its contents recursively. **Owner only. Root directory is blocked.**
 
 ### Request
 
@@ -428,7 +526,7 @@ No body. Just `sessionId` cookie and URL param.
   "message": "Item moved to bin.",
   "data": {
     "item": {
-      "_id": "64f1a2b3c4d5e6f7a8b9c0d2",
+      "id": "64f1a2b3c4d5e6f7a8b9c0d2",
       "parentId": "64f1a2b3c4d5e6f7a8b9c0d0",
       "isDeleted": true
     }
@@ -438,9 +536,9 @@ No body. Just `sessionId` cookie and URL param.
 
 ---
 
-## 13. PUT `/api/directories/restore/:id`
+## 15. PUT `/api/directories/restore/:id`
 
-Restores a directory from the bin. Also restores all descendant files and directories. **Root directory is blocked.**
+Restores a directory and its process-deleted contents from the bin. **Owner only. Root directory is blocked.**
 
 ### Request
 
@@ -454,7 +552,7 @@ No body. Just `sessionId` cookie and URL param.
   "message": "Item restored.",
   "data": {
     "item": {
-      "_id": "64f1a2b3c4d5e6f7a8b9c0d2",
+      "id": "64f1a2b3c4d5e6f7a8b9c0d2",
       "parentId": "64f1a2b3c4d5e6f7a8b9c0d0",
       "isDeleted": false
     }
@@ -464,16 +562,16 @@ No body. Just `sessionId` cookie and URL param.
 
 ### Error Responses
 
-| Status | Condition | message |
-|--------|-----------|---------|
-| 400 | Parent directory is also deleted | `"Restore parent first."` |
-| 404 | Directory not in bin | `"Item not found."` |
+| Status | Condition                         | message                   |
+| ------ | --------------------------------- | ------------------------- |
+| 400    | Parent directory is also deleted  | `"Restore parent first."` |
+| 404    | Directory not found or not in bin | `"Item not found."`       |
 
 ---
 
-## 14. DELETE `/api/directories/delete/:id`
+## 16. DELETE `/api/directories/delete/:id`
 
-**Permanently** deletes a directory and all its contents (files + subdirectories). Also deletes S3 objects if no other user has copies. **Root directory is blocked. Irreversible.**
+**Permanently** deletes a directory and all its contents from DB and S3/B2. **Irreversible. Owner only. Root directory is blocked.**
 
 ### Request
 
@@ -486,26 +584,14 @@ No body. Just `sessionId` cookie and URL param.
   "success": true,
   "message": "Directory permanently deleted and no longer available.",
   "data": {
-    "item": {
-      "_id": "64f1a2b3c4d5e6f7a8b9c0d2"
-    }
+    "id": "64f1a2b3c4d5e6f7a8b9c0d2"
   }
 }
 ```
 
 ### Error Responses
 
-| Status | Condition | message |
-|--------|-----------|---------|
-| 403 | Root directory operation attempted | blocked by `restrictRoot` |
-| 404 | Directory not found | `"Directory not found."` |
-
----
-
-## Common Error Responses (all routes)
-
-| Status | Condition | message |
-|--------|-----------|---------|
-| 400 | Invalid ObjectId in URL | `"Invalid id."` |
-| 401 | No session | `"Unauthorized. Please login again."` |
-| 403 | Insufficient permissions or root operation | `"Unauthorized."` |
+| Status | Condition           | message                  |
+| ------ | ------------------- | ------------------------ |
+| 400    | Invalid id          | `"Invalid id."`          |
+| 404    | Directory not found | `"Directory not found."` |

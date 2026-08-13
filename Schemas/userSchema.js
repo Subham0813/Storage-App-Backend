@@ -4,9 +4,8 @@ import { z } from "zod/v4";
 export const filenameSchema = z.object({
   name: z
     .string()
-    .min(1)
-    .max(100, {
-      message: "Filename must be between 1 and 100 characters long",
+    .min(1, {
+      message: "Filename must be 1 or more characters long",
     })
     .regex(/^[^\\/:\*\?"<>|]+$/, {
       message: "Invalid characters in filename",
@@ -15,13 +14,27 @@ export const filenameSchema = z.object({
 });
 
 export const uploadInitSchema = z.object({
+  id: z.string().trim().optional(),
   name: filenameSchema.shape.name,
   mime: z
     .string()
     .trim()
     .regex(/^[a-zA-Z0-9]+\/[a-zA-Z0-9+.-]+$/, { message: "Invalid mimetype" }),
-  size: z.number().positive(),
+  size: z.number().gt(0),
   // hash: z.string().trim().regex(/^[a-f0-9]{64}$/, { message: "Invalid hash" }),
+});
+
+export const uploadCompleteSchema = z.object({
+  parts: z.array(
+    z.object({
+      ETag: z.string(),
+      partNumber: z.number().positive(),
+    }),
+  ),
+  thumbnailBase64: z
+    .string()
+    .regex(/^data:image\/\w+;base64,/)
+    .nullish()
 });
 
 export const sharePayloadSchema = z
@@ -35,14 +48,22 @@ export const sharePayloadSchema = z
           }),
         }),
       )
-      .min(1, {
+      .min(0, {
         message: "At least one email with role is required to share",
       })
       .max(100, {
         message: "Maximum 100 emails allowed to share at once",
-      }),
-    publicRole: z.enum(["view"],{message:"publicRole must be 'view'"}).optional(),
+      })
+      .optional(),
+    publicRole: z
+      .enum(["view"], { message: "publicRole must be 'view'" })
+      .optional(),
     notify: z.boolean().optional().default(false),
+    expiresIn: z
+      .number()
+      .gt(0, { message: "expiresIn must be greater than or equal to 0" })
+      .nullable()
+      .optional(),
     message: z.string().max(500).optional(),
   })
   .refine((data) => data.emailsWithRole || data.publicRole, {

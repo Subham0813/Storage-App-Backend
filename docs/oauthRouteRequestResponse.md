@@ -57,10 +57,10 @@ Handles Google's redirect after user grants permission. This is called by Google
 
 **Redirects to:**
 ```
-{CLIENT_URL}/google?google=connected
+{CLIENT_URL}/google?success=true
 ```
 
-Frontend should read the `google=connected` query param to confirm success and then fetch `/api/user/info` to get the user object.
+Frontend should read the `success=true` query param to confirm success and then fetch `/api/user/info` to get the user object.
 
 #### On Error
 
@@ -118,7 +118,7 @@ Handles GitHub's redirect after user grants permission.
 
 **Redirects to:**
 ```
-{CLIENT_URL}/github?github=connected
+{CLIENT_URL}/github?success=true
 ```
 
 #### On Error
@@ -155,7 +155,7 @@ window.location.href = "http://localhost:4000/api/oauth/google-drive/connect"
 
 **Behavior:** If Drive is already connected and token is not expired, redirects immediately to:
 ```
-{CLIENT_URL}?google-drive=connected
+{CLIENT_URL}?success=true
 ```
 
 Otherwise sets PKCE cookies and redirects to Google for Drive scope authorization.
@@ -191,7 +191,7 @@ Stores in DB:
 
 **Redirects to:**
 ```
-{CLIENT_URL}/google-drive?google-drive=connected
+{CLIENT_URL}/google-drive?success=true
 ```
 
 #### On Error

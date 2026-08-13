@@ -15,7 +15,7 @@ export const restrictRoot = async (req, res, next) => {
     const paramId = req.params?.id.toString();
 
     if ((paramId && !mongoose.isValidObjectId(paramId)) || rootId === paramId) {
-      return next(getErrorObject("Forbidden: request denied for root", 403));
+      return next(getErrorObject("Forbidden.", 403));
     }
 
     next();
@@ -29,13 +29,15 @@ export const restrictRoot = async (req, res, next) => {
  * what it do: Check if user is already authenticated with a specific provider (OAuth), prevent duplicate connections.
  * requirements:
  *   - provider: string like 'google' or 'github'
- *   - req.user.authProvider: array of connected auth providers
+ *   - req.user.authProviders: array of connected auth providers
  *   - Returns 409 CONFLICT if provider already connected
  */
 export const checkAuthProviderStatus = (provider) => {
   return async (req, res, next) => {
-    if (req.user.authProvider.includes(provider))
-      return next(getErrorObject(`Already connected with ${provider}`, 409));
+    if (req.user.authProviders && req.user.authProviders.includes(provider))
+      return res.redirect(
+        `${process.env.CLIENT_AUTH_CALLBACK_URL}/${provider}?success=true&message=already_connected`,
+      );
 
     next();
   };

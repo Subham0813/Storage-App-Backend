@@ -1,4 +1,4 @@
-import { createClient } from "redis";
+import { createClient,  } from "redis";
 
 export const redisClient = await createClient({ url: process.env.REDIS_URL })
   .on("connect", (err) => console.info("RedisClient Connected."))

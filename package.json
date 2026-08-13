@@ -1,12 +1,12 @@
 {
   "name": "@subham0813/storage-app-backend",
-  "version": "3.1.0",
+  "version": "4.0.0",
   "private": true,
   "main": "app.js",
   "type": "module",
   "scripts": {
     "start": "node --env-file=.env app.js",
-    "dev": "node --env-file=.env --watch app.js --trace-warnings ..."
+    "dev": "node --env-file=.env --watch app.js"
   },
   "keywords": [],
   "author": "",
@@ -14,19 +14,28 @@
   "description": "",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1029.0",
+    "@aws-sdk/cloudfront-signer": "^3.1059.0",
     "@aws-sdk/lib-storage": "^3.1037.0",
     "@aws-sdk/s3-request-presigner": "^3.1029.0",
     "@google-cloud/local-auth": "^3.0.1",
     "@types/node": "^24.7.1",
     "archiver": "^7.0.1",
     "bcrypt": "^6.0.0",
+    "bullmq": "^5.79.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "express": "^4.22.1",
+    "express-rate-limit": "^8.5.1",
     "googleapis": "^170.1.0",
     "helmet": "^8.1.0",
     "mongoose": "^9.0.1",
+    "nodemailer": "^9.0.5",
+    "otplib": "^13.4.1",
+    "qrcode": "^1.5.4",
+    "rate-limit-redis": "^5.0.0",
+    "razorpay": "^2.9.6",
     "redis": "^5.11.0",
+    "resend": "^6.12.4",
     "zod": "^4.3.6"
   }
 }

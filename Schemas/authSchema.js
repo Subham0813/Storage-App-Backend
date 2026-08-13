@@ -66,3 +66,35 @@ export const authTokenSchema = z.object({
   purpose: requestOtpSchema.shape.purpose,
   // expires: z.number().refine((val) => val > Date.now()),
 });
+
+export const changePasswordSchema = z
+  .object({
+    oldPassword: passwordSchema,
+    newPassword: passwordSchema,
+  })
+  .refine((data) => data.newPassword === data.oldPassword, {
+    message: "Old and New passwords can't be same",
+    path: ["newPassword"],
+  });
+
+export const feedbackSchema = z.object({
+  category: z.enum([
+    "upload",
+    "preview",
+    "sharing",
+    "billing",
+    "performance",
+    "other",
+  ]),
+  title: z
+    .string()
+    .min(5, { message: "Title must be at least 5 characters." })
+    .max(200, { message: "Title cannot exceed 200 characters." })
+    .trim(),
+  description: z
+    .string()
+    .min(10, { message: "Description must be at least 10 characters." })
+    .max(2000, { message: "Description cannot exceed 2000 characters." })
+    .trim(),
+  screenshotBase64: z.string().optional(),
+});

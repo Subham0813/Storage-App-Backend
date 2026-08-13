@@ -4,27 +4,77 @@ import crypto from "crypto";
 
 import { google } from "googleapis";
 import { Upload } from "@aws-sdk/lib-storage";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 
-import { redisClient } from "../configs/radis.js";
-import { s3Client } from "../configs/s3Client.js";
+import { redisClient } from "../configs/redis.js";
+import {
+  BUCKET_NAME,
+  PUBLIC_BUCKET_NAME,
+  deleteS3Objects,
+  getObjectSize,
+  s3Client,
+  s3PublicClient,
+} from "../services/s3Client.js";
 
 import { UserFile } from "../models/user_file.model.js";
 import { User } from "../models/user.model.js";
-import { Directory } from "../models/directory.model.js";
 
 import { createFileHandler } from "./uploadControllers.js";
-import { getErrorObject } from "../utils/helper.js";
+import { logActivity } from "../utils/activityLogger.js";
+import { createNotification } from "../services/notificationService.js";
+import { decryptToken } from "../utils/encryption.js";
+import { getErrorObject, getFileDoc, getUserLimits } from "../utils/helper.js";
 import {
   EXPORT_MAP,
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
   GOOGLE_DRIVE_REDIRECT_URI,
+  PLAN_DETAILS,
   t,
 } from "../misc/constants.js";
+import { uploadInitSchema } from "../schemas/userSchema.js";
 
 const twoDaysMs = 2 * t._day * t._ms;
 const sixHrs = 6 * t._hr;
 const threeHrs = 3 * t._hr;
+const twoMins = 2 * t._min;
+
+/**
+ * Fetch Google Drive's thumbnail for a file and store it in the public bucket
+ * as a CDN-served thumbnail. Never throws — a thumbnail failure must not fail the import.
+ */
+const makeImportThumbnail = async (drive, googleId, record, importKey) => {
+  try {
+    const { data } = await drive.files.get({
+      fileId: googleId,
+      fields: "thumbnailLink",
+    });
+    const link = data?.thumbnailLink;
+    if (!link) return;
+
+    const resp = await fetch(link);
+    if (!resp.ok) return;
+
+    const body = Buffer.from(await resp.arrayBuffer());
+    const contentType = resp.headers.get("content-type") || "image/jpeg";
+    const ext = contentType.includes("webp") ? "webp" : "jpg";
+    const thumbnailKey = `thumbnails/${record.userId}/${record.id}.${ext}`;
+
+    await s3PublicClient.send(
+      new PutObjectCommand({
+        Bucket: PUBLIC_BUCKET_NAME,
+        Key: thumbnailKey,
+        Body: body,
+        ContentType: contentType,
+        CacheControl: `public, max-age=${2 * t._hr * t._ms}`,
+      }),
+    );
+
+    await redisClient.json.set(importKey, "$.thumbnailKey", thumbnailKey);
+  } catch (err) {
+    console.warn("Import thumbnail generation failed:", err.message);
+  }
+};
 
 const getDriveClient = (integration) => {
   try {
@@ -35,7 +85,8 @@ const getDriveClient = (integration) => {
     );
 
     auth.setCredentials({
-      refresh_token: integration.refreshToken,
+      refresh_token:
+        decryptToken(integration.refreshToken) ?? integration.refreshToken,
     });
 
     return google.drive({ version: "v3", auth });
@@ -47,24 +98,48 @@ const getDriveClient = (integration) => {
 const isGoogleDoc = (mimeType) =>
   mimeType.startsWith("application/vnd.google-apps");
 
-const importFileSchema = z.object({
-  file: z.object({
-    id: z.string().min(1),
-    name: z.string().min(1).max(255),
-    mimeType: z.string().regex(/^[a-zA-Z0-9]+\/[a-zA-Z0-9+.-]+$/),
-    sizeBytes: z.string().or(z.number()),
-  }),
-  targetId: z.string().refine(mongoose.isValidObjectId),
-});
+const saveAsLink = async (record, webviewLink, importKey, time) => {
+  const session = await mongoose.startSession();
+  let newfile;
+  try {
+    await session.withTransaction(async () => {
+      [newfile] = await UserFile.create(
+        [
+          {
+            userId: record.userId,
+            parentId: record.targetId,
+            path: record.path,
+            name: record.name,
+            mime: record.mime,
+            size: 0,
+            extension: record.extension,
+            webviewLink: webviewLink,
+          },
+        ],
+        { session },
+      );
+    });
+    record.status = "completed";
+    record.fileId = newfile._id.toString();
 
-/**
- * path: /api/import/google/initiate
- * what it do: Create a new Google Drive import session in Redis after validating storage quota.
- * requirements:
- *   - req.body: { file: { id, name, mimeType, sizeBytes }, targetId: string }
- *   - req.user: authenticated user object
- *   - req.target: destination directory populated by `loadParentDir` middleware
- */
+    await redisClient.json.set(importKey, "$", record);
+    await redisClient.expire(importKey, time);
+
+    logActivity({
+      userId: record.userId,
+      action: "upload",
+      itemType: "file",
+      itemId: newfile._id,
+      parentId: newfile.parentId || undefined,
+      itemName: newfile.name,
+    });
+  } catch (err) {
+    throw new Error("Failed to save Google Doc as link: " + err.message);
+  } finally {
+    session.endSession();
+  }
+};
+
 /**
  * path: /api/import/google/initiate
  * what it do: Create a new Google Drive import session in Redis after validating storage quota.
@@ -75,40 +150,62 @@ const importFileSchema = z.object({
  */
 export const initiateGoogleImport = async (req, res, next) => {
   try {
-    const { success, data, error } = importFileSchema.safeParse(req.body);
-    if (!success) {
-      const errorMessage = error.issues.map((err) => err.message).join(", ");
+    const { success, data, error } = uploadInitSchema.safeParse(req.body.file);
+    if (!success || !data.id) {
+      const errorMessage =
+        error?.issues?.map((err) => err.message)?.join(", ") ||
+        "Invalid payload. `id` required.";
       return next(getErrorObject(errorMessage));
     }
 
-    const { file, targetId } = data;
+    const { name, size, mime, id } = data;
     const userId = req.user._id.toString();
-    const { _id: uid, maxQuota, root } = req.target.userId;
+    const targetUserId = req.target.userId._id.toString();
 
-    const fileSize = parseInt(file.sizeBytes) || 0;
-    if (maxQuota - root.size < fileSize)
-      return next(getErrorObject("Insufficient storage."));
+    const limits = getUserLimits(req.user);
+    const currentUsedStorage = req.target.userId.root?.size || 0;
+
+    if (limits.maxStorage - currentUsedStorage < size) {
+      return next(getErrorObject("Insufficient storage quota."));
+    }
+
+    if (size > limits.maxFileSize) {
+      return next(
+        getErrorObject(
+          `File exceeds maximum allowed size of ${limits.maxFileSize / 1e9}GB.`,
+          413,
+        ),
+      );
+    }
 
     const uploadId = crypto.randomBytes(12).toString("hex");
     const importKey = `storageApp:user:${userId}:import:${uploadId}`;
-    const key = `${uid}/${Date.now()}-${file.name}`;
+
+    const extension = name.split(".").pop();
+    const key = `${targetUserId}/${Date.now()}.${extension}`;
+
     const record = {
       id: uploadId,
-      userId: req.target.userId._id,
+      userId: targetUserId,
+      uploadedBy: userId,
       key,
-      targetId,
-      ancestors: req.target.ancestors,
-      name: file.name,
-      size: parseInt(file.sizeBytes) || 0,
-      mime: file.mimeType,
-      googleId: file.id,
+      targetId: req.target._id,
+      path: req.target.path,
+      name: data.name,
+      size: data.size,
+      mime: data.mime,
+      extension,
+      googleId: id,
       bytesRead: 0,
       status: "initiated",
-      expire: Date.now() + twoDaysMs,
+      expire: Date.now() + t._day * t._ms,
     };
 
     await redisClient.json.set(importKey, "$", record);
     await redisClient.expire(importKey, sixHrs);
+
+    delete record.key;
+    delete record.googleId;
 
     res.status(201).json({
       success: true,
@@ -116,7 +213,6 @@ export const initiateGoogleImport = async (req, res, next) => {
       data: {
         file: {
           ...record,
-          sessionAlive: Date.now() + sixHrs * 1000,
         },
       },
     });
@@ -125,13 +221,6 @@ export const initiateGoogleImport = async (req, res, next) => {
   }
 };
 
-/**
- * path: /api/import/google/start-import/:id
- * what it do: Start streaming a file from Google Drive to S3 asynchronously (fire-and-forget). Returns 202 immediately.
- * requirements:
- *   - req.params: { id: string } (import session id)
- *   - req.user: authenticated user with Google Drive integration connected
- */
 /**
  * path: /api/import/google/start-import/:id
  * what it do: Start streaming a file from Google Drive to S3 asynchronously (fire-and-forget). Returns 202 immediately.
@@ -152,15 +241,39 @@ export const startGoogleImport = async (req, res, next) => {
     if (record.status === "on_progress" || record.status === "can_complete")
       return next(getErrorObject("Import already started or completed.", 409));
 
-    const integration = req.user.integrations.find(
-      (i) => i.provider === "googleDrive",
-    );
+    const integration = req.user.integrations.googleDrive;
     if (!integration) return next(getErrorObject("Drive not connected."));
 
     await redisClient.json.set(importKey, "$.status", "on_progress");
     await redisClient.expire(importKey, sixHrs);
 
+    const limits = getUserLimits(req.user);
+    const activeKey = `import:active:${req.user._id.toString()}`;
+    const activeCount = await redisClient.incr(activeKey);
+    if (activeCount > limits.maxUploadConcurrency) {
+      await redisClient.decr(activeKey);
+      return next(
+        getErrorObject("Too many concurrent imports. Please wait.", 429),
+      );
+    }
+    await redisClient.expire(activeKey, 300);
+
+    const decrActive = () => {
+      redisClient.decr(activeKey).catch(console.error);
+    };
+
+    const notifyImportFailed = () => {
+      createNotification({
+        userId: record.userId,
+        type: "system",
+        title: "Import failed",
+        message: `"${record.name}" could not be imported. Please try again.`,
+        link: "/drive",
+      });
+    };
+
     (async () => {
+      let key = null;
       try {
         const { googleId } = record;
         const drive = getDriveClient(integration);
@@ -174,80 +287,60 @@ export const startGoogleImport = async (req, res, next) => {
             );
           } catch (exportErr) {
             const parsedErr = JSON.parse(exportErr.message).error;
-
-            if (
-              parsedErr.code === 403 &&
-              parsedErr.errors?.some(
-                (e) => e.reason === "exportSizeLimitExceeded",
-              )
-            ) {
-              console.warn(
-                `[Import] File too large: ${record.name}. Saving as Link.`,
-              );
-
+            if (parsedErr.code === 403) {
               const link = await drive.files.get({
                 fileId: googleId,
-                fields: "webViewLink",
+                fields: "webviewLink",
               });
-
-              let newfile = null;
-              const session = await mongoose.startSession();
-              try {
-                await session.withTransaction(async () => {
-                  [newfile] = await UserFile.create(
-                    [
-                      {
-                        userId: record.userId,
-                        parentId: record.targetId,
-                        ancestors: record.ancestors,
-                        googleId: record.googleId,
-                        name: record.name,
-                        mime: record.mime,
-                        size: record.size,
-                        webViewLink: link.data.webViewLink,
-                      },
-                    ],
-                    session,
-                  );
-                  if (newfile.ancestors.length > 0) {
-                    const bulkOps = newfile.ancestors.map((anc_id) => {
-                      return {
-                        updateOne: {
-                          filter: { _id: anc_id },
-                          update: { $inc: { size: newfile.size } },
-                        },
-                      };
-                    });
-                    await Directory.bulkWrite(bulkOps, { session });
-                  }
-                });
-
-                await redisClient.json.set(
-                  importKey,
-                  "$.status",
-                  "can_complete",
-                );
-                await redisClient.expire(importKey, threeHrs);
-              } finally {
-                session.endSession();
-              }
-            } else throw exportErr;
+              return await saveAsLink(
+                record,
+                link.data.webviewLink,
+                importKey,
+                twoMins,
+              );
+            }
+            throw exportErr;
           }
         }
         // --- B. Handle Regular Files (PDF, Images) ---
         else {
-          driveRes = await drive.files.get(
-            { fileId: googleId, alt: "media" },
-            { responseType: "stream" },
-          );
+          try {
+            driveRes = await drive.files.get(
+              { fileId: googleId, alt: "media" },
+              { responseType: "stream" },
+            );
+          } catch (downloadErr) {
+            const parsedErr = JSON.parse(downloadErr.message).error;
+            if (parsedErr.code === 403) {
+              const link = await drive.files.get({
+                fileId: googleId,
+                fields: "webviewLink",
+              });
+
+              return await saveAsLink(
+                record,
+                link.data.webviewLink,
+                importKey,
+                twoMins,
+              );
+            }
+
+            if (downloadErr.response?.status === 404) {
+              await redisClient.json.set(importKey, "$.status", "failed");
+              await redisClient.expire(importKey, twoMins);
+              notifyImportFailed();
+              return;
+            }
+            throw downloadErr;
+          }
 
           const parallelUploads3 = new Upload({
             client: s3Client,
             params: {
-              Bucket: process.env.S3_BUCKET_NAME,
+              Bucket: BUCKET_NAME,
               Key: record.key,
               Body: driveRes.data,
-              ContentType: record.mime,
+              // ContentType: record.mime,
             },
           });
 
@@ -265,7 +358,10 @@ export const startGoogleImport = async (req, res, next) => {
             }
           });
 
-          await parallelUploads3.done();
+          const upload = await parallelUploads3.done();
+          key = upload.Key;
+
+          await makeImportThumbnail(drive, googleId, record, importKey);
 
           await redisClient.json.set(importKey, "$.status", "can_complete");
           await redisClient.expire(importKey, threeHrs);
@@ -276,6 +372,10 @@ export const startGoogleImport = async (req, res, next) => {
           .set(importKey, "$.status", "failed")
           .catch(console.error);
         await redisClient.expire(importKey, threeHrs).catch(console.error);
+        if (key) await deleteS3Objects([key]).catch(console.error);
+        notifyImportFailed();
+      } finally {
+        decrActive();
       }
     })();
 
@@ -285,14 +385,6 @@ export const startGoogleImport = async (req, res, next) => {
   }
 };
 
-/**
- * path: /api/import/google/complete/:id
- * what it do: Finalize a completed Google Drive import by creating the UserFile record in MongoDB.
- * requirements:
- *   - req.params: { id: string } (import session id)
- *   - req.user: authenticated user object
- *   - Import status must be "can_complete"
- */
 /**
  * path: /api/import/google/complete/:id
  * what it do: Finalize a completed Google Drive import by creating the UserFile record in MongoDB.
@@ -314,33 +406,63 @@ export const completeGoogleImport = async (req, res, next) => {
     }
 
     if (record.status === "completed") {
-      return next(getErrorObject("Import session already completed."));
+      const file = await UserFile.findOne({
+        _id: record.fileId,
+        userId: record.userId,
+      }).lean();
+      const fileDoc = getFileDoc(file);
+
+      return res.status(201).json({
+        success: true,
+        message: "Import completed.",
+        data: { item: fileDoc },
+      });
     }
 
     if (record.status !== "can_complete") {
       return next(getErrorObject("Import not completed yet."));
     }
 
-    const file = await createFileHandler(record, req.target.ancestors);
+    const realSize = await getObjectSize(record.key);
+    if (realSize !== record.size) {
+      await deleteS3Objects([record.key]).catch(console.error);
+      await redisClient.del(importKey);
+      return next(
+        getErrorObject("Imported file size does not match expected size.", 413),
+      );
+    }
+
+    const file = await createFileHandler(record);
     await redisClient.del(importKey);
 
-    res.status(201).json({
+    createNotification({
+      userId: record.userId,
+      type: "system",
+      title: "Import completed",
+      message: `"${record.name}" was imported successfully.`,
+      link: `/drive/folders/${record.targetId}`,
+    });
+
+    logActivity({
+      userId: req.user._id,
+      action: "upload",
+      itemType: "file",
+      itemId: file._id,
+      parentId:
+        file.parentId?._id || file.parentId || record.targetId || undefined,
+      itemName: file.name,
+    });
+
+    return res.status(201).json({
       success: true,
       message: "Import completed.",
-      data: { file },
+      data: { item: getFileDoc(file) },
     });
   } catch (err) {
     next(err);
   }
 };
 
-/**
- * path: /api/import/google/progress/:id
- * what it do: Return the current status and byte-level progress of an active Google Drive import session.
- * requirements:
- *   - req.params: { id: string } (import session id)
- *   - req.user: authenticated user object
- */
 /**
  * path: /api/import/google/progress/:id
  * what it do: Return the current status and byte-level progress of an active Google Drive import session.
@@ -364,7 +486,7 @@ export const getImportProgress = async (req, res, next) => {
         success: true,
         message: "Import ready to complete.",
         data: {
-          file: { id: req.params.id, status, progress: 100, bytesRead},
+          file: { id: req.params.id, status, progress: 100, bytesRead },
         },
       });
     } else if (status === "failed") {
@@ -377,7 +499,8 @@ export const getImportProgress = async (req, res, next) => {
       });
     }
 
-    const progress = Math.floor((bytesRead / size) * 100) || 0;
+    const progress =
+      status === "completed" ? 100 : Math.floor((bytesRead / size) * 100) || 0;
     return res.status(200).json({
       success: true,
       message: "Import in progress.",
@@ -401,8 +524,11 @@ export const getPickerTokenGoogle = async (req, res, next) => {
       return next(getErrorObject("Google Drive is not connected."));
     }
 
+    const refreshToken =
+      decryptToken(googleDrive.refreshToken) ?? googleDrive.refreshToken;
+
     const isExpired =
-      new Date(googleDrive.tokenExpiry).getTime() - 60000 < Date.now();
+      new Date(googleDrive.expiryDate).getTime() - 60000 < Date.now();
 
     if (isExpired) {
       const oauth2Client = new google.auth.OAuth2(
@@ -411,7 +537,7 @@ export const getPickerTokenGoogle = async (req, res, next) => {
       );
 
       oauth2Client.setCredentials({
-        refresh_token: googleDrive.refreshToken,
+        refresh_token: refreshToken,
       });
 
       const { credentials } = await oauth2Client.refreshAccessToken();
@@ -421,7 +547,7 @@ export const getPickerTokenGoogle = async (req, res, next) => {
         {
           $set: {
             "integrations.googleDrive.accessToken": credentials.access_token,
-            "integrations.googleDrive.tokenExpiry": new Date(
+            "integrations.googleDrive.expiryDate": new Date(
               credentials.expiry_date,
             ),
           },
@@ -436,9 +562,20 @@ export const getPickerTokenGoogle = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      data: { accessToken: googleDrive.accessToken },
+      data: {
+        accessToken:
+          decryptToken(googleDrive.accessToken) ?? googleDrive.accessToken,
+      },
     });
   } catch (err) {
+    if (err.message.includes("invalid_grant")) {
+      return next(
+        getErrorObject(
+          "Drive session expired. Please re-link your Google account.",
+          401,
+        ),
+      );
+    }
     next(err);
   }
 };

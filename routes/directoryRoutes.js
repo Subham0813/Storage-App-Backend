@@ -4,6 +4,8 @@ import { Router } from "express";
 import {
   createDirectoryHandler,
   deleteDirectoryHandler,
+  downloadDirectoryHandler,
+  downloadDirectoryInfoHandler,
   getAllFilesHandler,
   getDirectoriesHandler,
 } from "../controllers/DirectoryControllers.js";
@@ -35,14 +37,23 @@ const router = Router();
 // GET Routes
 router.get("/all-dirs/:id", checkAccess("dir", "view"), getDirectoriesHandler);
 router.get("/all-files/:id", checkAccess("dir", "view"), getAllFilesHandler);
-router.get("/info/:id", checkAccess("dir", "view"), getItemInfo("dir"));
+router.get("/info/:id", checkAccess("dir", "view"), getItemInfo);
 router.get(
   "/share-info/:id",
   restrictRoot,
-  checkAccess("dir", "view"),
+  checkAccess("dir", "owner"),
   getShareInfo,
 );
-// router.get("/download/:id", checkAccess("dir", "view"), downloadDirectoryHandler);
+router.get(
+  "/download-info/:id",
+  checkAccess("dir", "view"),
+  downloadDirectoryInfoHandler,
+);
+router.get(
+  "/download/:id",
+  checkAccess("dir", "view"),
+  downloadDirectoryHandler,
+);
 
 // POST Routes
 router.post("/new", loadParentDir, createDirectoryHandler);
@@ -56,25 +67,26 @@ router.patch("/starred/:id", restrictRoot, starredItem("dir"));
 router.patch(
   "/rename/:id",
   restrictRoot,
-  checkAccess("dir", "edit"),
+  checkAccess("dir", "owner"),
   renameItem("dir"),
 );
-router.patch("/move/:id", restrictRoot, loadParentDir, moveItem("dir"));
+router.patch(
+  "/move/:id",
+  restrictRoot,
+  loadParentDir,
+  checkAccess("dir", "owner"),
+  moveItem("dir"),
+);
 // router.patch("/public-role/:id", restrictRoot, changePublicRole("dir"));
 
 //PUT Routes
 router.put(
   "/trash/:id",
   restrictRoot,
-  checkAccess("dir", "edit"),
+  checkAccess("dir", "owner"),
   moveToBin("dir"),
 );
-router.put(
-  "/restore/:id",
-  restrictRoot,
-  checkAccess("dir", "edit"),
-  restoreItem("dir"),
-);
+router.put("/restore/:id", restrictRoot, restoreItem("dir"));
 
 // DELETE Routes
 router.delete("/delete/:id", restrictRoot, deleteDirectoryHandler);

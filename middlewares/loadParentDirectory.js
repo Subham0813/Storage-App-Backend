@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import { Directory } from "../models/directory.model.js";
 import { Permission } from "../models/permission.model.js";
 import { getErrorObject } from "../utils/helper.js";
-import { redisClient } from "../configs/radis.js";
+import { redisClient } from "../configs/redis.js";
 
 export const loadParentDir = async (req, res, next) => {
   const targetId = req.body.targetId || req.body.parentId; // Support both
@@ -17,10 +17,10 @@ export const loadParentDir = async (req, res, next) => {
       target = await Directory.findById(targetId)
         .populate({
           path: "userId",
-          select: "maxQuota root",
+          select: "_id name email maxQuota root plan",
           populate: { path: "root", select: "size" },
         })
-        .select("userId ancestors publicRole dirname")
+        .select("userId path publicRole dirname")
         .lean();
 
       if (!target)
@@ -30,22 +30,25 @@ export const loadParentDir = async (req, res, next) => {
 
       if (!isOwner) {
         // ACL Check for Write Access
-        const allItemsToCheck = [...(target.ancestors || []), target._id];
-        const hasAccess = await Permission.exists({
-          userId: req.user._id,
-          itemId: { $in: allItemsToCheck },
-          permission: { $in: ["edit"] },
-        });
+        // const allItemsToCheck = [...(target.path || []), target._id];
+        // const hasAccess = await Permission.exists({
+        //   userId: req.user._id,
+        //   itemId: { $in: allItemsToCheck },
+        //   permission: { $in: ["edit"] },
+        // });
 
-        if (!hasAccess)
-          return next(
-            getErrorObject("Unauthorized to write to this directory.", 403),
-          );
+        // if (!hasAccess)
+        return next(
+          getErrorObject(
+            "Unauthorized to write to this directory. Owner access required.",
+            403,
+          ),
+        );
       }
 
       const record = {
         _id: target._id.toString(),
-        ancestors: target.ancestors,
+        path: target.path,
         userId: target.userId,
         publicRole: target.publicRole,
       };
@@ -55,12 +58,12 @@ export const loadParentDir = async (req, res, next) => {
       target = record;
     }
 
-    if (!target.ancestors.includes(target._id.toString())) {
-      target.ancestors.push(target._id.toString());
+    if (!target.path.includes(target._id.toString())) {
+      target.path.push(target._id.toString());
     }
 
-    req.parent = target; // Ensure controllers use req.parent!
-    req.target = target; // Fallback for your upload controllers
+    req.parent = target; 
+    req.target = target; 
     next();
   } catch (err) {
     next(err);

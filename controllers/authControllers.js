@@ -3,30 +3,32 @@ import * as bcrypt from "bcrypt";
 import crypto from "crypto";
 import { z } from "zod/v4";
 
-import { t, MAX_DEVICE_COUNT } from "../misc/constants.js";
+import { t } from "../misc/constants.js";
 import { User } from "../models/user.model.js";
 import { Directory } from "../models/directory.model.js";
-import { getErrorObject, getUserPayload } from "../utils/helper.js";
+import {
+  getErrorObject,
+  getUserPayload,
+  cookieOptions,
+  safeCompare,
+  setCsrfCookie,
+} from "../utils/helper.js";
+import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
+import {
+  sendOtpEmail,
+  sendPasswordResetConfirmation,
+} from "../services/emailService.js";
 import {
   authTokenSchema,
   loginSchema,
   registerSchema,
   requestOtpSchema,
   verifyOtpSchema,
-} from "../Schemas/authSchema.js";
-import { redisClient } from "../configs/radis.js";
+} from "../schemas/authSchema.js";
+import { redisClient } from "../configs/redis.js";
 
 const fiveMins = 5 * t._min;
 const sevenDays = 7 * t._day;
-
-const cookieOptions = {
-  httpOnly: true,
-  sameSite: "strict",
-  secure: process.env.NODE_ENV === "production",
-  signed: true,
-  maxAge: fiveMins * 1000,
-  path: "/",
-};
 
 /**
  * path: /api/auth/request-otp
@@ -63,36 +65,52 @@ export const requestOtpHandler = async (req, res, next) => {
     }
 
     const session = await mongoose.startSession();
-    let otpExpiresAt, deviceLoggedCount;
-    otpExpiresAt = deviceLoggedCount = null;
+    let otpExpiresAt, activeSessions;
+    otpExpiresAt = activeSessions = null;
 
+    let otp = "";
+    let username = "";
     try {
       await session.withTransaction(async () => {
         const user = await User.findOne({ _id: userId, email })
-          .select("isEmailVerified deviceCount")
           .session(session)
           .lean();
         if (!user) throw getErrorObject("Invalid email address or token.", 404);
+        if (user.isDeleted)
+          throw getErrorObject(
+            "Your account has been banned. Contact support.",
+            403,
+          );
 
-        const otp = crypto.randomInt(100000, 1000000).toString();
+        if (purpose === "login" && user.isTwoFactorEnabled)
+          throw getErrorObject("Two-factor authentication required.", 403);
+
+        otp = crypto.randomInt(100000, 1000000).toString();
 
         const otpKey = `storageApp:user:${user._id}:otp:${purpose}`;
         await redisClient.json.set(otpKey, "$", { otp, email });
         await redisClient.expire(otpKey, fiveMins);
 
+        const indexKey = `storageApp:user:${userId}:session_index`;
+        const sessionKeys = await redisClient.sMembers(indexKey);
+
         otpExpiresAt = new Date(Date.now() + fiveMins * 1000);
-        deviceLoggedCount = user.deviceCount;
+        activeSessions = sessionKeys.length;
+        username = user.name;
       });
     } finally {
       session.endSession();
     }
 
-    //await sendEmail({email, purpose, otp})
+    // Send OTP email
+    sendOtpEmail(username, email, otp, purpose).catch((err) =>
+      console.error("Email sending failed:", err),
+    );
 
     return res.status(201).json({
       success: true,
       message: "An One Time Password has been sent to your Email address.",
-      data: { otpExpiresAt, deviceLoggedCount },
+      data: { otpExpiresAt, activeSessions },
     });
   } catch (err) {
     next(err);
@@ -137,7 +155,7 @@ export const verifyOtpHandler = async (req, res, next) => {
     const storedOtp = await redisClient.json.get(otpKey, "$");
 
     if (!storedOtp) throw getErrorObject("OTP expired.", 410);
-    else if (storedOtp.otp !== otp || storedOtp.email !== email)
+    else if (!safeCompare(storedOtp.otp, otp) || storedOtp.email !== email)
       throw getErrorObject("Invalid email or OTP.");
 
     await redisClient.del(otpKey);
@@ -149,46 +167,53 @@ export const verifyOtpHandler = async (req, res, next) => {
       await redisClient.set(resetKey, email, { EX: fiveMins });
 
       return res
-        .cookie("resetToken", { token, id: userId }, cookieOptions)
+        .cookie(
+          "resetToken",
+          { token, id: userId },
+          cookieOptions({ maxAge: fiveMins * 1000, sameSite: "strict" }),
+        )
         .status(200)
         .json({ success: true, message: "OTP verified." });
     }
 
-    let updatedUser = null;
     const indexKey = `storageApp:user:${userId}:session_index`;
+    let user = await User.findOne({ _id: userId, email })
+      .populate("subscription", "limits.maxDevices")
+      .lean();
+
+    if (!user) throw getErrorObject("User not found.", 404);
+
+    if (user.isDeleted)
+      throw getErrorObject("Your account has been banned. Contact support.", 403);
+
+    if (authPurpose === "login" && user.isTwoFactorEnabled)
+      throw getErrorObject("Two-factor authentication required.", 403);
+
+    const sessionKeys = await redisClient.sMembers(indexKey);
+    const maxDevices = user.subscription?.limits?.maxDevices || 1;
+
+    if (sessionKeys.length >= maxDevices) {
+      if (logoutLastSession) {
+        await redisClient.sRem(indexKey, sessionKeys[0]);
+        await redisClient.del(sessionKeys[0]);
+      } else {
+        throw getErrorObject(
+          "Session creation failed. Max. limit reached.",
+          413,
+        );
+      }
+    }
 
     const _session = await mongoose.startSession();
     try {
       await _session.withTransaction(async () => {
-        //check for user exists
-        const user = await User.findOne({ _id: userId, email })
-          .select("isLogged deviceCount")
-          .session(_session)
-          .lean();
-        if (!user) throw getErrorObject("User not found.", 404);
-
-        if (user.deviceCount >= MAX_DEVICE_COUNT) {
-          if (logoutLastSession) {
-            const sessionKeys = await redisClient.sMembers(indexKey);
-
-            if (sessionKeys.length >= 2) {
-              await redisClient.sRem(indexKey, sessionKeys[0]);
-              await redisClient.del(sessionKeys[0]);
-            }
-          } else {
-            throw getErrorObject(
-              "Session creation failed. Max. limit reached.",
-              413,
-            );
-          }
-        }
-
-        const incr = user.deviceCount < MAX_DEVICE_COUNT ? 1 : 0;
-        updatedUser = await User.findByIdAndUpdate(
+        user = await User.findByIdAndUpdate(
           user._id,
-          { $set: { isLogged: true }, $inc: { deviceCount: incr } },
+          { $set: { lastLogin: new Date() } },
           { returnDocument: "after" },
-        ).populate("root", "name size")
+        )
+          .populate("root", "_id name size")
+          .populate("subscription")
           .session(_session)
           .lean();
       });
@@ -196,38 +221,34 @@ export const verifyOtpHandler = async (req, res, next) => {
       await _session.endSession();
     }
 
-    const user = getUserPayload(updatedUser);
     const userKey = `storageApp:user:${user._id}:userdata`;
     const sessionKey = `storageApp:user:${user._id}:session:${token}`;
 
     await Promise.all([
-      redisClient.json.set(userKey, "$", updatedUser),
-      redisClient.json.set(sessionKey, "$", { exp: sevenDays }),
+      redisClient.json.set(userKey, "$", user),
+      redisClient.json.set(sessionKey, "$", {
+        exp: sevenDays,
+        createdAt: Date.now(),
+        userAgent: req.headers["user-agent"] || "unknown",
+      }),
       redisClient.sAdd(indexKey, sessionKey),
-
-      redisClient.expire(userKey, t._min),
+      redisClient.expire(userKey, 2 * t._min),
       redisClient.expire(sessionKey, sevenDays),
       redisClient.expire(indexKey, sevenDays),
     ]);
 
+    setCsrfCookie(res);
     return res
       .cookie(
         "sessionId",
         { token, id: user._id },
-        {
-          httpOnly: true,
-          sameSite: "lax",
-          secure: process.env.NODE_ENV === "production",
-          signed: true,
-          maxAge: sevenDays * 1000,
-          path: "/",
-        },
+        cookieOptions({ maxAge: sevenDays * 1000, sameSite: "lax" }),
       )
       .status(201)
       .json({
         success: true,
         message: "Session created.",
-        data: { user },
+        data: { user: await getUserPayload(user) },
       });
   } catch (err) {
     next(err);
@@ -252,16 +273,31 @@ export const loginHandler = async (req, res, next) => {
 
     const { email, password } = data;
     // $or: [{ email: userEmail }, { username: username }],
-    const user = await User.findOne({ email }).select("+password");
+    const user = await User.findOne({ email }).select(
+      "+password isTwoFactorEnabled isDeleted",
+    );
 
     if (!user || !user.password || !(await user.comparePassword(password))) {
       return next(getErrorObject("Incorrect email or password."));
     }
 
+    if (user.isDeleted)
+      return next(
+        getErrorObject("Your account has been banned. Contact support.", 403),
+      );
+
     return res
-      .cookie("authToken", { purpose: "login", id: user._id }, cookieOptions)
+      .cookie(
+        "authToken",
+        { purpose: "login", id: user._id },
+        cookieOptions({ maxAge: fiveMins * 1000, sameSite: "strict" }),
+      )
       .status(200)
-      .json({ success: true, message: "Login token created." });
+      .json({
+        success: true,
+        message: "Login token created.",
+        data: { isTwoFactorEnabled: user.isTwoFactorEnabled },
+      });
   } catch (err) {
     next(err);
   }
@@ -293,9 +329,17 @@ export const registerHandler = async (req, res, next) => {
         const existingUser = await User.findOne({ email }).session(session);
         if (existingUser) throw getErrorObject("User already registered.", 409);
 
-        [user] = await User.create([{ name, email, password }], {
-          session,
-        });
+        [user] = await User.create(
+          [
+            {
+              name,
+              email,
+              password,
+              bandwidthResetAt: getBandwidthResetAt(),
+            },
+          ],
+          { session },
+        );
         const [root] = await Directory.create(
           [
             {
@@ -318,7 +362,11 @@ export const registerHandler = async (req, res, next) => {
     }
 
     return res
-      .cookie("authToken", { purpose: "register", id: user._id }, cookieOptions)
+      .cookie(
+        "authToken",
+        { purpose: "register", id: user._id },
+        cookieOptions({ maxAge: fiveMins * 1000, sameSite: "strict" }),
+      )
       .status(200)
       .json({ success: true, message: "Register token created." });
   } catch (err) {
@@ -344,17 +392,26 @@ export const forgotPasswordInitHandler = async (req, res, next) => {
       return next(getErrorObject(errorMessage));
     }
 
-    const user = await User.findOne({ email: data.email }).select("_id").lean();
+    const user = await User.findOne({ email: data.email })
+      .select("_id isDeleted")
+      .lean();
     if (!user) return next(getErrorObject("User not found.", 404));
+    if (user.isDeleted)
+      return next(
+        getErrorObject("Your account has been banned. Contact support.", 403),
+      );
 
     return res
       .cookie(
         "authToken",
         { purpose: "forgot-password", id: user._id },
-        cookieOptions,
+        cookieOptions({ maxAge: fiveMins * 1000, sameSite: "strict" }),
       )
       .status(200)
-      .json({ success: true, message: "Password changing token created." });
+      .json({
+        success: true,
+        message: "Reset token created. Proceed to create otp.",
+      });
   } catch (err) {
     next(err);
   }
@@ -391,21 +448,43 @@ export const forgotPasswordHandler = async (req, res, next) => {
     if (!storedEmail) return next(getErrorObject("Invalid or expired token."));
     await redisClient.del(resetKey);
 
+    const bannedUser = await User.findOne({ _id: userId, email: storedEmail })
+      .select("_id isDeleted")
+      .lean();
+    if (bannedUser?.isDeleted)
+      return next(
+        getErrorObject("Your account has been banned. Contact support.", 403),
+      );
+
     const hashedPassword = await bcrypt.hash(newPassword, 12);
     const session = await mongoose.startSession();
+    let username = "";
     try {
       await session.withTransaction(async () => {
-        await User.updateOne(
+        const user = await User.findOneAndUpdate(
           { _id: userId, email: storedEmail },
           { $set: { password: hashedPassword } },
         ).session(session);
+
+        username = user.name;
       });
     } finally {
       await session.endSession();
     }
 
-    //password changed success message
-    //await sendEmail({email, purpose})
+    // Revoke all existing sessions so a password reset kicks out every device.
+    const indexKey = `storageApp:user:${userId}:session_index`;
+    const sessions = await redisClient.sMembers(indexKey);
+    if (sessions.length > 0) {
+      await redisClient.sRem(indexKey, sessions);
+      await redisClient.del(sessions);
+    }
+    await redisClient.del(`storageApp:user:${userId}:userdata`);
+
+    // Send password reset confirmation email
+    sendPasswordResetConfirmation(username, storedEmail).catch((err) =>
+      console.error("Email sending failed:", err),
+    );
 
     return res
       .clearCookie("resetToken")
