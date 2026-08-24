@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "start": "node --env-file=.env app.js",
-    "dev": "node --env-file=.env --watch app.js"
+    "dev": "node --env-file=.env --watch app.js",
+    "worker": "node --env-file=.env jobs/queueJobs.js worker",
+    "worker:scheduler": "node --env-file=.env jobs/queueJobs.js scheduler"
   },
   "keywords": [],
   "author": "",

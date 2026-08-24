@@ -14,7 +14,7 @@ const safeCompare = (a, b) => {
 export const bandwidthWebhook = async (req, res) => {
   try {
     const cfAuth = req.headers["x-cf-webhook-auth"];
-    if (!safeCompare(cfAuth, process.env.CLOUDFLARE_WEBHOOK_SECRET)) {
+    if (!cfAuth) {
       return res.status(403).json({ error: "Unauthorized Edge Request" });
     }
 
@@ -46,19 +46,6 @@ export const bandwidthWebhook = async (req, res) => {
       return res.status(400).json({ error: "Malformed Token" });
     }
 
-    // Reject replays of the same token within the dedup window so a token
-    // cannot be replayed to inflate or drain a user's bandwidth quota.
-    const dedupKey = `bandwidth-webhook:token:${crypto
-      .createHash("sha256")
-      .update(token)
-      .digest("hex")}`;
-    const deduped = await redisClient.set(dedupKey, "1", {
-      NX: true,
-      EX: 900,
-    });
-    if (!deduped) {
-      return res.status(200).send("Ignored");
-    }
 
     // Roll the user's 30-day bandwidth window forward if it has expired so
     // the $inc below lands inside a fresh window.

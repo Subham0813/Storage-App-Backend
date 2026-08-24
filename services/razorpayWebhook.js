@@ -7,7 +7,10 @@ import { Subscription } from "../models/subscription.model.js";
 import { User } from "../models/user.model.js";
 import { redisClient } from "../configs/redis.js";
 import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
-import { getRazorpayInstance, retireOldSubscriptions } from "../controllers/subscriptionControllers.js";
+import {
+  getRazorpayInstance,
+  retireOldSubscriptions,
+} from "../controllers/subscriptionControllers.js";
 import { sendInvoiceEmail } from "./emailService.js";
 
 export const razorpayWebhook = async (req, res, next) => {
@@ -17,6 +20,13 @@ export const razorpayWebhook = async (req, res, next) => {
       process.env.NODE_ENV === "production"
         ? process.env.RAZORPAY_WEBHOOK_SECRET
         : process.env.TEST_RAZORPAY_WEBHOOK_SECRET;
+
+    const expectedSignature = crypto
+      .createHmac("sha256", JSON.stringify(req.body))
+      .update(webhookSecret)
+      .digest("hex");
+    console.log({ expectedSignature, signature });
+    
     const isValidSignature = Razorpay.validateWebhookSignature(
       JSON.stringify(req.body),
       signature,
@@ -86,8 +96,7 @@ export const razorpayWebhook = async (req, res, next) => {
               const existingPlan = (
                 await User.findById(userId, { plan: 1 }).session(session).lean()
               )?.plan;
-              const planChanged =
-                !!existingPlan && existingPlan !== planKey;
+              const planChanged = !!existingPlan && existingPlan !== planKey;
 
               await User.updateOne(
                 {

@@ -213,7 +213,7 @@ export const getStarredItems = (model) => {
       let items = await Model.find(query)
         .sort({ _id: 1 })
         .limit(limit)
-        .populate("path", "_id name", { isDeleted: false })
+        .populate("userId", "_id name", { isDeleted: false })
         .lean();
 
       const nextCursor =
@@ -316,7 +316,7 @@ export const getSharedBy = (model) => {
       }).lean();
 
       const projectionStr =
-        "userId parentId name mime size createdAt updatedAt";
+        "userId parentId name mime size isDeleted isStarred createdAt updatedAt";
 
       const query = {
         $or: [
