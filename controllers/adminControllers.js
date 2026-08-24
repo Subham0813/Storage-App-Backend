@@ -278,7 +278,7 @@ export const getSingleUser = async (req, res, next) => {
 };
 
 /**
- * path: /api/admin/change-role/:id
+ * path: /api/admin/user/:id/role
  * what it do: Change the role of a user.
  * requirements:
  *   - req.params: { id: string } (valid Mongo ObjectId)
@@ -389,7 +389,7 @@ export const updateUserQuota = async (req, res, next) => {
 };
 
 /**
- * path: /api/admin/logout-user/:id
+ * path: /api/admin/user/:id/logout
  * what it do: Log out a user by deleting their sessions.
  * requirements:
  *   - req.params: { id: string } (valid Mongo ObjectId)
@@ -446,7 +446,7 @@ export const logoutUser = async (req, res, next) => {
 };
 
 /**
- * path: /api/admin/remove-user/:id
+ * path: /api/admin/user/:id/temp-remove
  * what it do: Soft-delete a user (can be recovered).
  * requirements:
  *   - req.params: { id: string } (valid Mongo ObjectId)
@@ -512,7 +512,7 @@ export const tempRemoveUser = async (req, res, next) => {
 };
 
 /**
- * path: /api/admin/recover-user/:id
+ * path: /api/admin/user/:id/recover
  * what it do: Recover a soft-deleted user. Only SUPER_ADMIN can recover.
  * requirements:
  *   - req.params: { id: string } (valid Mongo ObjectId)
@@ -551,7 +551,7 @@ export const recoverUser = async (req, res, next) => {
 };
 
 /**
- * path: /api/admin/delete-user/:id
+ * path: /api/admin/user/:id/delete
  * what it do: Permanently delete a user and all their data. Only SUPER_ADMIN can delete.
  * requirements:
  *   - req.params: { id: string } (valid Mongo ObjectId)
