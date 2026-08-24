@@ -94,7 +94,7 @@ export const startBullMQWorker = () => {
             const newPlan = PLAN_DETAILS[sub.planKey];
 
             const userDoc = await User.findByIdAndUpdate(sub.user, {
-              plan: sub.planKey.split("_")[0],
+              plan: sub.planKey,
               maxQuota: newPlan.quotaBytes,
               maxBandwidthQuota: newPlan.monthlyBandwidthLimit,
               gracePeriodEndsAt: new Date(

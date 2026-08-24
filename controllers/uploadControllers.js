@@ -20,7 +20,7 @@ import {
   uploadCompleteSchema,
   uploadInitSchema,
 } from "../schemas/userSchema.js";
-import { PLAN_DETAILS, t, THUMBNAIL_SIZE } from "../misc/constants.js";
+import { t, THUMBNAIL_SIZE } from "../misc/constants.js";
 import { getErrorObject, getFileDoc, getUserLimits } from "../utils/helper.js";
 import { DeleteObjectsCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { logActivity } from "../utils/activityLogger.js";
@@ -119,9 +119,6 @@ export const initiateUpload = async (req, res, next) => {
 
     const extension = name.split(".").pop();
     const key = `files/${targetUserId}/${Date.now()}.${extension}`;
-
-    const planKey = req.user.subscription?.planKey || req.user.plan;
-    const planDetail = PLAN_DETAILS[planKey];
 
     let uploadId, presignedUrls, totalParts, partSize, uploadType;
 

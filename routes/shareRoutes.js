@@ -1,4 +1,4 @@
-import Router from "express";
+import { Router } from "express";
 import { getItemInfo } from "../controllers/commonGetControllers.js";
 import {
   downloadFileHandler,
@@ -6,7 +6,7 @@ import {
 } from "../controllers/FileControllers.js";
 import { verifyShareToken } from "../middlewares/validateSession.js";
 
-const router = new Router();
+const router = Router();
 
 router.get("/:token", verifyShareToken, previewFileHandler);
 router.get("/:token/download", verifyShareToken, downloadFileHandler);

@@ -14,7 +14,6 @@ import {
 import { redisClient } from "../configs/redis.js";
 import { IS_SAAS_MODE } from "../misc/constants.js";
 import { User } from "../models/user.model.js";
-import { UserFile as File } from "../models/user_file.model.js";
 import { Permission } from "../models/permission.model.js";
 import { generateSecureDownloadUrl } from "../services/cdnRouter.js";
 import { logActivity } from "../utils/activityLogger.js";
@@ -82,7 +81,7 @@ export const previewFileHandler = async (req, res, next) => {
     );
 
     // Hybrid Tracking
-    await File.findByIdAndUpdate(file._id, {
+    await UserFile.findByIdAndUpdate(file._id, {
       $inc: { accessCount: 1 },
       $set: { lastAccessedAt: new Date() },
     });
@@ -153,7 +152,7 @@ export const downloadFileHandler = async (req, res, next) => {
     );
 
     // Hybrid Tracking
-    await File.findByIdAndUpdate(file._id, {
+    await UserFile.findByIdAndUpdate(file._id, {
       $inc: { accessCount: 1 },
       $set: { lastAccessedAt: new Date() },
     });

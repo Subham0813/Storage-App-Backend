@@ -107,6 +107,7 @@ const userSchema = new Schema(
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },
     deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    gracePeriodEndsAt: { type: Date, default: null },
   },
   { strict: "throw", timestamps: true },
 );

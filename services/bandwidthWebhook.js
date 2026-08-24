@@ -53,7 +53,6 @@ export const bandwidthWebhook = async (req, res) => {
       bandwidthResetAt: 1,
     }).lean();
     if (!userDoc) {
-      await redisClient.del(dedupKey).catch(console.error);
       return res.status(200).send("Ignored");
     }
     await ensureBandwidthWindow(userDoc);
@@ -63,7 +62,6 @@ export const bandwidthWebhook = async (req, res) => {
       { $inc: { usedBandwidthQuota: bytesSent } },
     );
     if (updateResult.matchedCount === 0) {
-      await redisClient.del(dedupKey).catch(console.error);
       return res.status(200).send("Ignored");
     }
 

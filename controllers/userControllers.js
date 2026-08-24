@@ -51,7 +51,7 @@ export const getUsage = async (req, res, next) => {
 };
 
 /**
- * path: /api/user/storage
+ * path: /api/user/stats
  * what it do: Count all the files that belongs to the user.
  */
 export const getUserStats = async (req, res, next) => {

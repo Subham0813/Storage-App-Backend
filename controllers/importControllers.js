@@ -29,7 +29,6 @@ import {
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
   GOOGLE_DRIVE_REDIRECT_URI,
-  PLAN_DETAILS,
   t,
 } from "../misc/constants.js";
 import { uploadInitSchema } from "../schemas/userSchema.js";
@@ -512,7 +511,7 @@ export const getImportProgress = async (req, res, next) => {
 };
 
 /**
- * path: /api/google/picker-token
+ * path: /api/import/google/picker-token
  * what it do: Retrieves a valid Google Drive Access Token for the frontend Picker UI.
  * Automatically refreshes the token if it has expired.
  */

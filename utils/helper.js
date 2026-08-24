@@ -209,7 +209,7 @@ export const getUserLimits = (user) => {
 
     return {
       maxStorage:
-        user.subscription?.limits?.maxStorage || planDetail.maxStorage,
+        user.subscription?.limits?.quotaBytes || planDetail.quotaBytes,
       maxFileSize:
         user.subscription?.limits?.maxFileSize || planDetail.maxFileSize,
       monthlyBandwidth:
@@ -217,16 +217,21 @@ export const getUserLimits = (user) => {
         planDetail.monthlyBandwidthLimit,
       chunkSize: planDetail.chunkSize || 5e6,
       maxUploadConcurrency: planDetail.maxUploadConcurrency || 4,
+      trashRetentionDays: planDetail.trashRetentionDays || 5,
+      canCreatePublicLinks: planDetail.canCreatePublicLinks ?? false,
+      maxDevices: planDetail.maxDevices || 1,
     };
   }
 
   // Self-Hosted Mode: Rely on Admin-controlled database fields and global configs
   return {
-    // maxQuota / maxBandwidthQuota are the real per-user fields on the User model
-    maxStorage: user.maxQuota || Infinity, // 2GB default (schema default) for saas & infinite for selfhosted
-    monthlyBandwidth: user.maxBandwidthQuota || Infinity, // 5GB default (schema default)for saas & infinite for selfhosted
-    maxFileSize: INSTANCE_CONFIG.maxFileSize || 50e9, // 50GB default
-    chunkSize: INSTANCE_CONFIG.chunkSize || 5e6, // 5MB chunks
+    maxStorage: user.maxQuota ?? Infinity,
+    monthlyBandwidth: user.maxBandwidthQuota ?? Infinity,
+    maxFileSize: INSTANCE_CONFIG.maxFileSize || 50e9,
+    chunkSize: INSTANCE_CONFIG.chunkSize || 5e6,
     maxUploadConcurrency: INSTANCE_CONFIG.maxUploadConcurrency || 4,
+    trashRetentionDays: PLAN_DETAILS.FREE.trashRetentionDays,
+    canCreatePublicLinks: true,
+    maxDevices: Infinity,
   };
 };

@@ -278,8 +278,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     if (user.isDeleted) throw new Error("error=account_banned");
 
     if (user.integrations) {
-      user.integrations =
-        Object.keys(user.integrations)?.map((i) => i.provider) || [];
+      user.integrations = Object.keys(user.integrations).join("&") || "";
     }
 
     const userdata = user;
@@ -340,7 +339,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
   } catch (err) {
     console.log(err);
     return res.redirect(
-      `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?$error=server_error`,
+      `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?error=server_error`,
     );
   }
 };
@@ -487,7 +486,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
 
     if (user.isDeleted) throw new Error("error=account_banned");
 
-    user.integrations = user.integrations?.map((i) => i.provider) || [];
+    user.integrations = Object.keys(user.integrations || {}).join("&") || "";
     const userKey = `storageApp:user:${user._id}:userdata`;
     await Promise.all([
       redisClient.json.set(userKey, "$", user),

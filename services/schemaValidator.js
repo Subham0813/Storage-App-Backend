@@ -147,7 +147,7 @@ await db.command({
       additionalProperties: false,
     },
   },
-  validationLevel: "strict",
+  validationLevel: "moderate",
   validationAction: "error",
 });
 
@@ -255,7 +255,7 @@ await db.command({
       additionalProperties: false,
     },
   },
-  validationLevel: "strict",
+  validationLevel: "moderate",
   validationAction: "error",
 });
 
@@ -343,7 +343,7 @@ await db.command({
       additionalProperties: false,
     },
   },
-  validationLevel: "strict",
+  validationLevel: "moderate",
   validationAction: "error",
 });
 
@@ -390,7 +390,7 @@ await db.command({
       additionalProperties: false,
     },
   },
-  validationLevel: "strict",
+  validationLevel: "moderate",
   validationAction: "error",
 });
 

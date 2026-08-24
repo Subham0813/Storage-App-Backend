@@ -16,16 +16,17 @@ import { UserFile } from "../models/user_file.model.js";
 import { filenameSchema } from "../schemas/userSchema.js";
 import { deleteS3Objects } from "../services/s3Client.js";
 import { redisClient } from "../configs/redis.js";
-import { promise } from "zod";
 import { logActivity } from "../utils/activityLogger.js";
 import { User } from "../models/user.model.js";
-import { PLAN_DETAILS } from "../misc/constants.js";
+import { IS_SAAS_MODE } from "../misc/constants.js";
 import { ensureBandwidthWindow } from "../utils/bandwidthWindow.js";
+
+const isCloudflare = IS_SAAS_MODE && process.env.CDN_PROVIDER === "cloudflare";
 
 const MAX_CONCURRENT_DOWNLOADS = 3;
 
 /**
- * path: /api/directories/:id
+ * path: /api/directories/all-dirs/:id
  * what it do: List child directories of the given parent directory id if access allowed.
  * requirements:
  *   - req.params: { id: string } (valid Mongo ObjectId)
@@ -120,72 +121,6 @@ export const getAllFilesHandler = async (req, res, next) => {
  *   - req.params: { id: string } (directory id)
  *   - req.user: authenticated user object provided by `validateSession`
  */
-// export const downloadDirectoryHandler = async (req, res, next) => {
-//   try {
-//     const safeDirname = sanitizeName(req.Item.name);
-//     const safeTimeStamp = new Date().toISOString().replace(/[-:.]/g, "");
-
-//     const zipName = `${safeDirname}-${safeTimeStamp}.zip`;
-//     // const zipPath = path.join(process.cwd(),"uploads", "temp", zipName);
-//     // const output = createWriteStream(zipPath);
-
-//     res.writeHead(200, {
-//       "Content-Type": "application/zip",
-//       "Content-Disposition": `attachment; filename="${zipName}"`,
-//       "X-Content-Type-Options": "nosniff",
-//     });
-
-//     // Create ZIP stream
-//     const archive = archiver("zip", {
-//       zlib: { level: 2 },
-//     });
-
-//     // If client aborts, stop everything
-//     req.on("close", () => {
-//       // console.info("Client closed download.");
-//       archive.abort();
-//     });
-
-//     req.on("aborted", () => {
-//       // console.info("Client aborted download.");
-//       archive.abort();
-//     });
-
-//     req.on("finish", () => console.info("Zip served successfully."));
-
-//     archive.on("error", (err) => {
-//       archive.abort();
-//       next(err);
-//     });
-
-//     // archive.pipe(output);
-//     // console.info("Zip creating started");
-
-//     await archive.pipe(res);
-//     console.info("Zip serving started");
-
-//     // Traverse Directory tree and add files
-//     const visited = new Set();
-
-//     await serveZip({
-//       archive,
-//       dirId: req.Item._id,
-//       zipPath: `${safeDirname}/`,
-//       visited,
-//     });
-
-//     // Finalize ZIP
-//     await archive.finalize();
-//   } catch (err) {
-//     if (res.headersSent) {
-//       console.error("Stream failed mid-download:", err.message);
-//       res.end();
-//     } else {
-//       next(err);
-//     }
-//   }
-// };
-
 export const downloadDirectoryInfoHandler = async (req, res, next) => {
   try {
     const dir = await Directory.findOne({
@@ -250,10 +185,8 @@ export const downloadDirectoryHandler = async (req, res, next) => {
     await ensureBandwidthWindow(owner);
 
     const usedBandwidth = owner.usedBandwidthQuota || 0;
-    const bandwidthLimit =
-      owner?.subscription?.limits?.monthlyBandwidthLimit ||
-      PLAN_DETAILS[owner.plan]?.monthlyBandwidthLimit ||
-      0;
+    const limits = getUserLimits(owner);
+    const bandwidthLimit = limits.monthlyBandwidth;
 
     if (usedBandwidth >= bandwidthLimit) {
       return next(
@@ -332,7 +265,7 @@ export const downloadDirectoryHandler = async (req, res, next) => {
     await archive.finalize();
     byteCounter.end();
 
-    if (totalBytes > 0) {
+    if (totalBytes > 0 && !isCloudflare) {
       await User.findByIdAndUpdate(owner._id, {
         $inc: { usedBandwidthQuota: totalBytes },
       });

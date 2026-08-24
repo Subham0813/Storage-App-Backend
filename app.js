@@ -31,7 +31,6 @@ import {
   publicLinkLimiter,
 } from "./middlewares/rateLimiter.js";
 
-import { getPlanOptions } from "./controllers/subscriptionControllers.js";
 import { getErrorObject } from "./utils/helper.js";
 import {
   requiredEnvVars,
@@ -98,7 +97,6 @@ try {
   app.use("/api/auth", authLimiter, authRoutes);
   app.use("/api/oauth", authLimiter, oauthRoutes);
   app.use("/api/public/shared", publicLinkLimiter, shareRoutes);
-  app.get("/api/subscriptions/plans", globalLimiter, getPlanOptions);
 
   app.post("/api/subscriptions/webhook", globalLimiter, razorpayWebhook);
   app.post("/api/files/webhook", globalLimiter, requireSaasMode, bandwidthWebhook);

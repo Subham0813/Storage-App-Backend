@@ -10,6 +10,7 @@ import {
   attachPermissionsCount,
   getErrorObject,
   getFileDoc,
+  getUserLimits,
 } from "../utils/helper.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
@@ -168,15 +169,18 @@ export const moveItem = (model) => {
         return next(getErrorObject("Item can not be moved to child.", 403));
       } else if (item.parentId.toString() === target._id.toString()) {
         return next(getErrorObject("Item already exists in the target.", 409));
-      } else if (
-        parseInt(item.size) >
-        target.userId.maxQuota - target.userId.root.size
-      ) {
-        return next(
-          getErrorObject(
-            "Can not perform operation due to insufficient quota.",
-          ),
-        );
+      } else {
+        const targetLimits = getUserLimits(target.userId);
+        if (
+          targetLimits.maxStorage !== Infinity &&
+          parseInt(item.size) > targetLimits.maxStorage - (target.userId.root?.size || 0)
+        ) {
+          return next(
+            getErrorObject(
+              "Can not perform operation due to insufficient quota.",
+            ),
+          );
+        }
       }
 
       const path = [];
@@ -547,11 +551,9 @@ export const shareAccess = (model) => {
           publicRole &&
           !req.user.subscription?.limits?.canCreatePublicLinks
         ) {
-          return next(
-            getErrorObject(
-              "Your current plan does not support public link sharing. Please upgrade.",
-              403,
-            ),
+          throw getErrorObject(
+            "Your current plan does not support public link sharing. Please upgrade.",
+            403,
           );
         }
 

@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
 import Razorpay from "razorpay";
-import crypto from "crypto";
 
 import { PLAN_DETAILS, t } from "../misc/constants.js";
 import { Subscription } from "../models/subscription.model.js";
@@ -21,12 +20,6 @@ export const razorpayWebhook = async (req, res, next) => {
         ? process.env.RAZORPAY_WEBHOOK_SECRET
         : process.env.TEST_RAZORPAY_WEBHOOK_SECRET;
 
-    const expectedSignature = crypto
-      .createHmac("sha256", JSON.stringify(req.body))
-      .update(webhookSecret)
-      .digest("hex");
-    console.log({ expectedSignature, signature });
-    
     const isValidSignature = Razorpay.validateWebhookSignature(
       JSON.stringify(req.body),
       signature,
