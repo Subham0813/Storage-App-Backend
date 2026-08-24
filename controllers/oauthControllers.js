@@ -211,7 +211,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     if (userSession) {
       user = await User.findOne({ _id: userSession.id }).lean();
     } else {
-      user = await User.findOne({ googleId: sub, email }).lean();
+      user = await User.findOne({ email }).lean();
     }
 
     const updateQuery = { $set: {} };
@@ -338,9 +338,9 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
       `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?success=true`,
     );
   } catch (err) {
-    // console.log(err);
+    console.log(err);
     return res.redirect(
-      `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?${err.message}`,
+      `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?$error=server_error`,
     );
   }
 };
@@ -430,10 +430,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
         .populate("subscription", "limits")
         .lean();
     } else {
-      user = await User.findOne({
-        githubId: id,
-        authProviders: { $in: ["github"] },
-      })
+      user = await User.findOne({ email })
         .populate("subscription", "limits")
         .lean();
     }
@@ -548,7 +545,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
     );
   } catch (err) {
     return res.redirect(
-      `${process.env.CLIENT_AUTH_CALLBACK_URL}/github?${err.message}`,
+      `${process.env.CLIENT_AUTH_CALLBACK_URL}/github?error=server_error`,
     );
   }
 };
@@ -665,7 +662,7 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
   } catch (err) {
     // console.log(err);
     return res.redirect(
-      `${process.env.CLIENT_AUTH_CALLBACK_URL}/google-drive?${err.message}`,
+      `${process.env.CLIENT_AUTH_CALLBACK_URL}/google-drive?error=server_error`,
     );
   }
 };

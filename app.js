@@ -5,7 +5,6 @@ import helmet, { contentSecurityPolicy } from "helmet";
 
 import connectMongoose from "./configs/connect.js";
 import { redisClient } from "./configs/redis.js";
-import "./jobs/queueJobs.js";
 
 import adminRoutes from "./routes/adminRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
@@ -45,34 +44,32 @@ import requireSaasMode from "./middlewares/requireSaasMode.js";
 
 import { bandwidthWebhook } from "./services/bandwidthWebhook.js";
 import { razorpayWebhook } from "./services/razorpayWebhook.js";
-import { startBullMQJobs } from "./jobs/queueJobs.js";
 
-const missingVars = requiredEnvVars.filter((v) => !process.env[v]);
-if (EMAIL_PROVIDER === "smtp") {
-  missingVars.push(...smtpEnvVars.filter((v) => !process.env[v]));
-} else if (!process.env.RESEND_API_KEY) {
-  missingVars.push("RESEND_API_KEY");
-}
-if (IS_SAAS_MODE) {
-  missingVars.push(...requiredSaaSVars.filter((v) => !process.env[v]));
-  if (
-    process.env.CDN_PROVIDER === "cloudflare" &&
-    !process.env.CLOUDFLARE_WEBHOOK_SECRET
-  ) {
-    missingVars.push("CLOUDFLARE_WEBHOOK_SECRET");
-  }
-}
-if (missingVars.length > 0) {
-  console.error(
-    "Missing required environment variables:",
-    missingVars.join(", "),
-  );
-  process.exit(1);
-}
+// const missingVars = requiredEnvVars.filter((v) => !process.env[v]);
+// if (EMAIL_PROVIDER === "smtp") {
+//   missingVars.push(...smtpEnvVars.filter((v) => !process.env[v]));
+// } else if (!process.env.RESEND_API_KEY) {
+//   missingVars.push("RESEND_API_KEY");
+// }
+// if (IS_SAAS_MODE) {
+//   missingVars.push(...requiredSaaSVars.filter((v) => !process.env[v]));
+//   if (
+//     process.env.CDN_PROVIDER === "cloudflare" &&
+//     !process.env.CLOUDFLARE_WEBHOOK_SECRET
+//   ) {
+//     missingVars.push("CLOUDFLARE_WEBHOOK_SECRET");
+//   }
+// }
+// if (missingVars.length > 0) {
+//   console.error(
+//     "Missing required environment variables:",
+//     missingVars.join(", "),
+//   );
+//   process.exit(1);
+// }
 
 try {
   await connectMongoose();
-  // await startBullMQJobs();
   const app = express();
   app.set("trust proxy", 1);
   const port = process.env.PORT || 4000;
@@ -82,6 +79,7 @@ try {
 
   app.use(cors({ origin: origins, credentials: true }));
   app.use(cookieParser(process.env.COOKIE_SECRET));
+
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -94,7 +92,8 @@ try {
       xFrameOptions: { action: "deny" },
     }),
   );
-  app.use(express.json({ limit: "2mb" }));
+
+  app.use(express.json({ limit: "1mb" }));
 
   app.use("/api/auth", authLimiter, authRoutes);
   app.use("/api/oauth", authLimiter, oauthRoutes);
