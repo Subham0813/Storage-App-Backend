@@ -11,11 +11,12 @@ import {
 } from "../services/emailService.js";
 import { redisClient } from "../configs/redis.js";
 import { deleteS3Objects } from "../services/s3Client.js";
-import { PLAN_DETAILS } from "../misc/constants.js";
+import { IS_SAAS_MODE, PLAN_DETAILS } from "../misc/constants.js";
 import { Permission } from "../models/permission.model.js";
 import { Subscription } from "../models/subscription.model.js";
 import { Feedback } from "../models/feedback.model.js";
 import { ActivityLog } from "../models/activity_log.model.js";
+import { quotaSchema } from "../schemas/userSchema.js";
 
 /**
  * path: /api/admin/dashboard
@@ -28,55 +29,72 @@ export const getDashboardStats = async (req, res, next) => {
     const limit =
       req.query?.limit > 0 && req.query?.limit <= 100 ? req.query?.limit : 20;
 
-    const [totalUsers, activeUsers, storageResult, fileStats, planBreakdown, recentUsers] =
-      await Promise.all([
-        User.countDocuments({}),
-        (async () => {
-          const nowSec = Math.floor(Date.now() / 1000);
-          return redisClient.zCount(
-            "storageApp:active_users",
-            nowSec - 60,
-            nowSec,
-          );
-        })(),
-        (async () => {
-          const roots = await User.distinct("root", { isDeleted: { $ne: true } });
-          if (!roots.length) return [];
-          return Directory.aggregate([
-            { $match: { _id: { $in: roots } } },
-            { $group: { _id: null, total: { $sum: "$size" } } },
-          ]);
-        })(),
-        UserFile.aggregate([
-          { $match: { isDeleted: { $ne: true } } },
-          { $group: { _id: null, totalFiles: { $sum: 1 }, totalSize: { $sum: "$size" } } },
-        ]),
-        User.aggregate([
-          { $match: { isDeleted: { $ne: true } } },
-          { $group: { _id: "$plan", count: { $sum: 1 } } },
-          { $sort: { count: -1 } },
-        ]),
-        User.find({})
-          .select("name email plan isDeleted lastLogin lastActiveAt createdAt")
-          .sort({ createdAt: -1 })
-          .limit(limit)
-          .lean(),
-      ]);
+    const [
+      totalUsers,
+      activeUsers,
+      storageResult,
+      fileStats,
+      planBreakdown,
+      recentUsers,
+    ] = await Promise.all([
+      User.countDocuments({}),
+
+      (async () => {
+        const nowSec = Math.floor(Date.now() / 1000);
+        return redisClient.zCount(
+          "storageApp:active_users",
+          nowSec - 60,
+          nowSec,
+        );
+      })(),
+
+      (async () => {
+        const roots = await User.distinct("root", { isDeleted: { $ne: true } });
+        if (!roots.length) return [];
+        return Directory.aggregate([
+          { $match: { _id: { $in: roots } } },
+          { $group: { _id: null, total: { $sum: "$size" } } },
+        ]);
+      })(),
+
+      UserFile.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
+        {
+          $group: {
+            _id: null,
+            totalFiles: { $sum: 1 },
+            totalSize: { $sum: "$size" },
+          },
+        },
+      ]),
+
+      User.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
+        { $group: { _id: "$plan", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
+      
+      User.find({})
+        .select(
+          "name email role plan isDeleted lastLogin lastActiveAt createdAt",
+        )
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean(),
+    ]);
 
     const storageUsedBytes = storageResult[0]?.total || 0;
     const totalFiles = fileStats[0]?.totalFiles || 0;
-    const totalDirs = await Directory.countDocuments({ isDeleted: { $ne: true } });
+    const totalDirs = await Directory.countDocuments({
+      isDeleted: { $ne: true },
+    });
 
     const planMap = {
       FREE: "FREE",
       PRO_MONTHLY: "PRO",
       PRO_YEARLY: "PRO",
-      ULTRA_MONTHLY: "ULTRA",
-      ULTRA_YEARLY: "ULTRA",
-      PREMIUM_MONTHLY: "PREMIUM",
-      PREMIUM_YEARLY: "PREMIUM",
-      ELITE_MONTHLY: "ELITE",
-      ELITE_YEARLY: "ELITE",
+      BUSINESS_MONTHLY: "BUSINESS",
+      BUSINESS_YEARLY: "BUSINESS",
     };
 
     const aggregated = {};
@@ -122,6 +140,7 @@ export const getDashboardStats = async (req, res, next) => {
           name: u.name,
           email: u.email,
           plan: u.plan,
+          role: u.role,
           isDeleted: u.isDeleted,
           lastLogin: u.lastLogin,
           lastActiveAt: u.lastActiveAt,
@@ -306,9 +325,7 @@ export const changeUserRole = async (req, res, next) => {
     if (!user) return next(getErrorObject("User not found.", 404));
 
     // Invalidate the user's cached payload so new permissions apply immediately
-    await redisClient
-      .del(`storageApp:user:${id}:userdata`)
-      .catch(() => {});
+    await redisClient.del(`storageApp:user:${id}:userdata`).catch(() => {});
 
     return res.status(200).json({
       success: true,
@@ -334,24 +351,28 @@ export const updateUserQuota = async (req, res, next) => {
     }
 
     const { id } = req.params;
-    const { maxQuota, maxBandwidthQuota, monthlyBandwidthLimit } = req.body;
-
     if (!mongoose.isValidObjectId(id))
       return next(getErrorObject("Invalid user id."));
 
+    const { success, data, error } = quotaSchema.safeParse(req.body);
+    if (!success) {
+      const message = error.issues.map((e) => e.message).join(", ");
+      return next(getErrorObject(message));
+    }
+    const { maxStorageQuota, maxBandwidthQuota } = data;
+
+    if (IS_SAAS_MODE && (maxStorageQuota > 500e9 || maxBandwidthQuota > 1000e9))
+      return next(getErrorObject("Invalid request."));
+
     const updatePayload = {};
-    if (maxQuota && Number(maxQuota) > 0)
-      updatePayload.maxQuota = Number(maxQuota);
-    // accept both names; the real User schema field is maxBandwidthQuota
-    const bandwidthLimit = maxBandwidthQuota ?? monthlyBandwidthLimit;
-    if (bandwidthLimit)
-      updatePayload.maxBandwidthQuota = Number(bandwidthLimit);
+    if (maxStorageQuota) updatePayload.maxQuota = maxStorageQuota;
+    if (maxBandwidthQuota) updatePayload.maxBandwidthQuota = maxBandwidthQuota;
 
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: updatePayload },
       { returnDocument: "after" },
-    ).select("_id maxQuota maxBandwidthQuota");
+    ).select("_id maxQuota maxBandwidthQuota").lean();
 
     if (!updatedUser) return next(getErrorObject("User not found.", 404));
 
@@ -414,7 +435,8 @@ export const logoutUser = async (req, res, next) => {
         user: {
           id: user._id.toString(),
           isLogged:
-            (await redisClient.sCard(`storageApp:user:${id}:session_index`)) > 0,
+            (await redisClient.sCard(`storageApp:user:${id}:session_index`)) >
+            0,
         },
       },
     });
@@ -682,7 +704,9 @@ export const updateFeedback = async (req, res, next) => {
     }
     if (adminNotes !== undefined) {
       if (typeof adminNotes !== "string" || adminNotes.length > 2000)
-        return next(getErrorObject("adminNotes must be a string under 2000 characters."));
+        return next(
+          getErrorObject("adminNotes must be a string under 2000 characters."),
+        );
       update.adminNotes = adminNotes;
     }
 

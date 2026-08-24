@@ -6,7 +6,7 @@ import {
   validateWebhookSignature,
 } from "razorpay/dist/utils/razorpay-utils.js";
 
-import { PLAN_DETAILS, t } from "../misc/constants.js";
+import { basePlans, PLAN_DETAILS, PLAN_FEATURE_LISTS, PLAN_TAGLINES, t } from "../misc/constants.js";
 import { Subscription } from "../models/subscription.model.js";
 import { User } from "../models/user.model.js";
 import { getErrorObject } from "../utils/helper.js";
@@ -36,24 +36,9 @@ export const getRazorpayInstance = () => {
   return _razorpayInstance;
 };
 
-const fmtSize = (bytes) => {
-  const gb = bytes / 1e9;
-  if (gb >= 1000) return `${gb / 1000} TB`;
-  if (gb >= 1) return `${gb} GB`;
-  return `${Math.round(gb * 1000)} MB`;
-};
-
-const PLAN_TAGLINES = {
-  FREE: "Perfect for light, personal storage",
-  PRO: "Serious space for everyday use",
-  ULTRA: "Our most popular plan",
-  PREMIUM: "Built for power users & creators",
-  ELITE: "Maximum capacity for teams & studios",
-};
 
 export const getPlanOptions = async (req, res, next) => {
   try {
-    const basePlans = ["FREE", "PRO", "ULTRA", "PREMIUM", "ELITE"];
 
     const plans = basePlans.map((plan) => {
       const monthly = PLAN_DETAILS[`${plan}_MONTHLY`] || PLAN_DETAILS.FREE;
@@ -78,7 +63,7 @@ export const getPlanOptions = async (req, res, next) => {
         priceMo: monthly.priceInRupees,
         priceYr: yearly.priceInRupees,
         discountTag: discountPercent > 0 ? `Save ${discountPercent}%` : null,
-        isPopular: plan === "ULTRA",
+        isPopular: plan === "PRO",
         tagline: PLAN_TAGLINES[plan] || null,
         limits: {
           storage: monthly.quotaBytes / 1e9,
@@ -87,21 +72,13 @@ export const getPlanOptions = async (req, res, next) => {
           uploadConcurrency: monthly.maxUploadConcurrency,
           maxDevices: monthly.maxDevices,
           trashRetentionDays: monthly.trashRetentionDays,
+          gracePeriodDays: monthly.gracePeriod || 7,
           canCreatePublicLinks: monthly.canCreatePublicLinks,
         },
-        features: [
-          `${fmtSize(monthly.quotaBytes)} Cloud Storage`,
-          `Upload files up to ${fmtSize(monthly.maxFileSize)}`,
-          `Parallel uploads (${monthly.maxUploadConcurrency}×)`,
-          monthly.canCreatePublicLinks
-            ? "Public link sharing enabled"
-            : "Private storage only",
-          ...(monthly.maxDevices > 1
-            ? [`Sync across ${monthly.maxDevices} devices`]
-            : []),
-          "Import from Google Drive",
-          `${monthly.trashRetentionDays}-day trash retention & recovery`,
-          `${fmtSize(monthly.monthlyBandwidthLimit)} monthly download bandwidth`,
+        features: PLAN_FEATURE_LISTS[plan] || [
+          "Private cloud storage",
+          "Fast file uploads & downloads",
+          "Google Drive cloud import",
         ],
       };
     });
@@ -114,31 +91,29 @@ export const getPlanOptions = async (req, res, next) => {
 
 export const getCurrentPlan = async (req, res, next) => {
   try {
-    // Read fresh from Mongo (not the cached req.user) so plan changes reflect
-    // instantly even if the Redis userdata cache is temporarily stale.
-    const freshUser = await User.findById(req.user._id)
+    const user = await User.findById(req.user._id)
       .populate("root")
       .populate("subscription")
       .lean();
 
-    const sub = freshUser?.subscription;
-    const usedQuota = freshUser?.root?.size || 0;
+    const sub = user?.subscription;
+    const usedQuota = user?.root?.size || 0;
     const { planId, billingCycle, priceInRupees, ...limits } =
-      PLAN_DETAILS[freshUser?.plan || "FREE"];
+      PLAN_DETAILS[user?.plan || "FREE"];
 
     return res.status(200).json({
       success: true,
       data: {
         plan: {
-          name: freshUser?.plan || "FREE",
+          name: user?.plan || "FREE",
           billingCycle: billingCycle || null,
           priceInRupees,
           status: sub?.status || "",
-          maxQuota: freshUser?.maxQuota || PLAN_DETAILS.FREE.quotaBytes,
+          maxQuota: user?.maxQuota || PLAN_DETAILS.FREE.quotaBytes,
           usedQuota,
           startedAt: sub?.currentPeriodStart || null,
           renewAt: sub?.currentPeriodEnd || null,
-          expireAt: freshUser?.subscriptionExpiresAt || null,
+          expireAt: user?.subscriptionExpiresAt || null,
           endedAt: sub?.endedAt || null,
           cancelAtPeriodEnd: sub?.cancelAtPeriodEnd || false,
           limits: sub?.limits || limits,
@@ -164,7 +139,7 @@ export const getSubscriptionHistory = async (req, res, next) => {
     if (cursor) query._id = { $gt: cursor };
 
     const subs = await Subscription.find(query)
-      .sort({ updatedAt: -1 })
+      .sort({ createdAt: -1 })
       .select(
         "-_id planKey price billingCycle status currentPeriodStart currentPeriodEnd endedAt createdAt invoiceUrl",
       )
@@ -194,10 +169,9 @@ export const getSubscriptionHistory = async (req, res, next) => {
 };
 
 /**
- * Compute the prorated switch credit for leaving an old plan early.
- * Rule (matches the upgrade branch): monthly cycle used ≤15 days → 50% of old
- * monthly price; yearly cycle used ≤180 days → 25%. The credit is then mapped
- * to a single-use Razorpay offer id.
+ * Compute the upgrade credit for switching plans within 7 days.
+ * Rule: within 7 days of current billing period → 10% off new plan price.
+ * After 7 days → no credit.
  */
 const computeSwitchCredit = (oldPlanKey, oldPeriodStart) => {
   if (!oldPlanKey || !oldPeriodStart) {
@@ -209,32 +183,18 @@ const computeSwitchCredit = (oldPlanKey, oldPeriodStart) => {
   if (Number.isNaN(startMs)) return { eligibleCreditPaise: 0, offerId: null };
 
   const daysUsed = (now - startMs) / (1000 * 60 * 60 * 24);
-  const isYearly = oldPlanKey.includes("YEARLY");
 
-  const oldPricePaise =
-    (PLAN_DETAILS[oldPlanKey]?.priceInRupees || 0) * 100;
   let eligibleCreditPaise = 0;
-
-  if (isYearly && daysUsed <= 180) {
-    eligibleCreditPaise = Math.floor(oldPricePaise * 0.25);
-  } else if (!isYearly && daysUsed <= 15) {
-    eligibleCreditPaise = Math.floor(oldPricePaise * 0.5);
+  if (daysUsed <= 7) {
+    eligibleCreditPaise = Math.floor(
+      (PLAN_DETAILS[oldPlanKey]?.priceInRupees || 0) * 100 * 0.10,
+    );
   }
 
-  let offerId = null;
-  if (eligibleCreditPaise >= 19900) {
-    offerId = process.env.RAZORPAY_OFFER_200_OFF;
-  } else if (eligibleCreditPaise >= 14900) {
-    offerId = process.env.RAZORPAY_OFFER_150_OFF;
-  } else if (eligibleCreditPaise >= 9900) {
-    offerId = process.env.RAZORPAY_OFFER_100_OFF;
-  } else if (eligibleCreditPaise >= 7400) {
-    offerId = process.env.RAZORPAY_OFFER_75_OFF;
-  } else if (eligibleCreditPaise >= 4900) {
-    offerId = process.env.RAZORPAY_OFFER_50_OFF;
-  } else if (eligibleCreditPaise >= 2400) {
-    offerId = process.env.RAZORPAY_OFFER_25_OFF;
-  }
+  const offerId =
+    eligibleCreditPaise > 0
+      ? process.env.RAZORPAY_OFFER_UPGRADE_10_OFF
+      : null;
 
   return { eligibleCreditPaise, offerId };
 };

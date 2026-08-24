@@ -34,7 +34,7 @@ export const uploadCompleteSchema = z.object({
   thumbnailBase64: z
     .string()
     .regex(/^data:image\/\w+;base64,/)
-    .nullish()
+    .nullish(),
 });
 
 export const sharePayloadSchema = z
@@ -84,3 +84,8 @@ export const revokePayloadSchema = z
   .refine((data) => data.emails || data.publicRole, {
     message: "At least one of emails or publicRole must be provided.",
   });
+
+export const quotaSchema = z.object({
+  maxQuota: z.number().min(1).max(Infinity).nullish().optional(),
+  maxBandwidthQuota: z.number().min(1).max(Infinity).nullish().optional(),
+});

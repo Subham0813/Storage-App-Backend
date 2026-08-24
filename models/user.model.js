@@ -84,12 +84,8 @@ const userSchema = new Schema(
         "FREE",
         "PRO_MONTHLY",
         "PRO_YEARLY",
-        "ULTRA_MONTHLY",
-        "ULTRA_YEARLY",
-        "PREMIUM_MONTHLY",
-        "PREMIUM_YEARLY",
-        "ELITE_MONTHLY",
-        "ELITE_YEARLY",
+        "BUSINESS_MONTHLY",
+        "BUSINESS_YEARLY",
       ],
       default: "FREE",
     },
@@ -99,10 +95,10 @@ const userSchema = new Schema(
     },
     subscriptionExpiresAt: { type: Date },
 
-    maxQuota: { type: Number, default: 5 * 1e9 },
+    maxQuota: { type: Number, default: null },
 
     usedBandwidthQuota: { type: Number, default: 0 },
-    maxBandwidthQuota: { type: Number, default: 10 * 1e9 },
+    maxBandwidthQuota: { type: Number, default: null },
     bandwidthResetAt: { type: Date },
 
     lastLogin: { type: Date, default: Date.now },
