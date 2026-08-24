@@ -12,7 +12,7 @@ import {
   BUCKET_NAME,
 } from "../services/s3Client.js";
 import { redisClient } from "../configs/redis.js";
-import { PLAN_DETAILS, IS_SAAS_MODE } from "../misc/constants.js";
+import { IS_SAAS_MODE } from "../misc/constants.js";
 import { User } from "../models/user.model.js";
 import { UserFile as File } from "../models/user_file.model.js";
 import { Permission } from "../models/permission.model.js";
@@ -34,10 +34,10 @@ const isCloudflare = IS_SAAS_MODE && process.env.CDN_PROVIDER === "cloudflare";
  */
 export const previewFileHandler = async (req, res, next) => {
   try {
-    const owner = req.itemOwner || req.user;
+    let owner = req.itemOwner || req.user;
     const limits = getUserLimits(owner);
 
-    await ensureBandwidthWindow(owner);
+    owner = await ensureBandwidthWindow(owner);
 
     const usedBandwidth = owner.usedBandwidthQuota || 0;
     const bandwidthLimit = limits?.monthlyBandwidth;
@@ -112,14 +112,13 @@ export const previewFileHandler = async (req, res, next) => {
  */
 export const downloadFileHandler = async (req, res, next) => {
   try {
-    const owner = req.itemOwner || req.user;
+    let owner = req.itemOwner || req.user;
 
-    await ensureBandwidthWindow(owner);
+    owner = await ensureBandwidthWindow(owner);
 
+    const limits = getUserLimits(owner);
     const usedBandwidth = owner.usedBandwidthQuota || 0;
-    const bandwidthLimit =
-      owner?.subscription?.limits?.monthlyBandwidthLimit ||
-      PLAN_DETAILS[owner.plan].monthlyBandwidthLimit;
+    const bandwidthLimit = limits.monthlyBandwidth;
 
     // 1. Hard Quota Check
     if (usedBandwidth >= bandwidthLimit) {
@@ -206,7 +205,8 @@ export const copyFileHandler = async (req, res, next) => {
     await session.withTransaction(async () => {
       // 1. Quota Validation
       const currentUsedStorage = targetUser.root?.size || 0;
-      if (currentUsedStorage + file.size > targetUser.maxQuota) {
+      const copyLimits = getUserLimits(targetUser);
+      if (copyLimits.maxStorage !== Infinity && currentUsedStorage + file.size > copyLimits.maxStorage) {
         throw getErrorObject("Insufficient storage quota.", 400);
       }
 

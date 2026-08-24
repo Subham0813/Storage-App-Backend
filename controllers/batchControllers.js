@@ -151,7 +151,7 @@ export const bulkDownloadHandler = async (req, res, next) => {
         try {
           const { Body } = await s3Client.send(
             new GetObjectCommand({
-              Bucket: process.env.B2_BUCKET_NAME,
+              Bucket: BUCKET_NAME,
               Key: item.data.key,
             }),
           );

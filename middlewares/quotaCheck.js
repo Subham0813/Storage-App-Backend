@@ -17,13 +17,14 @@ export const checkQuotaLimit = async (req, res, next) => {
     if (!user) return next(getErrorObject("User not found.", 404));
 
     const usedQuota = user.root?.size || 0;
-    const remainingQuota = user.maxQuota - usedQuota;
+    const maxQuota = user.maxQuota || Infinity;
+    const remainingQuota = maxQuota === Infinity ? Infinity : maxQuota - usedQuota;
 
     req.userQuota = {
-      maxQuota: user.maxQuota,
+      maxQuota,
       usedQuota,
       remainingQuota,
-      quotaPercentage: Math.round((usedQuota / user.maxQuota) * 100),
+      quotaPercentage: maxQuota === Infinity ? 0 : Math.round((usedQuota / maxQuota) * 100),
     };
 
     if (req.userQuota.quotaPercentage >= 90) {

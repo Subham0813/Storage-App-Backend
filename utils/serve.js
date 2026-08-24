@@ -2,10 +2,9 @@ import archiver from "archiver";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { Directory } from "../models/directory.model.js";
 import { UserFile } from "../models/user_file.model.js";
-import { s3Client } from "../services/s3Client.js";
+import { s3Client, BUCKET_NAME } from "../services/s3Client.js";
 
-// const S3_BUCKET = process.env.S3_BUCKET_NAME;
-const S3_BUCKET = process.env.B2_BUCKET_NAME;
+const S3_BUCKET = BUCKET_NAME;
 const MAX_DEPTH = process.env.MAX_DEPTH || 5;
 
 export const sanitizeName = (name) => {
