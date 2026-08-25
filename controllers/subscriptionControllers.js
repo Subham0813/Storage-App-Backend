@@ -14,6 +14,7 @@ import { redisClient } from "../configs/redis.js";
 import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
 import { createReadStream } from "fs";
 import { sendSubscriptionActionEmail } from "../services/emailService.js";
+import { formatDate } from "../utils/formatDate.js";
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
@@ -472,7 +473,7 @@ export const verifySubscriptionSignature = async (req, res, next) => {
         req.user.email,
         "upgrade",
         "executed",
-        new Date(subDetails.current_end * 1000).toLocaleDateString(),
+        formatDate(subDetails.current_end),
       ).catch(() => {});
     }
 
@@ -623,9 +624,7 @@ export const updateSubscriptionPlan = async (req, res, next) => {
         });
 
         // Calculate the end of current cycle
-        const effectiveDate = new Date(
-          user.subscription.currentPeriodEnd,
-        ).toLocaleDateString();
+        const effectiveDate = formatDate(user.subscription.currentPeriodEnd);
         sendSubscriptionActionEmail(
           user.name,
           user.email,
@@ -773,9 +772,7 @@ export const cancelSubscriptionPlan = async (req, res, next) => {
           { session },
         );
 
-        const effectiveDate = new Date(
-          cancelledSub.end_at * 1000,
-        ).toLocaleDateString();
+        const effectiveDate = formatDate(cancelledSub.end_at);
         sendSubscriptionActionEmail(
           user.name,
           user.email,

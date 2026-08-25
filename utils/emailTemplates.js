@@ -1,4 +1,5 @@
 const appName = process.env.APP_NAME;
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "support@ownstorage.cloud";
 
 export const otpEmailTemplate = (username, otp, purpose) => {
   const purposeConfig = {
@@ -68,7 +69,7 @@ export const otpEmailTemplate = (username, otp, purpose) => {
 
 export const passwordResetConfirmationTemplate = (username) => {
   return {
-    subject: "Your password was successfully updated - ${appName}",
+    subject: `Your password was successfully updated - ${appName}`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -171,7 +172,7 @@ export const sharingNotificationTemplate = (
 
 export const accountBannedTemplate = (username) => {
   return {
-    subject: "Important update regarding your account status - ${appName}",
+    subject: `Important update regarding your account status - ${appName}`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -201,7 +202,7 @@ export const accountBannedTemplate = (username) => {
               </div>
               <p>We are writing to let you know that we've had to place a temporary suspension on your ${appName} account due to a violation of our terms of service.</p>
               <p>We completely understand this might be frustrating or confusing. If you believe this was a mistake, or if you'd like to discuss the situation with us, we are more than happy to review it.</p>
-              <p>Please reach out to our team directly at <strong>support@${appName}</strong> and we'll look into it for you.</p>
+              <p>Please reach out to our team directly at <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a> and we'll look into it for you.</p>
               <p>Regards,<br>The ${appName} Trust & Safety Team</p>
             </div>
             <div class="footer">
@@ -216,7 +217,7 @@ export const accountBannedTemplate = (username) => {
 
 export const accountRecoveredTemplate = (username) => {
   return {
-    subject: "Welcome back! Your account has been restored - ${appName}",
+    subject: `Welcome back! Your account has been restored - ${appName}`,
     html: `
       <!DOCTYPE html>
       <html>

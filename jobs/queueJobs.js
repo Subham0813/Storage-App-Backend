@@ -12,14 +12,30 @@ import {
 } from "../services/emailService.js";
 import { createNotification } from "../services/notificationService.js";
 import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
+import { formatDate } from "../utils/formatDate.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import connectMongoose from "../configs/connect.js";
 
-const redisConnection = {
-  host: process.env.REDIS_HOST || "127.0.0.1",
-  port: process.env.REDIS_PORT || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-};
+function parseRedisUrl() {
+  const url = process.env.REDIS_URL;
+  if (url) {
+    try {
+      const parsed = new URL(url);
+      return {
+        host: parsed.hostname || "127.0.0.1",
+        port: Number(parsed.port) || 6379,
+        password: parsed.password || undefined,
+      };
+    } catch { /* fall through to individual vars */ }
+  }
+  return {
+    host: process.env.REDIS_HOST || "127.0.0.1",
+    port: Number(process.env.REDIS_PORT) || 6379,
+    password: process.env.REDIS_PASSWORD || undefined,
+  };
+}
+
+const redisConnection = parseRedisUrl();
 
 // Recalculates permanentDeleteAt for all trashed files/dirs of a user
 // based on their deletedAt timestamp and the new plan's retention days.
@@ -125,7 +141,7 @@ export const startBullMQWorker = () => {
                 userDoc.email,
                 "downgrade",
                 "executed",
-                new Date().toLocaleDateString(),
+                formatDate(new Date()),
               ).catch(console.error);
             }
 
@@ -180,7 +196,7 @@ export const startBullMQWorker = () => {
                 userDoc.email,
                 "cancel",
                 "executed",
-                new Date().toLocaleDateString(),
+                formatDate(new Date()),
               ).catch(console.error);
             }
 
@@ -568,6 +584,15 @@ export const startBullMQWorker = () => {
   worker.on("failed", (job, err) =>
     console.error(`Job ${job.name} failed:`, err),
   );
+
+  const gracefulShutdown = async (signal) => {
+    console.log(`\n${signal} received — shutting down BullMQ worker…`);
+    await worker.close();
+    process.exit(0);
+  };
+
+  process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.once("SIGINT", () => gracefulShutdown("SIGINT"));
 
   return worker;
 };

@@ -152,7 +152,8 @@ export const requiredEnvVars = [
 ];
 
 // SMTP credentials required only when EMAIL_PROVIDER=smtp (checked in app.js).
-export const smtpEnvVars = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"];
+// SMTP_PASS is optional — mailProvider.js falls back to SMTP_PASSWORD.
+export const smtpEnvVars = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER"];
 
 // Billing variables required only in SaaS mode (APP_MODE=saas).
 export const requiredSaaSVars = [
