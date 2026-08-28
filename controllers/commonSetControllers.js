@@ -24,7 +24,6 @@ import { notifyMany } from "../services/notificationService.js";
 import z from "zod";
 import { redisClient } from "../configs/redis.js";
 import { PLAN_DETAILS, t } from "../misc/constants.js";
-import { logActivity } from "../utils/activityLogger.js";
 
 /**
  * path: /api/files/rename/:id or /api/directories/rename/:id
@@ -58,15 +57,6 @@ export const renameItem = (model) => {
       );
       if (modifiedCount === 0)
         return next(getErrorObject("Item not found.", 404));
-
-      logActivity({
-        userId: req.user._id,
-        action: "rename",
-        itemType: model === "file" ? "file" : "directory",
-        itemId: req.Item._id,
-        parentId: req.Item.parentId || undefined,
-        itemName: data.newname,
-      });
 
       return res.status(200).json({
         success: true,
@@ -119,15 +109,6 @@ export const starredItem = (model) => {
             `Item not found or already ${starred ? "starred" : "non-starred"}.`,
           ),
         );
-
-      logActivity({
-        userId: req.user._id,
-        action: starred ? "star" : "unstar",
-        itemType: model === "file" ? "file" : "directory",
-        itemId: req.params.id,
-        parentId: item.parentId || undefined,
-        itemName: item.name,
-      });
 
       return res.status(200).json({
         success: true,
@@ -272,16 +253,6 @@ export const moveItem = (model) => {
         redisClient.del(targetUserKey),
       ]);
 
-      logActivity({
-        userId: req.user._id,
-        action: "move",
-        itemType: model === "file" ? "file" : "directory",
-        itemId: item._id,
-        parentId: target._id,
-        itemName: item.name,
-        targetName: target.name,
-      });
-
       return res.status(200).json({
         success: true,
         message: "Item moved to the target directory.",
@@ -361,15 +332,6 @@ export const moveToBin = (model) => {
 
       const itemUserKey = `storageApp:user:${item.userId.toString()}:userdata`;
       await redisClient.del(itemUserKey);
-
-      logActivity({
-        userId: req.user._id,
-        action: "trash",
-        itemType: model === "file" ? "file" : "directory",
-        itemId: item._id,
-        parentId: item.parentId || undefined,
-        itemName: item.name,
-      });
 
       res.status(200).json({
         success: true,
@@ -469,15 +431,6 @@ export const restoreItem = (model) => {
 
       const itemUserKey = `storageApp:user:${item.userId.toString()}:userdata`;
       await redisClient.del(itemUserKey);
-
-      logActivity({
-        userId: req.user._id,
-        action: "restore",
-        itemType: model === "file" ? "file" : "directory",
-        itemId: item._id,
-        parentId: item.parentId?._id || item.parentId,
-        itemName: item.name,
-      });
 
       return res.status(200).json({
         success: true,
@@ -667,16 +620,6 @@ export const shareAccess = (model) => {
         link: "/shared",
       });
 
-      logActivity({
-        userId: req.user._id,
-        action: "share",
-        itemType: model === "file" ? "file" : "directory",
-        itemId: item._id,
-        parentId: item.parentId || undefined,
-        itemName: item.name,
-        targetName: validEmails?.join(", ") || null,
-      });
-
       return res.status(200).json({
         success: true,
         message: `Item shared successfully.`,
@@ -808,16 +751,6 @@ export const revokeAccess = (model) => {
         link: "/shared",
       });
 
-      logActivity({
-        userId: req.user._id,
-        action: "share",
-        itemType: model === "file" ? "file" : "directory",
-        itemId: updatedItem?._id || req.params.id,
-        parentId: updatedItem?.parentId || undefined,
-        itemName: updatedItem?.name,
-        targetName: revokedEmails?.join(", ") || "public access revoked",
-      });
-
       return res.status(200).json({
         success: true,
         message: "Permissions revoked.",
@@ -877,16 +810,6 @@ export const newShareToken = (model) => {
         );
 
         if (modifiedCount === 0) throw getErrorObject("item not found.", 404);
-      });
-
-      logActivity({
-        userId: req.user._id,
-        action: "share",
-        itemType: model === "file" ? "file" : "directory",
-        itemId: req.params.id,
-        parentId: item.parentId || undefined,
-        itemName: item.name,
-        targetName: "share token regenerated",
       });
 
       return res.status(201).json({

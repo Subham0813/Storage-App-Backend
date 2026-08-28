@@ -1,7 +1,8 @@
 import crypto from "crypto";
-import { INSTANCE_CONFIG, PLAN_DETAILS, t } from "../misc/constants.js";
+import { EMAIL_PROVIDER, INSTANCE_CONFIG, PLAN_DETAILS, requiredEnvVars, requiredSaaSVars, smtpEnvVars, t } from "../misc/constants.js";
 import { Permission } from "../models/permission.model.js";
 import { redisClient } from "../configs/redis.js";
+import { safeDate } from "./formatDate.js";
 
 /**
  * Attach permissionsCount to an array of items (Directories or Files)
@@ -81,9 +82,9 @@ export const getUserPayload = async (user) => {
       plan: plan.toLowerCase(),
       billingCycle: billingCycle.toLowerCase(),
       status: subscription.status,
-      subscriptionStartedAt: subscription.currentPeriodStart,
-      subscriptionRenewAt: subscription.currentPeriodEnd,
-      subscriptionEndsAt: subscription.endedAt,
+      subscriptionStartedAt: safeDate(subscription.currentPeriodStart),
+      subscriptionRenewAt: safeDate(subscription.currentPeriodEnd),
+      subscriptionEndsAt: safeDate(subscription.endedAt),
       subscriptionExpiresAt: safeUser.subscriptionExpiresAt,
     };
     delete safeUser.subscriptionExpiresAt;
@@ -234,4 +235,29 @@ export const getUserLimits = (user) => {
     canCreatePublicLinks: true,
     maxDevices: Infinity,
   };
+};
+
+export const checkEnv = () => {
+  const missingVars = requiredEnvVars.filter((v) => !process.env[v]);
+  if (EMAIL_PROVIDER === "smtp") {
+    missingVars.push(...smtpEnvVars.filter((v) => !process.env[v]));
+  } else if (!process.env.RESEND_API_KEY) {
+    missingVars.push("RESEND_API_KEY");
+  }
+  if (IS_SAAS_MODE) {
+    missingVars.push(...requiredSaaSVars.filter((v) => !process.env[v]));
+    if (
+      process.env.CDN_PROVIDER === "cloudflare" &&
+      !process.env.CLOUDFLARE_WEBHOOK_SECRET
+    ) {
+      missingVars.push("CLOUDFLARE_WEBHOOK_SECRET");
+    }
+  }
+  if (missingVars.length > 0) {
+    console.error(
+      "Missing required environment variables:",
+      missingVars.join(", "),
+    );
+    process.exit(1);
+  }
 };

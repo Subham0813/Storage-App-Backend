@@ -10,12 +10,12 @@ import {
   sendAdminDirectEmail,
 } from "../services/emailService.js";
 import { redisClient } from "../configs/redis.js";
+import { invalidateUser } from "../utils/responseCache.js";
 import { deleteS3Objects } from "../services/s3Client.js";
 import { IS_SAAS_MODE, PLAN_DETAILS } from "../misc/constants.js";
 import { Permission } from "../models/permission.model.js";
 import { Subscription } from "../models/subscription.model.js";
 import { Feedback } from "../models/feedback.model.js";
-import { ActivityLog } from "../models/activity_log.model.js";
 import { quotaSchema } from "../schemas/userSchema.js";
 
 /**
@@ -377,6 +377,7 @@ export const updateUserQuota = async (req, res, next) => {
     if (!updatedUser) return next(getErrorObject("User not found.", 404));
 
     await redisClient.del(`storageApp:user:${id}:userdata`);
+    await invalidateUser(id);
 
     return res.status(200).json({
       success: true,
@@ -813,44 +814,6 @@ export const sendUserEmail = async (req, res, next) => {
       success: true,
       message: "Email sent to the user.",
     });
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * path: /api/admin/user/:id/activity
- * what it do: Recent activity-log entries for a user (newest first).
- */
-export const getUserActivity = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.isValidObjectId(id))
-      return next(getErrorObject("Invalid user id."));
-
-    const userExists = await User.exists({ _id: id });
-    if (!userExists) return next(getErrorObject("User not found.", 404));
-
-    const rawLimit = parseInt(req.query?.limit, 10);
-    const limit = Number.isFinite(rawLimit)
-      ? Math.min(Math.max(rawLimit, 1), 50)
-      : 20;
-    const logs = await ActivityLog.find({ userId: id })
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean();
-
-    const data = logs.map((l) => ({
-      id: l._id.toString(),
-      action: l.action,
-      itemType: l.itemType,
-      itemId: l.itemId?.toString(),
-      itemName: l.itemName,
-      targetName: l.targetName,
-      createdAt: l.createdAt,
-    }));
-
-    return res.status(200).json({ success: true, data: { activity: data } });
   } catch (err) {
     next(err);
   }

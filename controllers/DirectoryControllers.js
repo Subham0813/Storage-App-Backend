@@ -16,7 +16,7 @@ import { UserFile } from "../models/user_file.model.js";
 import { filenameSchema } from "../schemas/userSchema.js";
 import { deleteS3Objects } from "../services/s3Client.js";
 import { redisClient } from "../configs/redis.js";
-import { logActivity } from "../utils/activityLogger.js";
+import { invalidateUser } from "../utils/responseCache.js";
 import { User } from "../models/user.model.js";
 import { IS_SAAS_MODE } from "../misc/constants.js";
 import { ensureBandwidthWindow } from "../utils/bandwidthWindow.js";
@@ -335,15 +335,6 @@ export const createDirectoryHandler = async (req, res, next) => {
     newDir.dirsCount = 0;
     newDir.userId = req.parent.userId;
 
-    logActivity({
-      userId: req.user._id,
-      action: "create_directory",
-      itemType: "directory",
-      itemId: newDir._id,
-      parentId: newDir.parentId,
-      itemName: newDir.name,
-    });
-
     return res.status(201).json({
       success: true,
       message: "Directory created.",
@@ -400,15 +391,7 @@ export const deleteDirectoryHandler = async (req, res, next) => {
 
     const userKey = `storageApp:user:${req.user._id}:userdata`;
     await redisClient.del(userKey);
-
-    logActivity({
-      userId: req.user._id,
-      action: "delete",
-      itemType: "directory",
-      itemId: req.params.id,
-      parentId: directoryParentId || undefined,
-      itemName: directoryName,
-    });
+    await invalidateUser(req.user._id);
 
     return res.status(200).json({
       success: true,

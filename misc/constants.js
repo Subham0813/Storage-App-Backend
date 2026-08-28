@@ -12,7 +12,8 @@ export const FILENAME_REGEX = /^[^\\/:\*\?"<>|]+$/;
 export const EMAIL_REGEX = /^[\w.%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$/;
 export const SUPER_ROLES = ["admin", "super_admin"];
 
-export const IS_SAAS_MODE = process.env.APP_MODE === "saas";
+export const IS_SAAS_MODE =
+  String(process.env.APP_MODE || "").trim().toLowerCase() === "saas";
 export const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || "resend";
 
 export const t = {
@@ -160,8 +161,6 @@ export const requiredSaaSVars = [
   "RAZORPAY_KEY_ID",
   "RAZORPAY_KEY_SECRET",
   "RAZORPAY_WEBHOOK_SECRET",
-  "RAZORPAY_OFFER_FIRST_SUB_25_OFF",
-  "RAZORPAY_OFFER_UPGRADE_10_OFF",
   "SUBSCRIPTION_PLAN_PRO_MONTHLY",
   "SUBSCRIPTION_PLAN_PRO_YEARLY",
   "SUBSCRIPTION_PLAN_BUSINESS_MONTHLY",

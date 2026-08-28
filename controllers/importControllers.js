@@ -20,7 +20,6 @@ import { UserFile } from "../models/user_file.model.js";
 import { User } from "../models/user.model.js";
 
 import { createFileHandler } from "./uploadControllers.js";
-import { logActivity } from "../utils/activityLogger.js";
 import { createNotification } from "../services/notificationService.js";
 import { decryptToken } from "../utils/encryption.js";
 import { getErrorObject, getFileDoc, getUserLimits } from "../utils/helper.js";
@@ -123,15 +122,6 @@ const saveAsLink = async (record, webviewLink, importKey, time) => {
 
     await redisClient.json.set(importKey, "$", record);
     await redisClient.expire(importKey, time);
-
-    logActivity({
-      userId: record.userId,
-      action: "upload",
-      itemType: "file",
-      itemId: newfile._id,
-      parentId: newfile.parentId || undefined,
-      itemName: newfile.name,
-    });
   } catch (err) {
     throw new Error("Failed to save Google Doc as link: " + err.message);
   } finally {
@@ -442,16 +432,6 @@ export const completeGoogleImport = async (req, res, next) => {
       link: `/drive/folders/${record.targetId}`,
     });
 
-    logActivity({
-      userId: req.user._id,
-      action: "upload",
-      itemType: "file",
-      itemId: file._id,
-      parentId:
-        file.parentId?._id || file.parentId || record.targetId || undefined,
-      itemName: file.name,
-    });
-
     return res.status(201).json({
       success: true,
       message: "Import completed.",
@@ -552,6 +532,8 @@ export const getPickerTokenGoogle = async (req, res, next) => {
           },
         },
       );
+      // bust user cache so next req sees fresh expiry
+      await redisClient.del(`storageApp:user:${req.user._id}:userdata`).catch(() => {});
 
       return res.status(200).json({
         success: true,

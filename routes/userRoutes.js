@@ -21,7 +21,6 @@ import {
   deleteProfileHandler,
   emptyTrash,
   feedbackHandler,
-  getActivity,
   getActiveSessionsHandler,
   getUsage,
   getUserInfo,
@@ -44,7 +43,6 @@ router.get("/sessions", getActiveSessionsHandler);
 
 router.get("/stats", getUserStats);
 router.get("/usage", getUsage);
-router.get("/activity", getActivity);
 
 router.get("/search/files", searchItems("file"));
 router.get("/search/dirs", searchItems("dir"));

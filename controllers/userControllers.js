@@ -9,6 +9,7 @@ import {
 } from "../services/s3Client.js";
 import { getErrorObject, getUserLimits, getUserPayload } from "../utils/helper.js";
 import { redisClient } from "../configs/redis.js";
+import { cacheWrap, cacheGet, cacheSet, cacheNs, invalidateUser } from "../utils/responseCache.js";
 import { User } from "../models/user.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
@@ -24,11 +25,13 @@ import { Permission } from "../models/permission.model.js";
 import { Subscription } from "../models/subscription.model.js";
 import { Feedback } from "../models/feedback.model.js";
 import { processFeedbackEmails } from "../services/emailService.js";
-import { ActivityLog } from "../models/activity_log.model.js";
 
 export const getUserInfo = async (req, res, next) => {
   try {
-    const user = await getUserPayload(req.user);
+    const uid = req.user._id.toString();
+    const user = await cacheWrap(cacheNs.user("info", uid), 60, async () => {
+      return getUserPayload(req.user);
+    });
     return res.status(200).json({ success: true, data: { user } });
   } catch (err) {
     next(err);
@@ -37,14 +40,13 @@ export const getUserInfo = async (req, res, next) => {
 
 export const getUsage = async (req, res, next) => {
   try {
-    const { maxQuota, usedQuota, maxBandwidthQuota, usedBandwidthQuota } =
-      await getUserPayload(req.user);
-    return res.status(200).json({
-      success: true,
-      data: {
-        usage: { maxQuota, usedQuota, maxBandwidthQuota, usedBandwidthQuota },
-      },
+    const uid = req.user._id.toString();
+    const usage = await cacheWrap(cacheNs.user("usage", uid), 60, async () => {
+      const { maxQuota, usedQuota, maxBandwidthQuota, usedBandwidthQuota } =
+        await getUserPayload(req.user);
+      return { maxQuota, usedQuota, maxBandwidthQuota, usedBandwidthQuota };
     });
+    return res.status(200).json({ success: true, data: { usage } });
   } catch (err) {
     next(err);
   }
@@ -79,80 +81,92 @@ export const getUserStats = async (req, res, next) => {
       if (!targetUser) return next(getErrorObject("User not found.", 404));
     }
 
-    // Must cast to ObjectId for Aggregation pipelines
-    const userObjectId = new mongoose.Types.ObjectId(userId);
+    // Only the self-route is cached (keyed by the caller). Admin-targeted
+    // lookups must always be fresh.
+    const isSelf = !req.params.id;
+    const statsKey = isSelf
+      ? cacheNs.user("stats", req.user._id.toString())
+      : null;
 
-    const totalDirs = await Directory.countDocuments({
-      userId,
-      isDeleted: false,
-    });
+    const computeStats = async () => {
+      // Must cast to ObjectId for Aggregation pipelines
+      const userObjectId = new mongoose.Types.ObjectId(userId);
 
-    // Aggregation Pipeline
-    const stats = await UserFile.aggregate([
-      { $match: { userId: userObjectId } }, // Include trashed files as they consume quota
-      {
-        $group: {
-          _id: {
-            $switch: {
-              branches: [
-                {
-                  case: { $regexMatch: { input: "$mime", regex: /^image\//i } },
-                  then: "images",
-                },
-                {
-                  case: { $regexMatch: { input: "$mime", regex: /^video\//i } },
-                  then: "videos",
-                },
-                {
-                  case: {
-                    $regexMatch: {
-                      input: "$mime",
-                      regex: /^application\/pdf|^application\/vnd/i,
-                    },
+      const totalDirs = await Directory.countDocuments({
+        userId,
+        isDeleted: false,
+      });
+
+      // Aggregation Pipeline
+      const stats = await UserFile.aggregate([
+        { $match: { userId: userObjectId } }, // Include trashed files as they consume quota
+        {
+          $group: {
+            _id: {
+              $switch: {
+                branches: [
+                  {
+                    case: { $regexMatch: { input: "$mime", regex: /^image\//i } },
+                    then: "images",
                   },
-                  then: "docs",
-                },
-              ],
-              default: "others",
+                  {
+                    case: { $regexMatch: { input: "$mime", regex: /^video\//i } },
+                    then: "videos",
+                  },
+                  {
+                    case: {
+                      $regexMatch: {
+                        input: "$mime",
+                        regex: /^application\/pdf|^application\/vnd/i,
+                      },
+                    },
+                    then: "docs",
+                  },
+                ],
+                default: "others",
+              },
             },
+            count: { $sum: 1 },
+            size: { $sum: "$size" },
           },
-          count: { $sum: 1 },
-          size: { $sum: "$size" },
         },
-      },
-    ]);
+      ]);
 
-    const breakdown = {
-      docs: { count: 0, size: 0 },
-      images: { count: 0, size: 0 },
-      videos: { count: 0, size: 0 },
-      others: { count: 0, size: 0 },
-    };
+      const breakdown = {
+        docs: { count: 0, size: 0 },
+        images: { count: 0, size: 0 },
+        videos: { count: 0, size: 0 },
+        others: { count: 0, size: 0 },
+      };
 
-    let totalSize = 0;
-    let totalFiles = 0;
+      let totalSize = 0;
+      let totalFiles = 0;
 
-    // Map the MongoDB stats back to your frontend format
-    stats.forEach((stat) => {
-      breakdown[stat._id] = { count: stat.count, size: stat.size };
-      totalSize += stat.size;
-      totalFiles += stat.count;
-    });
+      // Map the MongoDB stats back to your frontend format
+      stats.forEach((stat) => {
+        breakdown[stat._id] = { count: stat.count, size: stat.size };
+        totalSize += stat.size;
+        totalFiles += stat.count;
+      });
 
-    const limits = getUserLimits(targetUser);
-    const usedQuota = targetUser.root?.size || 0;
+      const limits = getUserLimits(targetUser);
+      const usedQuota = targetUser.root?.size || 0;
 
-    return res.status(200).json({
-      success: true,
-      data: {
+      return {
         maxQuota: limits.maxStorage, // Pulled dynamically based on SaaS or Self-Host mode
         usedQuota,
         totalSize,
         totalFiles,
         totalDirs,
         breakdown,
-      },
-    });
+      };
+    };
+
+    const data = statsKey
+      ? await cacheWrap(statsKey, 60, computeStats)
+      : await computeStats();
+
+    return res.status(200).json({ success: true, data });
   } catch (err) {
     next(err);
   }
@@ -177,6 +191,7 @@ export const updateName = async (req, res, next) => {
 
     const userKey = `storageApp:user:${req.user._id.toString()}:userdata`;
     await redisClient.del(userKey);
+    await invalidateUser(req.user._id);
 
     return res.status(200).json({
       success: true,
@@ -219,6 +234,7 @@ export const updateAvatar = async (req, res, next) => {
 
       await User.findByIdAndUpdate(req.user._id, { $set: { avatarKey } });
       await redisClient.del(`storageApp:user:${req.user._id}:userdata`);
+      await invalidateUser(req.user._id);
     } catch (s3Err) {
       console.error(s3Err)
       s3PublicClient
@@ -374,12 +390,31 @@ export const deleteProfileHandler = async (req, res, next) => {
  */
 export const deleteIntegration = async (req, res, next) => {
   try {
-    const { modifiedCount } = await User.updateOne(
-      { _id: req.user._id },
+    const userId = req.user._id;
+
+    // Best-effort: revoke token at Google so it cannot be reused
+    try {
+      const doc = await User.findById(userId).select(
+        "integrations.googleDrive.accessToken",
+      );
+      const token = doc?.integrations?.googleDrive?.accessToken;
+      if (token) {
+        await fetch(
+          `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`,
+          { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" } },
+        ).catch(() => {});
+      }
+    } catch {}
+
+    await User.updateOne(
+      { _id: userId },
       { $unset: { "integrations.googleDrive": 1 } },
     );
-    if (modifiedCount === 0)
-      return next(getErrorObject("Integration not found.", 404));
+
+    // Idempotent — already-disconnected is still success; bust caches
+    const userKey = `storageApp:user:${userId.toString()}:userdata`;
+    await redisClient.del(userKey);
+    await invalidateUser(userId);
 
     return res.status(200).json({
       success: true,
@@ -536,25 +571,6 @@ export const feedbackHandler = async (req, res, next) => {
     return res.status(201).json({
       success: true,
       message: "Bug report submitted successfully.",
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * path: /api/user/activity
- * what it do: Return recent activity log entries for the authenticated user.
- */
-export const getActivity = async (req, res, next) => {
-  try {
-    const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 50);
-
-    const items = await ActivityLog.find({ userId: req.user._id }).select("-_id -__v").sort({ createdAt: -1 }).limit(limit).lean();
-    
-    return res.status(200).json({
-      success: true,
-      data: { items },
     });
   } catch (err) {
     next(err);

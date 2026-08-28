@@ -1,16 +1,20 @@
 import mongoose from "mongoose";
+import crypto from "crypto";
 import Razorpay from "razorpay";
+import { validateWebhookSignature } from "razorpay/dist/utils/razorpay-utils.js";
 
 import { PLAN_DETAILS, t } from "../misc/constants.js";
 import { Subscription } from "../models/subscription.model.js";
 import { User } from "../models/user.model.js";
 import { redisClient } from "../configs/redis.js";
+import { invalidateUser } from "../utils/responseCache.js";
 import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
 import {
   getRazorpayInstance,
   retireOldSubscriptions,
 } from "../controllers/subscriptionControllers.js";
-import { sendInvoiceEmail } from "./emailService.js";
+import { sendInvoiceEmail, sendSubscriptionActionEmail } from "./emailService.js";
+import { formatDate } from "../utils/formatDate.js";
 
 export const razorpayWebhook = async (req, res, next) => {
   try {
@@ -20,14 +24,26 @@ export const razorpayWebhook = async (req, res, next) => {
         ? process.env.RAZORPAY_WEBHOOK_SECRET
         : process.env.TEST_RAZORPAY_WEBHOOK_SECRET;
 
-    const isValidSignature = Razorpay.validateWebhookSignature(
-      JSON.stringify(req.body),
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body.toString("utf8")
+      : JSON.stringify(req.body);
+    const expectedSignature = crypto
+      .createHmac("sha256", webhookSecret)
+      .update(rawBody)
+      .digest("hex");
+    console.log({ expectedSignature, signature });
+
+    const isValidSignature = validateWebhookSignature(
+      rawBody,
       signature,
       webhookSecret,
     );
-
+    req.body = JSON.parse(rawBody);
     if (!isValidSignature) {
-      console.log("Webhook signature validation failed");
+      console.log(
+        "Webhook signature validation failed",
+        JSON.stringify(req.body, null, 2),
+      );
       return res.status(400).json({ status: "Invalid Signature" });
     }
 
@@ -56,6 +72,9 @@ export const razorpayWebhook = async (req, res, next) => {
       (key) => query[key] === undefined && delete query[key],
     );
 
+    const isUpgrade = payload.notes?.isUpgrade === "true";
+    const oldSubId = isUpgrade ? payload.notes.oldSubId : null;
+
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
@@ -69,9 +88,60 @@ export const razorpayWebhook = async (req, res, next) => {
         // belongs to the user referenced in the notes metadata.
         if (!updatedSub || updatedSub.user.toString() !== userId) return;
 
+        const userDoc = await User.findById(userId, { name: 1, email: 1 })
+          .session(session)
+          .lean();
+
         switch (event) {
+          case "subscription.activated": {
+            const isUpiFallback =
+              payload.notes?.upiFallback === "true";
+
+            if (isUpiFallback) {
+              // UPI fallback downgrade — new lower-plan sub activated
+              if (userDoc?.email) {
+                sendSubscriptionActionEmail(
+                  userDoc.name,
+                  userDoc.email,
+                  "downgrade",
+                  "executed",
+                  formatDate(payload.current_end),
+                ).catch((err) =>
+                  console.error("Downgrade email failed:", err),
+                );
+              }
+            } else if (isUpgrade) {
+              // Upgrade — new sub activated after upgrade checkout
+              if (userDoc?.email) {
+                sendSubscriptionActionEmail(
+                  userDoc.name,
+                  userDoc.email,
+                  "upgrade",
+                  "executed",
+                  formatDate(payload.current_end),
+                ).catch((err) =>
+                  console.error("Upgrade email failed:", err),
+                );
+              }
+            } else {
+              // First-time subscription activated
+              if (userDoc?.email) {
+                sendSubscriptionActionEmail(
+                  userDoc.name,
+                  userDoc.email,
+                  "activation",
+                  "executed",
+                  formatDate(payload.current_end),
+                ).catch((err) =>
+                  console.error("Activation email failed:", err),
+                );
+              }
+            }
+            break;
+          }
+
           case "subscription.charged":
-          case "subscription.resumed":
+          case "subscription.resumed": {
             // Prefer the locally tracked plan (source of truth for scheduled
             // downgrades) over the stale `notes.plan` metadata from creation.
             const planKey = updatedSub.planKey;
@@ -110,32 +180,57 @@ export const razorpayWebhook = async (req, res, next) => {
                 { session },
               );
 
-              if (payload.notes.isUpgrade === "true") {
-                const oldSubId = payload.notes.oldSubId;
-                try {
-                  await getRazorpayInstance().subscriptions.cancel(oldSubId, 0); // Kill instantly
-                  await Subscription.findOneAndUpdate(
-                    { razorpaySubscriptionId: oldSubId },
-                    { status: "upgraded" },
-                    { session },
-                  );
-                } catch (cleanupErr) {
-                  console.error(
-                    `🚨 Failed to clean up old sub ${oldSubId}:`,
-                    cleanupErr,
-                  );
-                }
-              }
-
-              // Retire every other subscription record so background executors
+              // Retire the previous subscription so background executors
               // (e.g. cancel-executor) never downgrade this active user.
-              await retireOldSubscriptions(userId, updatedSub._id, session);
+              await retireOldSubscriptions(
+                userId,
+                updatedSub._id,
+                session,
+                oldSubId,
+              );
+
+              // Send email only on plan changes (not same-plan renewals)
+              if (planChanged && existingPlan && userDoc?.email) {
+                const oldPrice =
+                  PLAN_DETAILS[existingPlan]?.priceInRupees || 0;
+                const newPrice = planInfo.priceInRupees || 0;
+                const isPlanUpgrade = newPrice > oldPrice;
+
+                sendSubscriptionActionEmail(
+                  userDoc.name,
+                  userDoc.email,
+                  isPlanUpgrade ? "upgrade" : "downgrade",
+                  "executed",
+                  formatDate(new Date(payload.current_end * 1000)),
+                ).catch((err) =>
+                  console.error("Plan change email failed:", err),
+                );
+              }
             }
             break;
+          }
+
+          case "subscription.cancelled":
+          case "subscription.completed": {
+            if (userDoc?.email) {
+              sendSubscriptionActionEmail(
+                userDoc.name,
+                userDoc.email,
+                "cancel",
+                "executed",
+                formatDate(
+                  payload.ended_at
+                    ? new Date(payload.ended_at * 1000)
+                    : new Date(),
+                ),
+              ).catch((err) =>
+                console.error("Cancel email failed:", err),
+              );
+            }
+            break;
+          }
 
           case "subscription.halted":
-          case "subscription.cancelled":
-          case "subscription.completed":
             break;
 
           case "invoice.paid":
@@ -177,7 +272,23 @@ export const razorpayWebhook = async (req, res, next) => {
       session.endSession();
     }
 
+    if (isUpgrade && oldSubId) {
+      try {
+        const oldSub = await Promise.resolve(
+          getRazorpayInstance().subscriptions.fetch(oldSubId),
+        );
+        if (oldSub.status !== "cancelled")
+          await getRazorpayInstance().subscriptions.cancel(oldSubId, 0);
+      } catch (cancelErr) {
+        console.error(
+          `Failed to cancel old sub ${oldSubId} on Razorpay:`,
+          cancelErr,
+        );
+      }
+    }
+
     await redisClient.del(`storageApp:user:${userId}:userdata`);
+    await invalidateUser(userId);
     return res.status(200).end();
   } catch (err) {
     console.error("Webhook processing error:", err);

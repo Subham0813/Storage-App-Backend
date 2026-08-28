@@ -44,29 +44,6 @@ import requireSaasMode from "./middlewares/requireSaasMode.js";
 import { bandwidthWebhook } from "./services/bandwidthWebhook.js";
 import { razorpayWebhook } from "./services/razorpayWebhook.js";
 
-// const missingVars = requiredEnvVars.filter((v) => !process.env[v]);
-// if (EMAIL_PROVIDER === "smtp") {
-//   missingVars.push(...smtpEnvVars.filter((v) => !process.env[v]));
-// } else if (!process.env.RESEND_API_KEY) {
-//   missingVars.push("RESEND_API_KEY");
-// }
-// if (IS_SAAS_MODE) {
-//   missingVars.push(...requiredSaaSVars.filter((v) => !process.env[v]));
-//   if (
-//     process.env.CDN_PROVIDER === "cloudflare" &&
-//     !process.env.CLOUDFLARE_WEBHOOK_SECRET
-//   ) {
-//     missingVars.push("CLOUDFLARE_WEBHOOK_SECRET");
-//   }
-// }
-// if (missingVars.length > 0) {
-//   console.error(
-//     "Missing required environment variables:",
-//     missingVars.join(", "),
-//   );
-//   process.exit(1);
-// }
-
 try {
   await connectMongoose();
   const app = express();
@@ -91,15 +68,14 @@ try {
       xFrameOptions: { action: "deny" },
     }),
   );
-
+  
+  app.post("/api/subscriptions/webhook", globalLimiter, express.raw({ type: "application/json" }), razorpayWebhook);
   app.use(express.json({ limit: "1mb" }));
+  app.post("/api/files/webhook", globalLimiter, requireSaasMode, bandwidthWebhook);
 
   app.use("/api/auth", authLimiter, authRoutes);
   app.use("/api/oauth", authLimiter, oauthRoutes);
   app.use("/api/public/shared", publicLinkLimiter, shareRoutes);
-
-  app.post("/api/subscriptions/webhook", globalLimiter, razorpayWebhook);
-  app.post("/api/files/webhook", globalLimiter, requireSaasMode, bandwidthWebhook);
 
   app.use(verifyCsrfOrigin, validateSession);
   app.use("/api/uploads", uploadLimiter, uploadRoutes);

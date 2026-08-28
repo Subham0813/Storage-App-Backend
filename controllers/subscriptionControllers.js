@@ -6,15 +6,21 @@ import {
   validateWebhookSignature,
 } from "razorpay/dist/utils/razorpay-utils.js";
 
-import { basePlans, PLAN_DETAILS, PLAN_FEATURE_LISTS, PLAN_TAGLINES, t } from "../misc/constants.js";
+import {
+  basePlans,
+  PLAN_DETAILS,
+  PLAN_FEATURE_LISTS,
+  PLAN_TAGLINES,
+  t,
+} from "../misc/constants.js";
 import { Subscription } from "../models/subscription.model.js";
 import { User } from "../models/user.model.js";
 import { getErrorObject } from "../utils/helper.js";
 import { redisClient } from "../configs/redis.js";
+import { cacheWrap, cacheNs, invalidateUser } from "../utils/responseCache.js";
 import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
 import { createReadStream } from "fs";
-import { sendSubscriptionActionEmail } from "../services/emailService.js";
-import { formatDate } from "../utils/formatDate.js";
+import { safeDate } from "../utils/formatDate.js";
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
@@ -37,52 +43,52 @@ export const getRazorpayInstance = () => {
   return _razorpayInstance;
 };
 
-
 export const getPlanOptions = async (req, res, next) => {
   try {
+    const plans = await cacheWrap(cacheNs.global("plans"), 900, async () =>
+      basePlans.map((plan) => {
+        const monthly = PLAN_DETAILS[`${plan}_MONTHLY`] || PLAN_DETAILS.FREE;
+        const yearly = PLAN_DETAILS[`${plan}_YEARLY`] || PLAN_DETAILS.FREE;
 
-    const plans = basePlans.map((plan) => {
-      const monthly = PLAN_DETAILS[`${plan}_MONTHLY`] || PLAN_DETAILS.FREE;
-      const yearly = PLAN_DETAILS[`${plan}_YEARLY`] || PLAN_DETAILS.FREE;
+        const monthlyCostIfBilledMonthly = monthly.priceInRupees * 12;
+        const actualYearlyCost = yearly.priceInRupees;
+        const discountPercent =
+          monthlyCostIfBilledMonthly > 0
+            ? Math.round(
+                ((monthlyCostIfBilledMonthly - actualYearlyCost) /
+                  monthlyCostIfBilledMonthly) *
+                  100,
+              )
+            : 0;
 
-      const monthlyCostIfBilledMonthly = monthly.priceInRupees * 12;
-      const actualYearlyCost = yearly.priceInRupees;
-      const discountPercent =
-        monthlyCostIfBilledMonthly > 0
-          ? Math.round(
-              ((monthlyCostIfBilledMonthly - actualYearlyCost) /
-                monthlyCostIfBilledMonthly) *
-                100,
-            )
-          : 0;
-
-      return {
-        name: plan,
-        baseKey: plan,
-        quota: monthly.quotaBytes / 1e9,
-        maxFileSize: monthly.maxFileSize / 1e9,
-        priceMo: monthly.priceInRupees,
-        priceYr: yearly.priceInRupees,
-        discountTag: discountPercent > 0 ? `Save ${discountPercent}%` : null,
-        isPopular: plan === "PRO",
-        tagline: PLAN_TAGLINES[plan] || null,
-        limits: {
-          storage: monthly.quotaBytes / 1e9,
-          bandwidth: monthly.monthlyBandwidthLimit / 1e9,
+        return {
+          name: plan,
+          baseKey: plan,
+          quota: monthly.quotaBytes / 1e9,
           maxFileSize: monthly.maxFileSize / 1e9,
-          uploadConcurrency: monthly.maxUploadConcurrency,
-          maxDevices: monthly.maxDevices,
-          trashRetentionDays: monthly.trashRetentionDays,
-          gracePeriodDays: monthly.gracePeriod || 7,
-          canCreatePublicLinks: monthly.canCreatePublicLinks,
-        },
-        features: PLAN_FEATURE_LISTS[plan] || [
-          "Private cloud storage",
-          "Fast file uploads & downloads",
-          "Google Drive cloud import",
-        ],
-      };
-    });
+          priceMo: monthly.priceInRupees,
+          priceYr: yearly.priceInRupees,
+          discountTag: discountPercent > 0 ? `Save ${discountPercent}%` : null,
+          isPopular: plan === "PRO",
+          tagline: PLAN_TAGLINES[plan] || null,
+          limits: {
+            storage: monthly.quotaBytes / 1e9,
+            bandwidth: monthly.monthlyBandwidthLimit / 1e9,
+            maxFileSize: monthly.maxFileSize / 1e9,
+            uploadConcurrency: monthly.maxUploadConcurrency,
+            maxDevices: monthly.maxDevices,
+            trashRetentionDays: monthly.trashRetentionDays,
+            gracePeriodDays: monthly.gracePeriod || 7,
+            canCreatePublicLinks: monthly.canCreatePublicLinks,
+          },
+          features: PLAN_FEATURE_LISTS[plan] || [
+            "Private cloud storage",
+            "Fast file uploads & downloads",
+            "Google Drive cloud import",
+          ],
+        };
+      }),
+    );
 
     return res.status(200).json({ success: true, data: { plans } });
   } catch (err) {
@@ -92,19 +98,19 @@ export const getPlanOptions = async (req, res, next) => {
 
 export const getCurrentPlan = async (req, res, next) => {
   try {
-    const user = await User.findById(req.user._id)
-      .populate("root")
-      .populate("subscription")
-      .lean();
+    const uid = req.user._id.toString();
+    const layout = await cacheWrap(cacheNs.user("plan", uid), 30, async () => {
+      const user = await User.findById(req.user._id)
+        .populate("root")
+        .populate("subscription")
+        .lean();
 
-    const sub = user?.subscription;
-    const usedQuota = user?.root?.size || 0;
-    const { planId, billingCycle, priceInRupees, ...limits } =
-      PLAN_DETAILS[user?.plan || "FREE"];
+      const sub = user?.subscription;
+      const usedQuota = user?.root?.size || 0;
+      const { planId, billingCycle, priceInRupees, ...limits } =
+        PLAN_DETAILS[user?.plan || "FREE"];
 
-    return res.status(200).json({
-      success: true,
-      data: {
+      return {
         plan: {
           name: user?.plan || "FREE",
           billingCycle: billingCycle || null,
@@ -112,16 +118,18 @@ export const getCurrentPlan = async (req, res, next) => {
           status: sub?.status || "",
           maxQuota: user?.maxQuota || PLAN_DETAILS.FREE.quotaBytes,
           usedQuota,
-          startedAt: sub?.currentPeriodStart || null,
-          renewAt: sub?.currentPeriodEnd || null,
+          startedAt: safeDate(sub?.currentPeriodStart),
+          renewAt: safeDate(sub?.currentPeriodEnd),
           expireAt: user?.subscriptionExpiresAt || null,
-          endedAt: sub?.endedAt || null,
+          endedAt: safeDate(sub?.endedAt),
           cancelAtPeriodEnd: sub?.cancelAtPeriodEnd || false,
           limits: sub?.limits || limits,
           invoiceUrl: sub?.invoiceUrl || "",
         },
-      },
+      };
     });
+
+    return res.status(200).json({ success: true, data: layout });
   } catch (err) {
     next(err);
   }
@@ -154,9 +162,9 @@ export const getSubscriptionHistory = async (req, res, next) => {
       price: sub.price,
       billingCycle: sub.billingCycle,
       status: sub.status,
-      startedAt: sub.currentPeriodStart,
-      renewAt: sub.currentPeriodEnd,
-      endedAt: sub.endedAt,
+      startedAt: safeDate(sub.currentPeriodStart),
+      renewAt: safeDate(sub.currentPeriodEnd),
+      endedAt: safeDate(sub.endedAt),
       subscribedAt: sub.createdAt,
       invoiceUrl: sub.invoiceUrl,
     }));
@@ -170,52 +178,31 @@ export const getSubscriptionHistory = async (req, res, next) => {
 };
 
 /**
- * Compute the upgrade credit for switching plans within 7 days.
- * Rule: within 7 days of current billing period → 10% off new plan price.
- * After 7 days → no credit.
- */
-const computeSwitchCredit = (oldPlanKey, oldPeriodStart) => {
-  if (!oldPlanKey || !oldPeriodStart) {
-    return { eligibleCreditPaise: 0, offerId: null };
-  }
-
-  const now = Date.now();
-  const startMs = new Date(oldPeriodStart).getTime();
-  if (Number.isNaN(startMs)) return { eligibleCreditPaise: 0, offerId: null };
-
-  const daysUsed = (now - startMs) / (1000 * 60 * 60 * 24);
-
-  let eligibleCreditPaise = 0;
-  if (daysUsed <= 7) {
-    eligibleCreditPaise = Math.floor(
-      (PLAN_DETAILS[oldPlanKey]?.priceInRupees || 0) * 100 * 0.10,
-    );
-  }
-
-  const offerId =
-    eligibleCreditPaise > 0
-      ? process.env.RAZORPAY_OFFER_UPGRADE_10_OFF
-      : null;
-
-  return { eligibleCreditPaise, offerId };
-};
-
-/**
  * Mark every other subscription of a user as terminal so background executors
  * (e.g. cancel-executor) never downgrade a user who just activated a new plan.
  */
-export const retireOldSubscriptions = async (userId, keepSubId, session) => {
-  await Subscription.updateMany(
-    {
-      user: userId,
-      _id: { $ne: keepSubId },
-      status: {
-        $in: ["active", "created", "cancelation_requested", "downgrade_requested"],
+export const retireOldSubscriptions = async (userId, keepSubId, session, oldSubId = null) => {
+  if (oldSubId) {
+    await Subscription.findOneAndUpdate(
+      {
+        razorpaySubscriptionId: oldSubId,
+        user: userId,
+        _id: { $ne: keepSubId },
       },
-    },
-    { $set: { status: "upgraded", cancelAtPeriodEnd: false } },
-    { session },
-  );
+      { $set: { status: "upgraded", cancelAtPeriodEnd: false } },
+      { session },
+    );
+  } else {
+    await Subscription.findOneAndUpdate(
+      {
+        user: userId,
+        _id: { $ne: keepSubId },
+        status: { $in: ["active", "cancelation_requested"] },
+      },
+      { $set: { status: "upgraded", cancelAtPeriodEnd: false } },
+      { session, sort: { createdAt: -1 } },
+    );
+  }
 };
 
 export const createSubscription = async (req, res, next) => {
@@ -282,27 +269,16 @@ export const createSubscription = async (req, res, next) => {
     }
 
     try {
-      // First-time subscribers get a one-time discount; returning customers who
-      // still have a paid plan get the prorated switch credit instead.
-      let offerId = null;
-      if (isFirstTimeSub) {
-        offerId = process.env.RAZORPAY_OFFER_FIRST_SUB_25_OFF;
-      } else if (user.subscription?.planKey) {
-        const { offerId: switchOfferId } = computeSwitchCredit(
-          user.subscription.planKey,
-          user.subscription.currentPeriodStart,
-        );
-        offerId = switchOfferId;
-      }
-
       const options = {
         plan_id: planId,
         total_count: 120,
-        ...(offerId && { offer_id: offerId }),
         notes: { userId: user._id.toString(), plan: plan.toUpperCase() },
       };
 
-      const razorpaySub = await getRazorpayInstance().subscriptions.create(options);
+      const razorpaySub =
+        await getRazorpayInstance().subscriptions.create(options);
+
+      console.log({razorpaySub});
 
       await Subscription.create({
         user: user._id,
@@ -327,6 +303,7 @@ export const createSubscription = async (req, res, next) => {
       });
 
       await redisClient.del(`storageApp:user:${user._id}:userdata`);
+      await invalidateUser(user._id);
 
       return res.status(201).json({
         success: true,
@@ -334,12 +311,11 @@ export const createSubscription = async (req, res, next) => {
           subscriptionId: razorpaySub.id,
           isFirstTimeSub,
         },
-      });
-    } finally {
+      });    } finally {
       await redisClient.del(lockKey);
     }
   } catch (err) {
-    // console.log(err)
+    console.log(err);
     next(err);
   }
 };
@@ -366,9 +342,10 @@ export const verifySubscriptionSignature = async (req, res, next) => {
         payment_id: razorpay_payment_id,
       },
       razorpay_signature,
-      IS_PRODUCTION
-        ? process.env.RAZORPAY_KEY_SECRET
-        : process.env.TEST_RAZORPAY_KEY_SECRET,
+      // IS_PRODUCTION
+      //   ? process.env.RAZORPAY_KEY_SECRET
+      // :
+      process.env.TEST_RAZORPAY_KEY_SECRET,
     );
 
     if (!isVerified) {
@@ -395,7 +372,7 @@ export const verifySubscriptionSignature = async (req, res, next) => {
       );
     }
 
-    const { quotaBytes,monthlyBandwidthLimit } = PLAN_DETAILS[actualPlan];
+    const { quotaBytes, monthlyBandwidthLimit } = PLAN_DETAILS[actualPlan];
 
     // Cancel old subscription FIRST to prevent double billing
     const isUpgrade =
@@ -423,24 +400,33 @@ export const verifySubscriptionSignature = async (req, res, next) => {
           { razorpaySubscriptionId: razorpay_subscription_id },
           {
             status: "active",
-            currentPeriodStart: new Date(subDetails.current_start * 1000),
-            currentPeriodEnd: new Date(subDetails.current_end * 1000),
+            currentPeriodStart: subDetails.current_start
+              ? new Date(subDetails.current_start * 1000)
+              : undefined,
+            currentPeriodEnd: subDetails.current_end
+              ? new Date(subDetails.current_end * 1000)
+              : undefined,
           },
           { session, returnDocument: "after" },
         )
           .select("_id")
           .lean();
 
-        // Retire every other subscription record so background executors
+        // Retire the previous subscription so background executors
         // (e.g. cancel-executor) never downgrade this freshly-activated user.
-        await retireOldSubscriptions(req.user._id, updatedSub._id, session);
+        await retireOldSubscriptions(
+          req.user._id,
+          updatedSub._id,
+          session,
+          isUpgrade ? subDetails.notes.oldSubId : null,
+        );
 
         await User.findByIdAndUpdate(
           req.user._id,
           {
             plan: actualPlan,
             maxQuota: quotaBytes,
-            maxBandwidthQuota:monthlyBandwidthLimit,
+            maxBandwidthQuota: monthlyBandwidthLimit,
             subscription: updatedSub._id,
             // Plan actually changed → start a fresh 30-day bandwidth window.
             ...(req.user.plan !== actualPlan && {
@@ -450,14 +436,6 @@ export const verifySubscriptionSignature = async (req, res, next) => {
           },
           { session },
         );
-
-        if (isUpgrade) {
-          await Subscription.findOneAndUpdate(
-            { razorpaySubscriptionId: subDetails.notes.oldSubId },
-            { status: "cancelled", endedAt: new Date() },
-            { session },
-          );
-        }
       });
     } finally {
       session.endSession();
@@ -465,17 +443,7 @@ export const verifySubscriptionSignature = async (req, res, next) => {
 
     // Invalidate AFTER the commit so the next read refetches the new plan.
     await redisClient.del(userdataKey);
-
-    // Send upgrade confirmation email
-    if (isUpgrade) {
-      sendSubscriptionActionEmail(
-        req.user.name,
-        req.user.email,
-        "upgrade",
-        "executed",
-        formatDate(subDetails.current_end),
-      ).catch(() => {});
-    }
+    await invalidateUser(req.user._id);
 
     return res
       .status(200)
@@ -491,7 +459,7 @@ export const updateSubscriptionPlan = async (req, res, next) => {
     const user = req.user;
 
     if (!user || !user.subscription) {
-    // if (!user || !user.subscription || user.subscription.status !== "active") {
+      // if (!user || !user.subscription || user.subscription.status !== "active") {
       return next(
         getErrorObject("No active subscription found to modify.", 400),
       );
@@ -520,11 +488,6 @@ export const updateSubscriptionPlan = async (req, res, next) => {
 
     // 2. UPGRADE FLOW
     if (!isDowngrade) {
-      const { eligibleCreditPaise, offerId } = computeSwitchCredit(
-        currentPlanKey,
-        user.subscription.currentPeriodStart,
-      );
-
       // Dedup: clean up any abandoned pending upgrade sub
       const pendingUpgrade = await Subscription.findOne({
         user: user._id,
@@ -544,17 +507,18 @@ export const updateSubscriptionPlan = async (req, res, next) => {
       }
 
       // Create the new upgraded subscription mandate
-      const upgradeSub = await getRazorpayInstance().subscriptions.create({
+      const upgradeOptions = {
         plan_id: newPlanId,
         total_count: 120,
-        ...(offerId && { offer_id: offerId }),
         notes: {
           userId: user._id.toString(),
           plan: newPlanKey.toUpperCase(),
           isUpgrade: "true",
           oldSubId: subId,
         },
-      });
+      };
+
+      const upgradeSub = await getRazorpayInstance().subscriptions.create(upgradeOptions);
 
       // Snapshot the limits for the new pending upgrade sub
       await Subscription.create({
@@ -578,14 +542,13 @@ export const updateSubscriptionPlan = async (req, res, next) => {
       });
 
       await redisClient.del(`storageApp:user:${user._id}:userdata`);
+      await invalidateUser(user._id);
 
       return res.status(200).json({
         success: true,
         data: {
           subscriptionId: upgradeSub.id,
           requiresUpiFallback: true,
-          creditApplied:
-            eligibleCreditPaise > 0 ? eligibleCreditPaise / 100 : 0,
         },
       });
     }
@@ -623,16 +586,6 @@ export const updateSubscriptionPlan = async (req, res, next) => {
           );
         });
 
-        // Calculate the end of current cycle
-        const effectiveDate = formatDate(user.subscription.currentPeriodEnd);
-        sendSubscriptionActionEmail(
-          user.name,
-          user.email,
-          "downgrade",
-          "requested",
-          effectiveDate,
-        ).catch(console.error);
-
         await redisClient.del(`storageApp:user:${user._id}:userdata`);
 
         return res.status(200).json({
@@ -644,11 +597,6 @@ export const updateSubscriptionPlan = async (req, res, next) => {
           // UPI mandates cannot be updated mid-cycle → fall back to
           // cancel-current + subscribe-to-new with the prorated switch credit.
           try {
-            const { eligibleCreditPaise, offerId } = computeSwitchCredit(
-              currentPlanKey,
-              user.subscription.currentPeriodStart,
-            );
-
             // Dedup: clean up any abandoned pending sub
             const pendingSub = await Subscription.findOne({
               user: user._id,
@@ -668,24 +616,18 @@ export const updateSubscriptionPlan = async (req, res, next) => {
 
             // Cancel the current mandate immediately so the customer is not
             // charged twice (they re-pay for the new plan via checkout).
-            const cancelledSub = await getRazorpayInstance().subscriptions.cancel(
-              subId,
-              0,
-            );
-            await Subscription.findByIdAndUpdate(
-              user.subscription._id,
-              {
-                cancelAtPeriodEnd: true,
-                endedAt: new Date(cancelledSub.end_at * 1000),
-                status: "cancelation_requested",
-              },
-            );
+            const cancelledSub =
+              await getRazorpayInstance().subscriptions.cancel(subId, 0);
+            await Subscription.findByIdAndUpdate(user.subscription._id, {
+              cancelAtPeriodEnd: true,
+              endedAt: new Date(cancelledSub.end_at * 1000),
+              status: "cancelation_requested",
+            });
 
             // Create the new lower-plan subscription with switch credit
-            const fallbackSub = await getRazorpayInstance().subscriptions.create({
+            const fallbackOptions = {
               plan_id: newPlanId,
               total_count: 120,
-              ...(offerId && { offer_id: offerId }),
               notes: {
                 userId: user._id.toString(),
                 plan: newPlanKey.toUpperCase(),
@@ -693,7 +635,10 @@ export const updateSubscriptionPlan = async (req, res, next) => {
                 oldSubId: subId,
                 upiFallback: "true",
               },
-            });
+            };
+
+            const fallbackSub =
+              await getRazorpayInstance().subscriptions.create(fallbackOptions);
 
             await Subscription.create({
               user: user._id,
@@ -716,14 +661,13 @@ export const updateSubscriptionPlan = async (req, res, next) => {
             });
 
             await redisClient.del(`storageApp:user:${user._id}:userdata`);
+            await invalidateUser(user._id);
 
             return res.status(200).json({
               success: true,
               data: {
                 subscriptionId: fallbackSub.id,
                 requiresUpiFallback: true,
-                creditApplied:
-                  eligibleCreditPaise > 0 ? eligibleCreditPaise / 100 : 0,
               },
             });
           } catch (fallbackErr) {
@@ -742,6 +686,7 @@ export const updateSubscriptionPlan = async (req, res, next) => {
       }
     }
   } catch (err) {
+    console.log(err)
     next(err);
   }
 };
@@ -772,14 +717,6 @@ export const cancelSubscriptionPlan = async (req, res, next) => {
           { session },
         );
 
-        const effectiveDate = formatDate(cancelledSub.end_at);
-        sendSubscriptionActionEmail(
-          user.name,
-          user.email,
-          "cancel",
-          "requested",
-          effectiveDate,
-        ).catch(console.error);
       });
     } finally {
       session.endSession();
@@ -787,6 +724,7 @@ export const cancelSubscriptionPlan = async (req, res, next) => {
 
     // Clear cached user data
     await redisClient.del(`storageApp:user:${user._id}:userdata`);
+    await invalidateUser(user._id);
 
     return res.status(200).json({
       success: true,

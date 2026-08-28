@@ -5,14 +5,13 @@ import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
 import { PLAN_DETAILS } from "../misc/constants.js";
 import { redisClient } from "../configs/redis.js";
+import { invalidateUser } from "../utils/responseCache.js";
 import { deleteS3Objects } from "../services/s3Client.js";
 import {
   sendAbandonedCartEmail,
-  sendSubscriptionActionEmail,
 } from "../services/emailService.js";
 import { createNotification } from "../services/notificationService.js";
 import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
-import { formatDate } from "../utils/formatDate.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import connectMongoose from "../configs/connect.js";
 
@@ -134,16 +133,7 @@ export const startBullMQWorker = () => {
 
             await recalculateTrashExpiry(sub.user, newPlan.trashRetentionDays);
             await redisClient.del(`storageApp:user:${sub.user}:userdata`);
-
-            if (userDoc && userDoc.email) {
-              sendSubscriptionActionEmail(
-                userDoc.name,
-                userDoc.email,
-                "downgrade",
-                "executed",
-                formatDate(new Date()),
-              ).catch(console.error);
-            }
+            await invalidateUser(sub.user);
 
             await createNotification({
               userId: sub.user,
@@ -189,16 +179,7 @@ export const startBullMQWorker = () => {
               PLAN_DETAILS["FREE"].trashRetentionDays,
             );
             await redisClient.del(`storageApp:user:${sub.user}:userdata`);
-
-            if (userDoc && userDoc.email) {
-              sendSubscriptionActionEmail(
-                userDoc.name,
-                userDoc.email,
-                "cancel",
-                "executed",
-                formatDate(new Date()),
-              ).catch(console.error);
-            }
+            await invalidateUser(sub.user);
 
             await createNotification({
               userId: sub.user,
@@ -399,6 +380,7 @@ export const startBullMQWorker = () => {
               $unset: { gracePeriodEndsAt: 1 },
             });
             await redisClient.del(`storageApp:user:${user._id}:userdata`);
+            await invalidateUser(user._id);
 
             await createNotification({
               userId: user._id,
@@ -444,6 +426,7 @@ export const startBullMQWorker = () => {
               redisClient.del(`storageApp:user:${u._id}:userdata`),
             ),
           );
+          await Promise.all(dueUsers.map((u) => invalidateUser(u._id)));
           await Promise.all(
             dueUsers.map((u) =>
               createNotification({
@@ -489,6 +472,7 @@ export const startBullMQWorker = () => {
               status: "completed",
             });
             await redisClient.del(`storageApp:user:${sub.user}:userdata`);
+            await invalidateUser(sub.user);
           }
           console.log(`Reaped ${subsToReap.length} halted subscriptions.`);
           break;

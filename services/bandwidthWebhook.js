@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { redisClient } from "../configs/redis.js";
+import { invalidateUser } from "../utils/responseCache.js";
 
 import { User } from "../models/user.model.js";
 import { ensureBandwidthWindow } from "../utils/bandwidthWindow.js";
@@ -67,6 +68,7 @@ export const bandwidthWebhook = async (req, res) => {
 
     // Optionally bust their specific Redis cache so the UI updates their quota bar
     await redisClient.del(`storageApp:user:${payload.u}:userdata`);
+    await invalidateUser(payload.u);
 
     return res.status(200).send("Bandwidth Logged");
   } catch (err) {

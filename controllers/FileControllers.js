@@ -12,11 +12,11 @@ import {
   BUCKET_NAME,
 } from "../services/s3Client.js";
 import { redisClient } from "../configs/redis.js";
+import { invalidateUser } from "../utils/responseCache.js";
 import { IS_SAAS_MODE } from "../misc/constants.js";
 import { User } from "../models/user.model.js";
 import { Permission } from "../models/permission.model.js";
 import { generateSecureDownloadUrl } from "../services/cdnRouter.js";
-import { logActivity } from "../utils/activityLogger.js";
 import { ensureBandwidthWindow } from "../utils/bandwidthWindow.js";
 
 // The Cloudflare worker/webhook bandwidth path is SaaS-only. In self-hosted
@@ -247,15 +247,6 @@ export const copyFileHandler = async (req, res, next) => {
       .populate("userId", "_id name email avatarUrl")
       .lean();
 
-    logActivity({
-      userId: req.user._id,
-      action: "copy",
-      itemType: "file",
-      itemId: copy._id,
-      parentId: copy.parentId || undefined,
-      itemName: file.name,
-    });
-
     return res
       .status(201)
       .json({ success: true, data: { item: getFileDoc(copyWithUser) } });
@@ -312,6 +303,7 @@ export const deleteFileHandler = async (req, res, next) => {
       }).session(session);
 
       await redisClient.del(`storageApp:user:${req.user._id}:userdata`);
+      await invalidateUser(req.user._id);
       return count === 0 && file.key ? [file.key, file.thumbnailKey] : [];
     });
 
@@ -327,15 +319,6 @@ export const deleteFileHandler = async (req, res, next) => {
         throw s3Err;
       }
     }
-
-    logActivity({
-      userId: req.user._id,
-      action: "delete",
-      itemType: "file",
-      itemId: req.params.id,
-      parentId: fileParentId || undefined,
-      itemName: fileName,
-    });
 
     return res.status(200).json({
       success: true,

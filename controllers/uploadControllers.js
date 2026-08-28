@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import crypto from "crypto";
 import { redisClient } from "../configs/redis.js";
+import { invalidateUser } from "../utils/responseCache.js";
 import {
   abortS3Upload,
   completeMultipartUpload,
@@ -23,7 +24,6 @@ import {
 import { t, THUMBNAIL_SIZE } from "../misc/constants.js";
 import { getErrorObject, getFileDoc, getUserLimits } from "../utils/helper.js";
 import { DeleteObjectsCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { logActivity } from "../utils/activityLogger.js";
 
 const twoDaysMs = 2 * t._day * t._ms;
 
@@ -305,15 +305,7 @@ export const completeUpload = async (req, res, next) => {
 
       const userDataKey = `storageApp:user:${upload.userId}:userdata`;
       await redisClient.del(userDataKey);
-
-      logActivity({
-        userId: upload.userId,
-        action: "upload",
-        itemType: "file",
-        itemId: file._id,
-        parentId: file.parentId || upload.targetId || undefined,
-        itemName: file.name,
-      });
+      await invalidateUser(upload.userId);
     } catch (s3OrDbError) {
       console.error("Error during upload completion, aborting:", s3OrDbError);
 

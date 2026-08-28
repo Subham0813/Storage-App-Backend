@@ -5,7 +5,6 @@ import {
   getDashboardStats,
   getAllUsers,
   getSingleUser,
-  getUserActivity,
   getUserFeedbacks,
   logoutUser,
   recoverUser,
@@ -24,7 +23,6 @@ router.get("/users", getAllUsers);
 
 router.get("/user/:id", getSingleUser);
 router.get("/user/:id/storage", getUserStats);
-router.get("/user/:id/activity", getUserActivity);
 router.post("/user/:id/email", sendUserEmail);
 
 router.get("/feedback/:userId", getUserFeedbacks);
