@@ -91,8 +91,6 @@ export const sendSharingNotificationEmail = async (
   senderName,
   message = "",
 ) => {
-  if (!IS_SAAS_MODE) return null;
-
   try {
     const template = sharingNotificationTemplate(
       itemName,
@@ -129,8 +127,6 @@ export const sendSharingNotificationEmail = async (
  * @param {string} email - Recipient email address
  */
 export const sendAccountBannedEmail = async (username, email) => {
-  if (!IS_SAAS_MODE) return null;
-
   try {
     const template = accountBannedTemplate(username);
 
@@ -160,8 +156,6 @@ export const sendAccountBannedEmail = async (username, email) => {
  * @param {string} email - Recipient email address
  */
 export const sendAccountRecoveredEmail = async (username, email) => {
-  if (!IS_SAAS_MODE) return null;
-
   try {
     const template = accountRecoveredTemplate(username);
 
@@ -201,8 +195,6 @@ export const sendBulkSharingNotifications = async (
   senderName,
   message = "",
 ) => {
-  if (!IS_SAAS_MODE) return [];
-
   try {
     const promises = emails.map((email) =>
       sendSharingNotificationEmail(

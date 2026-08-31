@@ -537,6 +537,38 @@ export const feedbackHandler = async (req, res, next) => {
     const { success, data, error } = feedbackSchema.safeParse(req.body);
     if (!success) return next(getErrorObject(error.issues[0].message));
 
+    // Tiered rate limit: FREE 2/week, PRO 5/week, BUSINESS 10/week (fixed 7d window)
+    const tierLimits = { FREE: 2, PRO: 5, BUSINESS: 10 };
+    const basePlan = (req.user.plan || "FREE").split("_")[0].toUpperCase();
+    const limit = tierLimits[basePlan] ?? 2;
+    try {
+      const fbKey = `storageApp:feedback:${req.user._id.toString()}:count`;
+      const count = await redisClient.incr(fbKey);
+      if (count === 1) await redisClient.expire(fbKey, 7 * 24 * 3600);
+      if (count > limit) {
+        await redisClient.decr(fbKey);
+        const ttl = await redisClient.ttl(fbKey);
+        const days = ttl > 0 ? Math.ceil(ttl / 86400) : 7;
+        if (basePlan === "FREE") {
+          return next(
+            getErrorObject(
+              `Free plan limit: 2 feedbacks per week.Resets in ${days}d.`,
+              429,
+            ),
+          );
+        }
+        return next(
+          getErrorObject(
+            `Limit ${limit}/week for ${basePlan}. Please email us the issue/s or try again in ${days}d.`,
+            429,
+          ),
+        );
+      }
+    } catch (rlErr) {
+      console.error("Feedback rate-limit error (fail-open):", rlErr?.message);
+     return next(getErrorObject("Too many requests. Please try again later.", 429));
+    }
+
     const { category, title, description, screenshotBase64 } = data;
     let screenshotKey = null;
 
