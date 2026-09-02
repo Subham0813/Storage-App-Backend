@@ -1,6 +1,6 @@
 {
   "name": "@subham0813/storage-app-backend",
-  "version": "4.0.0",
+  "version": "1.0.0",
   "private": true,
   "main": "app.js",
   "type": "module",
