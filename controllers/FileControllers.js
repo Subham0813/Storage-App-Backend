@@ -119,7 +119,6 @@ export const downloadFileHandler = async (req, res, next) => {
     const usedBandwidth = owner.usedBandwidthQuota || 0;
     const bandwidthLimit = limits.monthlyBandwidth;
 
-    // 1. Hard Quota Check
     if (usedBandwidth >= bandwidthLimit) {
       return next(
         getErrorObject(
@@ -202,14 +201,12 @@ export const copyFileHandler = async (req, res, next) => {
 
     let copy;
     await session.withTransaction(async () => {
-      // 1. Quota Validation
       const currentUsedStorage = targetUser.root?.size || 0;
       const copyLimits = getUserLimits(targetUser);
       if (copyLimits.maxStorage !== Infinity && currentUsedStorage + file.size > copyLimits.maxStorage) {
         throw getErrorObject("Insufficient storage quota.", 400);
       }
 
-      // 2. Create new virtual user file (Sharing the exact same S3 key!)
       const { key, webviewLink, extension, mime, size, thumbnailKey } = file;
       const newFileObj = {
         userId: fileUserId,
@@ -228,7 +225,6 @@ export const copyFileHandler = async (req, res, next) => {
       [copy] = await UserFile.create([newFileObj], { session });
 
       const targetAncestors = [...req.target.path, req.target._id];
-      // 3. Update Target Directory AND its Ancestors Size
       await Directory.updateMany(
         { _id: { $in: targetAncestors } },
         { $inc: { size: file.size }, lastModifiedBy: targetUser._id },

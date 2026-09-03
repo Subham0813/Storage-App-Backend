@@ -483,7 +483,6 @@ export const shareAccess = (model) => {
 
     try {
       await session.withTransaction(async () => {
-        // 1. Verify item ownership
         item =
           req.Item ||
           (await Model.findOne({
@@ -510,7 +509,6 @@ export const shareAccess = (model) => {
           );
         }
 
-        // 2. Find matching users in the DB by email
         const emails =
           emailsWithRole
             ?.filter((e) => e.email !== req.user.email)
@@ -538,7 +536,6 @@ export const shareAccess = (model) => {
           if (targetUsers.length > 0) {
             validEmails = targetUsers.map((u) => u.email);
             targetUserIds = targetUsers.map((u) => u._id);
-            // 3. Prepare Bulk Upsert for the ACL Permission Collection
             const permissionOps = targetUsers.map((tUser) => {
               const userReq = emailsWithRole.find(
                 (e) => e.email === tUser.email,
@@ -566,7 +563,6 @@ export const shareAccess = (model) => {
           }
         }
 
-        // 4. Update the item's shareToken/sharedAt status
         if (publicRole) {
           query.$set = {
             publicRole: publicRole,
@@ -687,7 +683,6 @@ export const revokeAccess = (model) => {
         const emails =
           rawEmails?.filter((e) => e !== req.user.email).map((e) => e) || [];
 
-        // 1. Delete the Permission records for these specific users
         const query = { $set: { lastModifiedBy: req.user._id } };
         if (emails && emails.length > 0) {
           const targetUsers = await User.find({
@@ -707,7 +702,6 @@ export const revokeAccess = (model) => {
           }
         }
 
-        // 2. Handle Public Link revocation if provided}
         if (publicRole) {
           query.$set.publicRole = publicRole;
           query.$set.shareTokenExpiresAt = null;

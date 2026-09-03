@@ -30,7 +30,6 @@ export const bulkDownloadHandler = async (req, res, next) => {
       return next(getErrorObject("No items provided.", 400));
     }
 
-    // 1. Bandwidth check
     const limits = getUserLimits(req.user);
 
     await ensureBandwidthWindow(req.user);
@@ -48,7 +47,6 @@ export const bulkDownloadHandler = async (req, res, next) => {
 
     const userId = req.user._id.toString();
 
-    // 2. Validate items and check access
     const validItems = [];
     for (const item of items) {
       if (!mongoose.isValidObjectId(item.id)) {
@@ -115,7 +113,6 @@ export const bulkDownloadHandler = async (req, res, next) => {
       return next(getErrorObject("No downloadable items found.", 400));
     }
 
-    // 3. Stream ZIP
     const timestamp = new Date()
       .toISOString()
       .replace(/[-:.]/g, "")
@@ -179,7 +176,6 @@ export const bulkDownloadHandler = async (req, res, next) => {
     await archive.finalize();
     byteCounter.end();
 
-    // 4. Track bandwidth
     if (totalBytes > 0) {
       await User.findByIdAndUpdate(req.user._id, {
         $inc: { usedBandwidthQuota: totalBytes },

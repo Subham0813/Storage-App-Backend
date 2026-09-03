@@ -9,19 +9,13 @@
 
 ## Plan Tiers & Limits
 
-| Plan Key          | Billing | Price (INR) | Storage  | Max File Size | Max Devices | Bandwidth/mo | Trash Retention |
-| ----------------- | ------- | ----------- | -------- | ------------- | ----------- | ------------ | --------------- |
-| `FREE`            | —       | ₹0          | 5 GB     | 100 MB        | 1           | 10 GB        | 7 days          |
-| `PRO_MONTHLY`     | Monthly | ₹49         | 50 GB    | 2 GB          | 3           | 100 GB       | 15 days         |
-| `PRO_YEARLY`      | Yearly  | ₹499        | 50 GB    | 2 GB          | 3           | 150 GB       | 15 days         |
-| `ULTRA_MONTHLY`   | Monthly | ₹149        | 200 GB   | 10 GB         | 5           | 500 GB       | 30 days         |
-| `ULTRA_YEARLY`    | Yearly  | ₹1499       | 200 GB   | 10 GB         | 5           | 700 GB       | 30 days         |
-| `PREMIUM_MONTHLY` | Monthly | ₹399        | 500 GB   | 25 GB         | 7           | 1000 GB      | 45 days         |
-| `PREMIUM_YEARLY`  | Yearly  | ₹3999       | 500 GB   | 25 GB         | 7           | 1300 GB      | 45 days         |
-| `ELITE_MONTHLY`   | Monthly | ₹699        | 1 TB     | 50 GB         | 10          | 2000 GB      | 60 days         |
-| `ELITE_YEARLY`    | Yearly  | ₹6999       | 1 TB     | 50 GB         | 10          | 2500 GB      | 60 days         |
-
-> Yearly plans have higher monthly bandwidth limits than their monthly counterparts.
+| Plan Key | Billing | Price (INR) | Storage | Max File Size | Max Devices | Bandwidth/mo | Trash Retention |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `FREE` | — | ₹0 | 2 GB | 100 MB | 1 | 5 GB | 5 days |
+| `PRO_MONTHLY` | Monthly | ₹99 | 100 GB | 2 GB | 3 | 200 GB | 15 days |
+| `PRO_YEARLY` | Yearly | ₹999 | 100 GB | 2 GB | 3 | 200 GB | 15 days |
+| `BUSINESS_MONTHLY` | Monthly | ₹299 | 500 GB | 10 GB | 5 | 1 TB | 30 days |
+| `BUSINESS_YEARLY` | Yearly | ₹2999 | 500 GB | 10 GB | 5 | 1 TB | 30 days |
 
 ---
 
@@ -45,56 +39,45 @@ No body. No auth.
       {
         "name": "PRO",
         "baseKey": "PRO",
-        "quota": 50,
-        "priceMo": 49,
-        "priceYr": 499,
-        "discountTag": "Save 15%",
+        "quota": 100,
+        "priceMo": 99,
+        "priceYr": 999,
+        "discountTag": "Save 17%",
         "isPopular": true,
         "features": [
-          "50GB Cloud Storage",
+          "100GB Cloud Storage",
           "Fast parallel uploads (4x)",
           "Public link sharing enabled",
           "Sync across 3 devices",
-          "15-day file recovery grace period",
-          "100GB monthly download bandwidth"
+          "15-day trash auto-recovery",
+          "14-day post-expiry grace period",
+          "200GB monthly bandwidth"
         ]
       },
       {
-        "name": "ULTRA",
-        "baseKey": "ULTRA",
-        "quota": 200,
-        "priceMo": 149,
-        "priceYr": 1499,
-        "discountTag": "Save 16%",
-        "isPopular": false,
-        "features": [...]
-      },
-      {
-        "name": "PREMIUM",
-        "baseKey": "PREMIUM",
+        "name": "BUSINESS",
+        "baseKey": "BUSINESS",
         "quota": 500,
-        "priceMo": 399,
-        "priceYr": 3999,
-        "discountTag": "Save 16%",
+        "priceMo": 299,
+        "priceYr": 2999,
+        "discountTag": "Save 17%",
         "isPopular": false,
-        "features": [...]
-      },
-      {
-        "name": "ELITE",
-        "baseKey": "ELITE",
-        "quota": 1000,
-        "priceMo": 699,
-        "priceYr": 6999,
-        "discountTag": "Save 16%",
-        "isPopular": false,
-        "features": [...]
+        "features": [
+          "500GB Cloud Storage",
+          "Ultra-fast parallel uploads (8x)",
+          "Full public link sharing & team tools",
+          "Sync across 5 devices",
+          "30-day trash auto-recovery",
+          "30-day post-expiry grace period",
+          "1TB monthly bandwidth"
+        ]
       }
     ]
   }
 }
 ```
 
-> `name` is the raw plan base key (e.g. `"PRO"`, `"ULTRA"`, `"PREMIUM"`), not title-cased.  
+> `name` is the raw plan base key (e.g. `"PRO"`, `"BUSINESS"`), not title-cased.
 > `isPopular` is `true` for `PRO` only.
 
 ---
@@ -116,9 +99,9 @@ No body. Just the `sessionId` cookie.
     "plan": {
       "name": "PRO_MONTHLY",
       "billingCycle": "monthly",
-      "priceInRupees": 49,
+      "priceInRupees": 99,
       "status": "active",
-      "maxQuota": 50000000000,
+      "maxQuota": 100000000000,
       "usedQuota": 643763,
       "startedAt": "2026-06-01T00:00:00.000Z",
       "renewAt": "2026-07-01T00:00:00.000Z",
@@ -127,15 +110,15 @@ No body. Just the `sessionId` cookie.
       "cancelAtPeriodEnd": false,
       "invoiceUrl": "https://rzp.io/i/...",
       "limits": {
-        "quotaBytes": 50000000000,
+        "quotaBytes": 100000000000,
         "maxFileSize": 2000000000,
         "chunkSize": 8388608,
-        "monthlyBandwidthLimit": 100000000000,
+        "monthlyBandwidthLimit": 200000000000,
         "maxUploadConcurrency": 4,
         "maxDevices": 3,
         "canCreatePublicLinks": true,
         "trashRetentionDays": 15,
-        "gracePeriod": 15
+        "gracePeriod": 14
       }
     }
   }
@@ -262,7 +245,7 @@ Upgrades or downgrades the user's active subscription plan.
 ```json
 // Body (JSON)
 {
-  "plan": "ULTRA_MONTHLY" //case insensitive
+  "plan": "BUSINESS_MONTHLY" //case insensitive
 }
 ```
 
@@ -367,7 +350,7 @@ Body is the raw Razorpay event payload. Relevant fields used internally:
     "invoice": {
       "entity": {
         "short_url": "https://rzp.io/i/invoice...",
-        "amount": 4900,
+        "amount": 9900,
         "subscription_id": "sub_K3aB2xyz..."
       }
     }

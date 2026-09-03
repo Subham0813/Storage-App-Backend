@@ -252,7 +252,6 @@ export const getSharedWith = (model) => {
     if (!Model) return next(getErrorObject("No `model` param found.", 400));
 
     try {
-      // 1. Ask the ACL: "What item IDs do I have access to?"
       const permissions = await Permission.find({
         userId: req.user._id,
         onModel: onModelType,
@@ -262,7 +261,6 @@ export const getSharedWith = (model) => {
 
       const sharedItemIds = permissions.map((p) => p.itemId);
 
-      // 2. Fetch those specific items
       const projectionStr =
         "userId parentId name mime size createdAt updatedAt";
       const query = { _id: { $in: sharedItemIds }, isDeleted: false };
@@ -373,8 +371,6 @@ export const getRecentItems = (model) => {
     try {
       const userId = req.user._id;
 
-      // Calculate the cutoff date
-      // If req.body.days is 3, we go back 3 days. Default is 7.
       const days = parseInt(req.query?.days) || 7;
       const cutoffDate = new Date(Date.now() - days * 24 * 3600 * 1000);
 

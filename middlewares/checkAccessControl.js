@@ -71,7 +71,6 @@ export const checkAccess = (modelType, action = "view") => {
         }
       }
 
-      // 1. Token / Guest Access Fast-Pass (Handled by validateSession)
       if (req.tokenAuth && action === "view") {
         // The token holder is NOT necessarily the caller — expose the owner
         // separately so bandwidth/quota checks bill the content owner while

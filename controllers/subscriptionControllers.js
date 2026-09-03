@@ -357,7 +357,6 @@ export const verifySubscriptionSignature = async (req, res, next) => {
       );
     }
 
-    // 2. Fetch ground truth from Razorpay to prevent payload spoofing
     const subDetails = await getRazorpayInstance().subscriptions.fetch(
       razorpay_subscription_id,
     );
@@ -475,7 +474,6 @@ export const updateSubscriptionPlan = async (req, res, next) => {
     const newQuota = newPlanDetails.quotaBytes;
     const isDowngrade = newQuota < currentQuota;
 
-    // 1. Data Safeguard Hard Block
     const usedSpace = user.root?.size || 0;
     if (isDowngrade && usedSpace > newQuota) {
       const excessGB = ((usedSpace - newQuota) / 1e9).toFixed(2);
@@ -486,7 +484,6 @@ export const updateSubscriptionPlan = async (req, res, next) => {
     const subId = user.subscription.razorpaySubscriptionId;
     const newPlanId = newPlanDetails.planId;
 
-    // 2. UPGRADE FLOW
     if (!isDowngrade) {
       // Dedup: clean up any abandoned pending upgrade sub
       const pendingUpgrade = await Subscription.findOne({
@@ -506,7 +503,6 @@ export const updateSubscriptionPlan = async (req, res, next) => {
         await Subscription.deleteOne({ _id: pendingUpgrade._id });
       }
 
-      // Create the new upgraded subscription mandate
       const upgradeOptions = {
         plan_id: newPlanId,
         total_count: 120,
@@ -520,7 +516,6 @@ export const updateSubscriptionPlan = async (req, res, next) => {
 
       const upgradeSub = await getRazorpayInstance().subscriptions.create(upgradeOptions);
 
-      // Snapshot the limits for the new pending upgrade sub
       await Subscription.create({
         user: user._id,
         razorpaySubscriptionId: upgradeSub.id,
@@ -552,7 +547,6 @@ export const updateSubscriptionPlan = async (req, res, next) => {
         },
       });
     }
-    // 3. DOWNGRADE FLOW
     else {
       const session = await mongoose.startSession();
       try {
@@ -722,7 +716,6 @@ export const cancelSubscriptionPlan = async (req, res, next) => {
       session.endSession();
     }
 
-    // Clear cached user data
     await redisClient.del(`storageApp:user:${user._id}:userdata`);
     await invalidateUser(user._id);
 

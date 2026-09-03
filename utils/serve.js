@@ -25,12 +25,10 @@ export const serveZipS3 = async ({
 }) => {
   const dirIdStr = dirId.toString();
 
-  // 1. Cycle Detection & Depth Guard
   if (visited.has(dirIdStr)) return;
   visited.add(dirIdStr);
   if (depth > MAX_DEPTH) return;
 
-  // 2. Fetch and append files from S3
   const files = await UserFile.find({
     parentId: dirId,
     isDeleted: false,
@@ -56,7 +54,6 @@ export const serveZipS3 = async ({
     if (stream) archive.append(stream.Body, { name: zipPath + stream.name });
   }
 
-  // 3. Fetch and recurse through child directories
   const dirs = await Directory.find(
     { parentId: dirId, isDeleted: false },
     { dirname: 1, name: 1 },
@@ -69,7 +66,6 @@ export const serveZipS3 = async ({
     // Add empty dir entry to ZIP structure
     archive.append("", { name: zipPath + safeDirName + "/" });
 
-    // Recurse with depth + 1
     await serveZipS3({
       archive,
       dirId: dir._id,
