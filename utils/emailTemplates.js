@@ -170,6 +170,62 @@ export const sharingNotificationTemplate = (
   };
 };
 
+export const accessRevokedEmailTemplate = (
+  itemName,
+  itemType,
+  senderName,
+  message,
+) => {
+  return {
+    subject: `Access removed: ${itemName} - ${appName}`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; text-align: center; }
+            .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+            .item-box { background: white; border-left: 4px solid #b02a37; padding: 15px; margin: 20px 0; border-radius: 4px; }
+            .item-name { font-size: 18px; font-weight: bold; color: #b02a37; }
+            .item-type { color: #666; font-size: 14px; text-transform: capitalize; }
+            .message-box { background: #e8f4f8; padding: 15px; border-radius: 4px; margin: 15px 0; border-left: 4px solid #17a2b8; }
+            .cta-button { display: inline-block; background: #b02a37; color: white; padding: 12px 30px; text-decoration: none; border-radius: 4px; margin: 20px 0; font-weight: bold; }
+            .footer { text-align: center; color: #999; font-size: 12px; margin-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>${appName}</h1>
+              <p>Access to a shared item was removed</p>
+            </div>
+            <div class="content">
+              <p>Hi there,</p>
+              <p><strong>${senderName}</strong> has removed your access to the following ${itemType}:</p>
+              <div class="item-box">
+                <div class="item-name">📁 ${itemName}</div>
+                <div class="item-type">${itemType}</div>
+              </div>
+              ${message ? `<div class="message-box"><strong>They also left a message for you:</strong><br><br><em>"${message}"</em></div>` : ""}
+              <p>You can no longer view or access this item through your account.</p>
+              <div style="text-align: left;">
+                <a href=${process.env.CLIENT_APP_URL} class="cta-button">View in ${appName}</a>
+              </div>
+              <p>Best,<br>The ${appName} Team</p>
+            </div>
+            <div class="footer">
+              <p>&copy; ${new Date().getFullYear()} ${appName}. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `,
+  };
+};
+
 export const accountBannedTemplate = (username) => {
   return {
     subject: `Important update regarding your account status - ${appName}`,

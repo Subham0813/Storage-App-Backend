@@ -15,7 +15,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Tiered feedback rate limiting (SaaS only)** — `POST /api/user/feedback` gated by `requireSaasMode` (selfhosted → `404`). Redis fixed 7-day window `storageApp:feedback:{userId}:count` with limits `FREE 2/week`, `PRO 5/week`, `BUSINESS 10/week`. On exceed `429` with tiered fallback: `FREE` → `https://github.com/Subham0813/Storage-App-Backend/issues`, `PRO`/`BUSINESS` → `mailto:support@example.com`. Screenshot `≤1 MB` to `feedback/{userId}/{now}.webp` in public bucket.
 - **Google Drive integration hardening (backend)** — `revoke-drive-integration` now `POST https://oauth2.googleapis.com/revoke` best-effort + `del userdata` + `invalidateUser` idempotent; `getPickerTokenGoogle` busts `userdata` after refresh.
 - **Billing hardening** — `middlewares/requireSaasMode.js` and `misc/constants.js:IS_SAAS_MODE` now `trim().toLowerCase() === "saas"` to tolerate `SAAS`/` saas `.
-- **Sharing/ban emails for selfhosted** — ungated `sendSharingNotificationEmail`, `sendBulkSharingNotifications`, `sendAccountBannedEmail`, `sendAccountRecoveredEmail` in `services/emailService.js` so `SMTP`/`Resend` works outside `saas` when `FROM_EMAIL` is set.
+- **Sharing/ban emails for selfhosted** — ungated `sendSharingNotificationEmail`, `sendBulkShareEmails`, `sendAccountBannedEmail`, `sendAccountRecoveredEmail` in `services/emailService.js` so `SMTP`/`Resend` works outside `saas` when `FROM_EMAIL` is set. Revoke sends a dedicated `accessRevokedEmailTemplate` via `sendBulkRevokedEmails` (was: wrong "shared with you" template).
 - **Caching and quota tables** — documented in `README.md` with `PLAN_DETAILS` and `INSTANCE_CONFIG` divergence.
 
 ### Changed

@@ -19,7 +19,10 @@ import { restoreDescendants } from "../utils/restore.js";
 import { base64URLEncode } from "./oauthControllers.js";
 import { User } from "../models/user.model.js";
 import { Permission } from "../models/permission.model.js";
-import { sendBulkSharingNotifications } from "../services/emailService.js";
+import {
+  sendBulkRevokedEmails,
+  sendBulkShareEmails,
+} from "../services/emailService.js";
 import { notifyMany } from "../services/notificationService.js";
 import z from "zod";
 import { redisClient } from "../configs/redis.js";
@@ -599,7 +602,7 @@ export const shareAccess = (model) => {
       if (notify && validEmails && validEmails.length > 0) {
         const itemType = model === "file" ? "file" : "directory";
         const itemName = item.name;
-        sendBulkSharingNotifications(
+        sendBulkShareEmails(
           validEmails,
           itemName,
           itemType,
@@ -728,7 +731,7 @@ export const revokeAccess = (model) => {
       if (notify && revokedEmails && revokedEmails.length > 0) {
         const itemType = model === "file" ? "file" : "directory";
         const itemName = updatedItem?.name;
-        sendBulkSharingNotifications(
+        sendBulkRevokedEmails(
           revokedEmails,
           itemName,
           itemType,

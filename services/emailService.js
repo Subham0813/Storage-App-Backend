@@ -4,6 +4,7 @@ import {
   otpEmailTemplate,
   passwordResetConfirmationTemplate,
   sharingNotificationTemplate,
+  accessRevokedEmailTemplate,
   accountBannedTemplate,
   accountRecoveredTemplate,
   invoiceEmailTemplate,
@@ -188,31 +189,58 @@ export const sendAccountRecoveredEmail = async (username, email) => {
  * @param {string} senderName - Name of sender
  * @param {string} message - Optional message
  */
-export const sendBulkSharingNotifications = async (
+export const sendBulkShareEmails = async (
   emails,
   itemName,
   itemType,
   senderName,
   message = "",
 ) => {
+  return sendBulkEmails(
+    emails,
+    (email) => sharingNotificationTemplate(itemName, itemType, senderName, message),
+  );
+};
+
+/**
+ * Send bulk access-revoked notification emails
+ * @param {Array} emails - Array of email strings
+ * @param {string} itemName - Name of item access was revoked from
+ * @param {string} itemType - "file" | "directory"
+ * @param {string} senderName - Name of owner who revoked access
+ * @param {string} message - Optional message
+ */
+export const sendBulkRevokedEmails = async (
+  emails,
+  itemName,
+  itemType,
+  senderName,
+  message = "",
+) => {
+  return sendBulkEmails(
+    emails,
+    (email) => accessRevokedEmailTemplate(itemName, itemType, senderName, message),
+  );
+};
+
+const sendBulkEmails = async (emails, buildTemplate) => {
   try {
-    const promises = emails.map((email) =>
-      sendSharingNotificationEmail(
-        email,
-        itemName,
-        itemType,
-        senderName,
-        message,
-      ),
-    );
+    const promises = emails.map((email) => {
+      const template = buildTemplate(email);
+      return sendMail({
+        to: email,
+        subject: template.subject,
+        html: template.html,
+      });
+    });
 
     const results = await Promise.allSettled(promises);
     const successful = results.filter((r) => r.status === "fulfilled").length;
 
-    console.log(`Sent ${successful}/${emails.length} sharing notifications`);
+    console.log(`Sent ${successful}/${emails.length} notification emails`);
     return results;
   } catch (error) {
-    console.error(`Failed to send bulk sharing notifications:`, error.message);
+    console.error(`Failed to send bulk notification emails:`, error.message);
     return [];
   }
 };

@@ -250,7 +250,7 @@ Copy `.env.example` to `.env`. `APP_MODE` gates SaaS vs selfhosted.
 | `SUPPORT_EMAIL` | Shown in templates as contact — e.g. `support@example.com` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_SECURE` | Required if `smtp` (`true` for 465) |
 
-> **Email by mode** — OTP and password-reset are sent in **all** modes. Share/ban/recover/bulk, feedback alerts, invoice, abandoned-cart, subscription changes are SaaS-only except `sendSharingNotificationEmail` and `sendBulkSharingNotifications` and ban/recover now also work selfhosted if `FROM_EMAIL` is set.
+> **Email by mode** — OTP and password-reset are sent in **all** modes. Share/ban/recover/bulk, feedback alerts, invoice, abandoned-cart, subscription changes are SaaS-only except `sendSharingNotificationEmail` and `sendBulkShareEmails` and ban/recover now also work selfhosted if `FROM_EMAIL` is set. Access revocation uses a dedicated `accessRevokedEmailTemplate` via `sendBulkRevokedEmails`.
 
 ### Misc
 
