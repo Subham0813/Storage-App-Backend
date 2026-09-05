@@ -14,24 +14,16 @@ import {
   retireOldSubscriptions,
 } from "../controllers/subscriptionControllers.js";
 import { sendInvoiceEmail, sendSubscriptionActionEmail } from "./emailService.js";
-import { formatDate } from "../utils/formatDate.js";
+import { formatDate, safeDate } from "../utils/formatDate.js";
 
 export const razorpayWebhook = async (req, res, next) => {
   try {
     const signature = req.headers["x-razorpay-signature"];
-    const webhookSecret =
-      process.env.NODE_ENV === "production"
-        ? process.env.RAZORPAY_WEBHOOK_SECRET
-        : process.env.TEST_RAZORPAY_WEBHOOK_SECRET;
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
     const rawBody = Buffer.isBuffer(req.body)
       ? req.body.toString("utf8")
       : JSON.stringify(req.body);
-    const expectedSignature = crypto
-      .createHmac("sha256", webhookSecret)
-      .update(rawBody)
-      .digest("hex");
-    console.log({ expectedSignature, signature });
 
     const isValidSignature = validateWebhookSignature(
       rawBody,
@@ -40,52 +32,100 @@ export const razorpayWebhook = async (req, res, next) => {
     );
     req.body = JSON.parse(rawBody);
     if (!isValidSignature) {
-      console.log(
-        "Webhook signature validation failed",
-        JSON.stringify(req.body, null, 2),
-      );
+      // console.log("Webhook signature validation failed");
       return res.status(400).json({ status: "Invalid Signature" });
     }
 
+    if (
+      !req.body.event.startsWith("subscription.") &&
+      !req.body.event.startsWith("invoice.")
+    )
+      return res.status(200).end(); 
+
     const event = req.body.event;
-    const payload = req.body.payload.subscription.entity;
-    const subId = payload.id;
-    const userId = payload.notes?.userId;
+    // const payload = req.body.payload;
+    const { payment, order, invoice, subscription } = req.body.payload;
+
+    // console.log(event, {
+    //   P: payment?.entity || null,
+    //   O: order?.entity || null,
+    //   I: invoice?.entity || null,
+    //   S: subscription?.entity || null,
+    // });
+
+    const subPayload = subscription?.entity || {};
+    const subId = subPayload.id;
+    const userId = subPayload.notes?.userId;
 
     if (!userId) return res.status(200).end(); // Ignore events without our metadata
 
     const query = {
-      status: payload.status,
-      currentPeriodStart: payload.current_start
-        ? new Date(payload.current_start * 1000)
+      status: subPayload.status,
+      currentPeriodStart: subPayload.current_start
+        ? safeDate(subPayload.current_start)
         : undefined,
-      currentPeriodEnd: payload.current_end
-        ? new Date(payload.current_end * 1000)
+      currentPeriodEnd: subPayload.current_end
+        ? safeDate(subPayload.current_end)
         : undefined,
-      paidCount: payload.paid_count,
-      shortUrl: payload.short_url,
-      endedAt: payload.ended_at ? new Date(payload.ended_at * 1000) : undefined,
-      cancelReason: payload.cancel_reason,
+      paidCount: subPayload.paid_count,
+      shortUrl: subPayload.short_url,
+      endedAt: subPayload.ended_at
+        ? safeDate(subPayload.ended_at)
+        : undefined,
+      cancelReason: subPayload.cancel_reason,
     };
 
     Object.keys(query).forEach(
       (key) => query[key] === undefined && delete query[key],
     );
 
-    const isUpgrade = payload.notes?.isUpgrade === "true";
-    const oldSubId = isUpgrade ? payload.notes.oldSubId : null;
+    const isUpgrade = subPayload.notes?.isUpgrade === "true";
+    const oldSubId = isUpgrade ? subPayload.notes.oldSubId : null;
 
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
-        const updatedSub = await Subscription.findOneAndUpdate(
+        let updatedSub = await Subscription.findOneAndUpdate(
           { razorpaySubscriptionId: subId },
           { $set: query },
           { session, returnDocument: "after" },
         );
 
-        // Cross-check ownership: only process events whose subscription record
-        // belongs to the user referenced in the notes metadata.
+        if (!updatedSub) {
+          const planKey = subPayload.notes?.plan;
+          if (!planKey || !PLAN_DETAILS[planKey]) return;
+          const planInfo = PLAN_DETAILS[planKey];
+          const [newSub] = await Subscription.create([
+            {
+              user: userId,
+              razorpaySubscriptionId: subId,
+              planId: subPayload.plan_id,
+              planKey,
+              status: "active",
+              price: planInfo.priceInRupees,
+              currentPeriodStart: subPayload.current_start
+                ? new Date(subPayload.current_start * 1000)
+                : undefined,
+              currentPeriodEnd: subPayload.current_end
+                ? new Date(subPayload.current_end * 1000)
+                : undefined,
+              limits: {
+                quotaBytes: planInfo.quotaBytes,
+                maxFileSize: planInfo.maxFileSize,
+                chunkSize: planInfo.chunkSize,
+                monthlyBandwidthLimit: planInfo.monthlyBandwidthLimit,
+                maxUploadConcurrency: planInfo.maxUploadConcurrency,
+                maxDevices: planInfo.maxDevices,
+                canCreatePublicLinks: planInfo.canCreatePublicLinks,
+                trashRetentionDays: planInfo.trashRetentionDays,
+                gracePeriod: planInfo.gracePeriod,
+              },
+            }],
+            { session },
+          );
+          updatedSub = newSub.toObject();
+        }
+
         if (!updatedSub || updatedSub.user.toString() !== userId) return;
 
         const userDoc = await User.findById(userId, { name: 1, email: 1 })
@@ -94,8 +134,7 @@ export const razorpayWebhook = async (req, res, next) => {
 
         switch (event) {
           case "subscription.activated": {
-            const isUpiFallback =
-              payload.notes?.upiFallback === "true";
+            const isUpiFallback = subPayload.notes?.upiFallback === "true";
 
             if (isUpiFallback) {
               // UPI fallback downgrade — new lower-plan sub activated
@@ -105,10 +144,8 @@ export const razorpayWebhook = async (req, res, next) => {
                   userDoc.email,
                   "downgrade",
                   "executed",
-                  formatDate(payload.current_end),
-                ).catch((err) =>
-                  console.error("Downgrade email failed:", err),
-                );
+                  formatDate(subPayload.current_end),
+                ).catch((err) => console.error("Downgrade email failed:", err));
               }
             } else if (isUpgrade) {
               // Upgrade — new sub activated after upgrade checkout
@@ -118,10 +155,8 @@ export const razorpayWebhook = async (req, res, next) => {
                   userDoc.email,
                   "upgrade",
                   "executed",
-                  formatDate(payload.current_end),
-                ).catch((err) =>
-                  console.error("Upgrade email failed:", err),
-                );
+                  formatDate(subPayload.current_end),
+                ).catch((err) => console.error("Upgrade email failed:", err));
               }
             } else {
               // First-time subscription activated
@@ -131,7 +166,7 @@ export const razorpayWebhook = async (req, res, next) => {
                   userDoc.email,
                   "activation",
                   "executed",
-                  formatDate(payload.current_end),
+                  formatDate(subPayload.current_end),
                 ).catch((err) =>
                   console.error("Activation email failed:", err),
                 );
@@ -191,8 +226,7 @@ export const razorpayWebhook = async (req, res, next) => {
 
               // Send email only on plan changes (not same-plan renewals)
               if (planChanged && existingPlan && userDoc?.email) {
-                const oldPrice =
-                  PLAN_DETAILS[existingPlan]?.priceInRupees || 0;
+                const oldPrice = PLAN_DETAILS[existingPlan]?.priceInRupees || 0;
                 const newPrice = planInfo.priceInRupees || 0;
                 const isPlanUpgrade = newPrice > oldPrice;
 
@@ -201,7 +235,7 @@ export const razorpayWebhook = async (req, res, next) => {
                   userDoc.email,
                   isPlanUpgrade ? "upgrade" : "downgrade",
                   "executed",
-                  formatDate(new Date(payload.current_end * 1000)),
+                  formatDate(new Date(subPayload.current_end * 1000)),
                 ).catch((err) =>
                   console.error("Plan change email failed:", err),
                 );
@@ -219,13 +253,11 @@ export const razorpayWebhook = async (req, res, next) => {
                 "cancel",
                 "executed",
                 formatDate(
-                  payload.ended_at
-                    ? new Date(payload.ended_at * 1000)
+                  subPayload.ended_at
+                    ? new Date(subPayload.ended_at * 1000)
                     : new Date(),
                 ),
-              ).catch((err) =>
-                console.error("Cancel email failed:", err),
-              );
+              ).catch((err) => console.error("Cancel email failed:", err));
             }
             break;
           }
@@ -235,6 +267,7 @@ export const razorpayWebhook = async (req, res, next) => {
 
           case "invoice.paid":
             const invoiceEntity = req.body.payload.invoice.entity;
+            console.log({invoiceEntity});
             const invoiceUrl = invoiceEntity.short_url; // Direct link to the Razorpay PDF
             const amountPaid = invoiceEntity.amount / 100; // Convert paise to rupees
 

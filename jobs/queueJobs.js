@@ -1,4 +1,5 @@
 import { Queue, Worker } from "bullmq";
+import Razorpay from "razorpay";
 import { User } from "../models/user.model.js";
 import { Subscription } from "../models/subscription.model.js";
 import { UserFile } from "../models/user_file.model.js";
@@ -14,6 +15,17 @@ import { createNotification } from "../services/notificationService.js";
 import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import connectMongoose from "../configs/connect.js";
+
+let _rzpInstance = null;
+const getRazorpay = () => {
+  if (!_rzpInstance) {
+    _rzpInstance = new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID,
+      key_secret: process.env.RAZORPAY_KEY_SECRET,
+    });
+  }
+  return _rzpInstance;
+};
 
 function parseRedisUrl() {
   const url = process.env.REDIS_URL;
@@ -520,6 +532,31 @@ export const startBullMQWorker = () => {
           console.log(`Processed ${subIdsToUpdate.length} abandoned carts.`);
           break;
 
+        case "abandoned-subscription-reaper": {
+          // Expire created/abandoned subs older than 7 days to prevent
+          // permanent orphan rows on both Razorpay and Mongo.
+          const weekMs = 7 * 24 * 60 * 60 * 1000;
+          const expiredSubs = await Subscription.find({
+            status: { $in: ["created", "abandoned"] },
+            createdAt: { $lt: new Date(Date.now() - weekMs) },
+          }).lean();
+
+          for (const sub of expiredSubs) {
+            try {
+              await getRazorpay().subscriptions.cancel(
+                sub.razorpaySubscriptionId,
+              );
+            } catch (_) {
+              /* already cancelled or invalid */
+            }
+            await Subscription.findByIdAndDelete(sub._id);
+          }
+          console.log(
+            `Reaped ${expiredSubs.length} abandoned subscriptions.`,
+          );
+          break;
+        }
+
         case "share-token-invalidator":
           // console.log("Running Token Invalidator...");
           const query = [
@@ -652,6 +689,13 @@ export const startBullMQJobs = async () => {
       "abandoned-cart-tracker",
       {},
       { ...JOB_OPTS, repeat: { pattern: "*/15 * * * *" } }, // every 15 min
+    );
+    // Every Sunday 4am — Expire abandoned created subs older than 7 days on
+    // Razorpay side + delete from Mongo, preventing permanent orphan rows.
+    await backgroundQueue.add(
+      "abandoned-subscription-reaper",
+      {},
+      { ...JOB_OPTS, repeat: { pattern: "0 4 * * 0" } }, // weekly on Sunday at 4am
     );
 
     // Only start consuming AFTER schedulers are (re)registered

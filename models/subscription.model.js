@@ -29,7 +29,7 @@ const subscriptionSchema = new Schema(
     price: { type: Number, required: true },
     paidCount: { type: Number },
     shortUrl: { type: String },
-    invoiceUrl: { type: String },
+    invoiceUrl: { type: String, default: "" },
 
     currentPeriodStart: { type: Date },
     currentPeriodEnd: { type: Date },
@@ -51,14 +51,6 @@ const subscriptionSchema = new Schema(
     },
   },
   { timestamps: true },
-);
-
-subscriptionSchema.index(
-  { createdAt: 1 },
-  {
-    expireAfterSeconds: 86400, // 24 hours
-    partialFilterExpression: { status: "created" }, // ONLY delete if they never paid
-  },
 );
 
 export const Subscription = model("Subscription", subscriptionSchema);
