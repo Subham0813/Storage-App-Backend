@@ -169,7 +169,12 @@ export const getBinnedItems = (model) => {
     if (cursor) query._id = { $gt: cursor };
 
     try {
-      let items = await Model.find(query).populate("path", "_id name").populate("parentId", "_id name").sort({ _id: 1 }).limit(limit).lean();
+      let items = await Model.find(query)
+        .populate("path", "_id name")
+        .populate("parentId", "_id name")
+        .sort({ _id: 1 })
+        .limit(limit)
+        .lean();
       const nextCursor =
         items.length < limit ? null : items[items.length - 1]._id;
 
@@ -319,7 +324,7 @@ export const getSharedBy = (model) => {
       const query = {
         $or: [
           { _id: { $in: itemsIShared } },
-          { userId: req.user._id, publicRole: { $in: ["view", "edit"] } },
+          { userId: req.user._id, publicRole: "view" },
         ],
         isDeleted: false,
       };
