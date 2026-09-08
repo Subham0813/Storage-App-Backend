@@ -9,6 +9,8 @@ import {
   GOOGLE_CLIENT_SECRET,
   GOOGLE_DRIVE_REDIRECT_URI,
   GOOGLE_REDIRECT_URI,
+  MAX_USER_BANDWIDTH,
+  MAX_USER_QUOTA,
   t,
 } from "../misc/constants.js";
 import { google } from "googleapis";
@@ -226,6 +228,9 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
                 googleId: sub,
                 email,
                 name,
+                isEmailVerified: email_verified,
+                maxQuota: MAX_USER_QUOTA,
+                maxBandwidthQuota: MAX_USER_BANDWIDTH,
                 bandwidthResetAt: getBandwidthResetAt(),
                 // avatar: picture,
               },
@@ -253,6 +258,11 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
           if (!user.authProviders.includes("google")) {
             updateQuery.$push = { authProviders: { $each: ["google"] } };
           }
+
+          if (!user.isLogged) updateQuery.$set.isLogged = true;
+          if (!user.isActive) updateQuery.$set.isActive = true;
+          if (!user.isEmailVerified && email_verified)
+            updateQuery.$set.isEmailVerified = true;
         }
         user = await User.findOneAndUpdate({ _id: user._id }, updateQuery, {
           session,
@@ -337,10 +347,12 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
       `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?success=true`,
     );
   } catch (err) {
-    console.log(err);
-    return res.redirect(
-      `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?error=server_error`,
-    );
+    // console.log(err);
+    // return res.redirect(
+    //   `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?error=server_error`,
+    // );
+    err.redirectUrl = `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?error=server_error`;
+    next(err);
   }
 };
 
@@ -446,7 +458,10 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
                 githubId: id,
                 // username: login,
                 email,
+                isEmailVerified: true,
                 name: name.length > 0 ? name : login,
+                maxQuota: MAX_USER_QUOTA,
+                maxBandwidthQuota: MAX_USER_BANDWIDTH,
                 bandwidthResetAt: getBandwidthResetAt(),
                 // avatar: avatar_url,
               },
@@ -474,6 +489,11 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
           if (!user.authProviders.includes("github")) {
             updateQuery.$push = { authProviders: { $each: ["github"] } };
           }
+
+          if (!user.isLogged) updateQuery.$set.isLogged = true;
+          if (!user.isActive) updateQuery.$set.isActive = true;
+          if (!user.isEmailVerified && email)
+            updateQuery.$set.isEmailVerified = true;
         }
 
         await User.updateOne({ _id: user._id }, updateQuery, { session });
@@ -543,9 +563,11 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
       `${process.env.CLIENT_AUTH_CALLBACK_URL}/github?success=true`,
     );
   } catch (err) {
-    return res.redirect(
-      `${process.env.CLIENT_AUTH_CALLBACK_URL}/github?error=server_error`,
-    );
+    // return res.redirect(
+    //   `${process.env.CLIENT_AUTH_CALLBACK_URL}/github?error=server_error`,
+    // );
+    err.redirectUrl = `${process.env.CLIENT_AUTH_CALLBACK_URL}/github?error=server_error`;
+    next(err)
   }
 };
 

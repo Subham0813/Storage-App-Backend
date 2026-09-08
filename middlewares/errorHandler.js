@@ -34,7 +34,7 @@ export const errorHandler = async (err, req, res, next) => {
         keyPattern: err.keyPattern,
         keyValue: err.keyValue,
       });
-      err.statusCode = 409
+      err.statusCode = 409;
     } else {
       console.error(err);
     }
@@ -44,11 +44,11 @@ export const errorHandler = async (err, req, res, next) => {
     if (!err.statusCode) console.error(err);
   }
 
-  const { statusCode, customMessage } = err;
-  return res
-    .status(statusCode || 500)
-    .json({
-      success: false,
-      message: customMessage || "Server error. Please try again later.",
-    });
+  const { statusCode, customMessage, redirectUrl } = err;
+  if (redirectUrl) return res.redirect(redirectUrl);
+  
+  return res.status(statusCode || 500).json({
+    success: false,
+    message: customMessage || "Server error. Please try again later.",
+  });
 };

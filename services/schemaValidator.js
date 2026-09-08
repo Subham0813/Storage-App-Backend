@@ -26,7 +26,7 @@ await db.command({
           description: "Reference to the user's root directory.",
         },
         integrations: {
-          bsonType: "object",
+          bsonType: ["object", "null"],
           properties: {
             googleDrive: {
               bsonType: "object",
@@ -121,7 +121,7 @@ await db.command({
           description: "User subscription id.",
         },
         subscriptionExpiresAt: {
-          bsonType: "date",
+          bsonType: ["date", "null"],
           description: "Timestamp of subscription expiry.",
         },
         isTwoFactorEnabled: {
@@ -154,6 +154,19 @@ await db.command({
         bandwidthResetAt: {
           bsonType: "date",
           description: "Timestamp of bandwidth quota reset.",
+        },
+        isEmailVerified: {
+          bsonType: "bool",
+          description: "Flag indicating whether the user email is verified.",
+        },
+        isLogged: {
+          bsonType: "bool",
+          description:
+            "Flag indicating whether the user is currently logged in.",
+        },
+        isActive: {
+          bsonType: "bool",
+          description: "Flag indicating whether the user account is active.",
         },
         lastLogin: {
           bsonType: "date",

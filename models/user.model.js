@@ -93,7 +93,7 @@ const userSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "Subscription",
     },
-    subscriptionExpiresAt: { type: Date },
+    subscriptionExpiresAt: { type: Date, default: null },
 
     maxQuota: { type: Number, default: null },
 
@@ -101,6 +101,9 @@ const userSchema = new Schema(
     maxBandwidthQuota: { type: Number, default: null },
     bandwidthResetAt: { type: Date },
 
+    isEmailVerified: { type: Boolean, default: false },
+    isLogged: { type: Boolean, default: false },
+    isActive: { type: Boolean, default: true },
     lastLogin: { type: Date, default: Date.now },
     lastActiveAt: { type: Date },
 

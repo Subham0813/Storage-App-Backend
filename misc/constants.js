@@ -215,3 +215,5 @@ export const PLAN_FEATURE_LISTS = {
 };
 
 export const basePlans = ["FREE", "PRO", "BUSINESS"];
+export const MAX_USER_QUOTA = PLAN_DETAILS.FREE.quotaBytes;
+export const MAX_USER_BANDWIDTH = PLAN_DETAILS.FREE.monthlyBandwidthLimit;

@@ -3,7 +3,7 @@ import * as bcrypt from "bcrypt";
 import crypto from "crypto";
 import { z } from "zod/v4";
 
-import { t } from "../misc/constants.js";
+import { MAX_USER_BANDWIDTH, MAX_USER_QUOTA, t } from "../misc/constants.js";
 import { User } from "../models/user.model.js";
 import { Directory } from "../models/directory.model.js";
 import {
@@ -209,7 +209,7 @@ export const verifyOtpHandler = async (req, res, next) => {
       await _session.withTransaction(async () => {
         user = await User.findByIdAndUpdate(
           user._id,
-          { $set: { lastLogin: new Date() } },
+          { $set: { isEmailVerified:true, isActive: true, isLogged: true, lastLogin: new Date() } },
           { returnDocument: "after" },
         )
           .populate("root", "_id name size")
@@ -335,6 +335,8 @@ export const registerHandler = async (req, res, next) => {
               name,
               email,
               password,
+              maxQuota: MAX_USER_QUOTA,
+              maxBandwidthQuota: MAX_USER_BANDWIDTH,
               bandwidthResetAt: getBandwidthResetAt(),
             },
           ],
