@@ -117,6 +117,29 @@ const getGithubUserPayload = async (accessToken) => {
   }
 };
 
+const getGithubEmails = async (accessToken) => {
+  if (!accessToken) throw new Error("error=no_access_token");
+  const response = await fetch("https://api.github.com/user/emails", {
+    method: "GET",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error("error=no_payload");
+  return response.json();
+};
+
+const getVerifiedGithubEmail = async (accessToken) => {
+  const emails = await getGithubEmails(accessToken);
+  return (
+    emails.find((e) => e.primary && e.verified)?.email ||
+    emails.find((e) => e.verified)?.email ||
+    null
+  );
+};
+
 /**
  * path: /api/oauth/google/connect
  * what it do: Initiate Google OAuth flow by setting PKCE cookies and redirecting user to Google's authorization endpoint.
@@ -274,23 +297,15 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
             "subscription",
             "user razorpaySubscriptionId planId planKey status currentPeriodStart currentPeriodEnd endedAt limits",
           )
-
           .lean();
       });
     } finally {
       await session.endSession();
     }
 
-    if (!user) {
-      const uErr = new Error("error=user_not_found");
-      throw uErr;
-    }
-
+    if (!user) throw new Error("error=user_not_found");
     if (user.isDeleted) throw new Error("error=account_banned");
-
-    if (user.integrations) {
-      user.integrations = Object.keys(user.integrations).join("&") || "";
-    }
+    user.integrations = Object.keys(user.integrations || {}).join("&") || "";
 
     const userdata = user;
     const userKey = `storageApp:user:${user._id}:userdata`;
@@ -329,6 +344,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
           userAgent: req.headers["user-agent"] || "unknown",
         }),
         redisClient.sAdd(indexKey, sessionKey),
+        redisClient.expire(sessionKey, 7 * t._day),
         redisClient.expire(indexKey, 7 * t._day),
       ]);
     } else {
@@ -426,22 +442,20 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
       code,
       codeVerifier,
     );
+
     const payload = await getGithubUserPayload(accessToken);
+    if (!payload) throw new Error("error=no_valid_email_found");
 
-    if (!payload || !payload.email)
-      throw new Error("error=no_valid_email_found");
-
-    const { id, name, email, login, avatar_url } = payload;
+    const { id, name, login, avatar_url } = payload;
     let user = null;
 
+    const email = await getVerifiedGithubEmail(accessToken);
+    if (!email) throw new Error("error=email_not_verified");
+
     if (userSession) {
-      user = await User.findOne({ _id: userSession.id })
-        .populate("subscription", "limits")
-        .lean();
+      user = await User.findOne({ _id: userSession.id }).lean();
     } else {
-      user = await User.findOne({ email })
-        .populate("subscription", "limits")
-        .lean();
+      user = await User.findOne({ email }).lean();
     }
 
     const updateQuery = { $set: {} };
@@ -457,7 +471,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
                 // username: login,
                 email,
                 isEmailVerified: true,
-                name: name.length > 0 ? name : login,
+                name: (name && name.trim().length > 0 ? name : login) || email.split("@")[0],
                 maxQuota: MAX_USER_QUOTA,
                 maxBandwidthQuota: MAX_USER_BANDWIDTH,
                 bandwidthResetAt: getBandwidthResetAt(),
@@ -494,20 +508,29 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
             updateQuery.$set.isEmailVerified = true;
         }
 
-        await User.updateOne({ _id: user._id }, updateQuery, { session });
+        user = await User.findOneAndUpdate({ _id: user._id }, updateQuery, {
+          session,
+          returnDocument: "after",
+        })
+          .populate("root", "_id name size")
+          .populate(
+            "subscription",
+            "user razorpaySubscriptionId planId planKey status currentPeriodStart currentPeriodEnd endedAt limits",
+          )
+          .lean();
       });
     } finally {
       await session.endSession();
     }
 
     if (!user) throw new Error("error=user_not_found");
-
     if (user.isDeleted) throw new Error("error=account_banned");
-
     user.integrations = Object.keys(user.integrations || {}).join("&") || "";
+
+    const userdata = user;
     const userKey = `storageApp:user:${user._id}:userdata`;
     await Promise.all([
-      redisClient.json.set(userKey, "$", user),
+      redisClient.json.set(userKey, "$", userdata),
       redisClient.expire(userKey, 2 * t._min),
     ]);
 
@@ -560,7 +583,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
     // return res.redirect(
     //   `${AUTH_CALLBACK}/github?error=server_error`,
     // );
-    const message = err.message || "error=server_error"
+    const message = err.message || "error=server_error";
     err.redirectUrl = `${AUTH_CALLBACK}/github?${message}`;
     next(err);
   }
