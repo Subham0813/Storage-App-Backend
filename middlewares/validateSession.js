@@ -37,15 +37,15 @@ export const verifyCsrfOrigin = (req, res, next) => {
     // 2. Double-submit CSRF: the X-CSRF-Token header must match the csrf cookie.
     //    A missing cookie means the session predates CSRF enforcement — treat
     //    it like an unauthenticated request (401) so the client re-logs in.
-    const csrfToken = req.headers["x-csrf-token"];
-    if (!req.cookies.csrf) {
-      return next(
-        getErrorObject("Session expired. Please login again.", 401),
-      );
-    }
-    if (!safeCompare(csrfToken, req.cookies.csrf)) {
-      return next(getErrorObject("Forbidden: invalid CSRF token.", 403));
-    }
+    // const csrfToken = req.headers["x-csrf-token"];
+    // if (!req.cookies.csrf) {
+    //   return next(
+    //     getErrorObject("Session expired. Please login again.", 401),
+    //   );
+    // }
+    // if (!safeCompare(csrfToken, req.cookies.csrf)) {
+    //   return next(getErrorObject("Forbidden: invalid CSRF token.", 403));
+    // }
   }
   next();
 };

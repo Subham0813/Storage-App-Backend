@@ -7,9 +7,19 @@ import {
   s3Client,
   s3PublicClient,
 } from "../services/s3Client.js";
-import { getErrorObject, getUserLimits, getUserPayload } from "../utils/helper.js";
+import {
+  getErrorObject,
+  getUserLimits,
+  getUserPayload,
+} from "../utils/helper.js";
 import { redisClient } from "../configs/redis.js";
-import { cacheWrap, cacheGet, cacheSet, cacheNs, invalidateUser } from "../utils/responseCache.js";
+import {
+  cacheWrap,
+  cacheGet,
+  cacheSet,
+  cacheNs,
+  invalidateUser,
+} from "../utils/responseCache.js";
 import { User } from "../models/user.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
@@ -106,11 +116,15 @@ export const getUserStats = async (req, res, next) => {
               $switch: {
                 branches: [
                   {
-                    case: { $regexMatch: { input: "$mime", regex: /^image\//i } },
+                    case: {
+                      $regexMatch: { input: "$mime", regex: /^image\//i },
+                    },
                     then: "images",
                   },
                   {
-                    case: { $regexMatch: { input: "$mime", regex: /^video\//i } },
+                    case: {
+                      $regexMatch: { input: "$mime", regex: /^video\//i },
+                    },
                     then: "videos",
                   },
                   {
@@ -236,7 +250,7 @@ export const updateAvatar = async (req, res, next) => {
       await redisClient.del(`storageApp:user:${req.user._id}:userdata`);
       await invalidateUser(req.user._id);
     } catch (s3Err) {
-      console.error(s3Err)
+      console.error(s3Err);
       s3PublicClient
         .send(
           new DeleteObjectsCommand({
@@ -277,7 +291,7 @@ export const LogoutHandler = async (req, res, next) => {
     await redisClient.del(currentSessionKey);
     await redisClient.del(`storageApp:user:${req.user._id}:userdata`);
 
-    return res.status(200).clearCookie("sessionId").clearCookie("csrf").json({
+    return res.status(200).clearCookie("sessionId").json({
       success: true,
       message: "Logout Successful.",
     });
@@ -307,7 +321,7 @@ export const LogoutAllHandler = async (req, res, next) => {
     return res
       .status(200)
       .clearCookie("sessionId")
-      .clearCookie("csrf")
+
       .json({ success: true, message: "Logout Successful from all devices." });
   } catch (err) {
     next(err);
@@ -373,7 +387,7 @@ export const deleteProfileHandler = async (req, res, next) => {
       );
     }
 
-    return res.status(200).clearCookie("sessionId").clearCookie("csrf").json({
+    return res.status(200).clearCookie("sessionId").json({
       success: true,
       message: "Account deleted successfully.",
     });
@@ -401,7 +415,10 @@ export const deleteIntegration = async (req, res, next) => {
       if (token) {
         await fetch(
           `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`,
-          { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" } },
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          },
         ).catch(() => {});
       }
     } catch {}
@@ -566,7 +583,9 @@ export const feedbackHandler = async (req, res, next) => {
       }
     } catch (rlErr) {
       console.error("Feedback rate-limit error (fail-open):", rlErr?.message);
-     return next(getErrorObject("Too many requests. Please try again later.", 429));
+      return next(
+        getErrorObject("Too many requests. Please try again later.", 429),
+      );
     }
 
     const { category, title, description, screenshotBase64 } = data;
@@ -596,9 +615,21 @@ export const feedbackHandler = async (req, res, next) => {
       );
     }
     const screenshotUrl = `${process.env.PUBLIC_BUCKET_CDN}/${screenshotKey}`;
-    
-    await Feedback.create({ userId: req.user._id, category, title, description, screenshotKey});
-    processFeedbackEmails(req.user, category, title, description, screenshotUrl).catch(console.error);
+
+    await Feedback.create({
+      userId: req.user._id,
+      category,
+      title,
+      description,
+      screenshotKey,
+    });
+    processFeedbackEmails(
+      req.user,
+      category,
+      title,
+      description,
+      screenshotUrl,
+    ).catch(console.error);
 
     return res.status(201).json({
       success: true,
@@ -672,13 +703,13 @@ export const revokeSessionHandler = async (req, res, next) => {
 
     const isCurrentSession = hashOf(req.sessionToken) === sessionId;
 
-    return res
-      .status(200)
-      .json({
-        success: true,
-        message: isCurrentSession ? "Current session revoked." : "Session revoked.",
-        data: { isCurrentSession },
-      });
+    return res.status(200).json({
+      success: true,
+      message: isCurrentSession
+        ? "Current session revoked."
+        : "Session revoked.",
+      data: { isCurrentSession },
+    });
   } catch (err) {
     next(err);
   }

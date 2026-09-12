@@ -340,7 +340,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
       { token, id: user._id },
       cookieOptions({ maxAge: sevenDayMs, sameSite: "lax" }),
     );
-    setCsrfCookie(res);
+    // setCsrfCookie(res);
 
     return res.redirect(`${AUTH_CALLBACK}/google?success=true`);
   } catch (err) {
@@ -552,7 +552,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
       { token, id: user._id },
       cookieOptions({ maxAge: sevenDayMs, sameSite: "lax" }),
     );
-    setCsrfCookie(res);
+    // setCsrfCookie(res);
 
     return res.redirect(`${AUTH_CALLBACK}/github?success=true`);
   } catch (err) {
@@ -753,7 +753,7 @@ export const completeOauthLoginHandler = async (req, res, next) => {
       redisClient.expire(indexKey, sevenDays),
     ]);
 
-    setCsrfCookie(res);
+    // setCsrfCookie(res);
     return res
       .cookie(
         "sessionId",

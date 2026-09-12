@@ -208,7 +208,7 @@ export const verifyTotpHandler = async (req, res, next) => {
       redisClient.expire(indexKey, sevenDays),
     ]);
 
-    setCsrfCookie(res);
+    // setCsrfCookie(res);
     return res
       .cookie(
         "sessionId",
