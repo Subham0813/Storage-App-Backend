@@ -348,7 +348,8 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     // return res.redirect(
     //   `${AUTH_CALLBACK}/google?error=server_error`,
     // );
-    err.redirectUrl = `${AUTH_CALLBACK}/google?error=server_error`;
+    const message = err.message || "error=server_error";
+    err.redirectUrl = `${AUTH_CALLBACK}/google?${message}`;
     next(err);
   }
 };
@@ -559,7 +560,8 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
     // return res.redirect(
     //   `${AUTH_CALLBACK}/github?error=server_error`,
     // );
-    err.redirectUrl = `${AUTH_CALLBACK}/github?error=server_error`;
+    const message = err.message || "error=server_error"
+    err.redirectUrl = `${AUTH_CALLBACK}/github?${message}`;
     next(err);
   }
 };
@@ -674,7 +676,8 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
   } catch (err) {
     // console.log(err);
     // return res.redirect(`${AUTH_CALLBACK}/google-drive?error=server_error`);
-    err.redirectUrl = `${AUTH_CALLBACK}/google-drive?error=server_error`;
+    const message = err.message || "error=server_error";
+    err.redirectUrl = `${AUTH_CALLBACK}/google-drive?${message}`;
     next(err);
   }
 };
