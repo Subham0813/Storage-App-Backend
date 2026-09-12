@@ -74,20 +74,20 @@ A production-ready, enterprise-grade backend for an open source cloud storage pl
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Runtime | Node.js (ES Modules, `type: module`) |
-| Framework | Express 4 |
-| Database | MongoDB via Mongoose 9 |
-| Cache / Sessions | Redis v5 (JSON module) |
-| Job Queue | BullMQ 5 (Queue + Worker + Scheduler) |
-| Object Storage | Any S3-compatible API — AWS, R2, B2, MinIO (`@aws-sdk/client-s3`, `@aws-sdk/lib-storage`) |
-| CDN | Cloudflare Worker (HMAC, SaaS) / CloudFront (signer) / Native S3 fallback |
-| Payments | Razorpay 2.9 (SaaS) — `getRazorpayInstance()` lazy |
-| Email | Resend 6.12 + Nodemailer 9.05 (`EMAIL_PROVIDER=resend\|smtp`) |
-| OAuth | Google `googleapis` 170 + GitHub fetch, PKCE `S256` |
-| Validation | Zod v4 |
-| Security | Helmet 8, `express-rate-limit` + `rate-limit-redis`, bcrypt 6, AES-256-GCM |
+| Layer            | Technology                                                                                |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| Runtime          | Node.js (ES Modules, `type: module`)                                                      |
+| Framework        | Express 4                                                                                 |
+| Database         | MongoDB via Mongoose 9                                                                    |
+| Cache / Sessions | Redis v5 (JSON module)                                                                    |
+| Job Queue        | BullMQ 5 (Queue + Worker + Scheduler)                                                     |
+| Object Storage   | Any S3-compatible API — AWS, R2, B2, MinIO (`@aws-sdk/client-s3`, `@aws-sdk/lib-storage`) |
+| CDN              | Cloudflare Worker (HMAC, SaaS) / CloudFront (signer) / Native S3 fallback                 |
+| Payments         | Razorpay 2.9 (SaaS) — `getRazorpayInstance()` lazy                                        |
+| Email            | Resend 6.12 + Nodemailer 9.05 (`EMAIL_PROVIDER=resend\|smtp`)                             |
+| OAuth            | Google `googleapis` 170 + GitHub fetch, PKCE `S256`                                       |
+| Validation       | Zod v4                                                                                    |
+| Security         | Helmet 8, `express-rate-limit` + `rate-limit-redis`, bcrypt 6, AES-256-GCM                |
 
 ---
 
@@ -175,87 +175,87 @@ Copy `.env.example` to `.env`. `APP_MODE` gates SaaS vs selfhosted.
 
 ### Core
 
-| Variable | Description | Example |
-|---|---|---|
-| `NODE_ENV` | `development` or `production` | `production` |
-| `PORT` | Server port | `4000` |
-| `APP_MODE` | `saas` enables billing; `selfhosted` disables | `saas` |
-| `APP_NAME` | Used in email templates | `StorageApp` |
-| `ALLOWED_ORIGINS` | CORS + CSRF origin allowlist (CSV) | `https://example.com,https://api.example.com` |
-| `MUTATING_METHODS` | Methods subject to CSRF check | `POST,PATCH,PUT,DELETE` |
-| `COOKIE_SECRET` | Sign all cookies | `random 32+ hex` |
-| `CLIENT_URL` | Frontend base URL | `https://example.com` |
-| `CLIENT_APP_URL` | Frontend base URL for email links | `https://example.com` |
-| `CLIENT_AUTH_CALLBACK_URL` | OAuth final redirect | `https://example.com/auth/callback` |
-| `OAUTH_TOKEN_ENCRYPTION_KEY` | AES-256-GCM key (32+ chars) | `hex` |
+| Variable                     | Description                                   | Example                                       |
+| ---------------------------- | --------------------------------------------- | --------------------------------------------- |
+| `NODE_ENV`                   | `development` or `production`                 | `production`                                  |
+| `PORT`                       | Server port                                   | `4000`                                        |
+| `APP_MODE`                   | `saas` enables billing; `selfhosted` disables | `saas`                                        |
+| `APP_NAME`                   | Used in email templates                       | `StorageApp`                                  |
+| `ALLOWED_ORIGINS`            | CORS + CSRF origin allowlist (CSV)            | `https://example.com,https://api.example.com` |
+| `MUTATING_METHODS`           | Methods subject to CSRF check                 | `POST,PATCH,PUT,DELETE`                       |
+| `COOKIE_SECRET`              | Sign all cookies                              | `random 32+ hex`                              |
+| `CLIENT_URL`                 | Frontend base URL                             | `https://example.com`                         |
+| `CLIENT_URL`                 | Frontend base URL for email links             | `https://example.com`                         |
+| `CLIENT_AUTH_CALLBACK_URL`   | OAuth final redirect                          | `https://example.com/auth/callback`           |
+| `OAUTH_TOKEN_ENCRYPTION_KEY` | AES-256-GCM key (32+ chars)                   | `hex`                                         |
 
 ### Database & Cache
 
-| Variable | Description | Example |
-|---|---|---|
-| `MONGO_URI` | MongoDB URI | `mongodb://user:pass@host:27017/db?replicaSet=rs0` |
-| `REDIS_URL` | Redis connection (app cache, sessions, BullMQ jobs) | `redis://:pass@host:6379` |
-| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | Legacy trio — only used when `REDIS_URL` is unset | `127.0.0.1` / `6379` |
+| Variable                                       | Description                                         | Example                                            |
+| ---------------------------------------------- | --------------------------------------------------- | -------------------------------------------------- |
+| `MONGO_URI`                                    | MongoDB URI                                         | `mongodb://user:pass@host:27017/db?replicaSet=rs0` |
+| `REDIS_URL`                                    | Redis connection (app cache, sessions, BullMQ jobs) | `redis://:pass@host:6379`                          |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | Legacy trio — only used when `REDIS_URL` is unset   | `127.0.0.1` / `6379`                               |
 
 ### Storage (S3-compatible — AWS, R2, B2, MinIO)
 
-| Variable | Description | Example |
-|---|---|---|
-| `STORAGE_BUCKET_NAME` | Private files bucket | `my-private-bucket` |
-| `STORAGE_REGION` | Region or `auto` for R2 | `us-east-1` |
-| `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` | Creds | `...` |
-| `STORAGE_ENDPOINT` | Custom endpoint (R2/B2/MinIO) — omit for AWS | `https://s3.us-east-005.backblazeb2.com` |
-| `STORAGE_FORCE_PATH_STYLE` | `true` for MinIO | `false` |
-| `PUBLIC_BUCKET_NAME` etc | Same 5 vars for public bucket (thumbnails/avatars/feedback) |  |
-| `PUBLIC_BUCKET_CDN` | CDN that serves public bucket | `https://cdn.example.com` |
-| `B2_BUCKET_NAME` | Alias = `STORAGE_BUCKET_NAME` for ZIP streaming — set same |  |
+| Variable                                    | Description                                                 | Example                                  |
+| ------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------- |
+| `STORAGE_BUCKET_NAME`                       | Private files bucket                                        | `my-private-bucket`                      |
+| `STORAGE_REGION`                            | Region or `auto` for R2                                     | `us-east-1`                              |
+| `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` | Creds                                                       | `...`                                    |
+| `STORAGE_ENDPOINT`                          | Custom endpoint (R2/B2/MinIO) — omit for AWS                | `https://s3.us-east-005.backblazeb2.com` |
+| `STORAGE_FORCE_PATH_STYLE`                  | `true` for MinIO                                            | `false`                                  |
+| `PUBLIC_BUCKET_NAME` etc                    | Same 5 vars for public bucket (thumbnails/avatars/feedback) |                                          |
+| `PUBLIC_BUCKET_CDN`                         | CDN that serves public bucket                               | `https://cdn.example.com`                |
+| `B2_BUCKET_NAME`                            | Alias = `STORAGE_BUCKET_NAME` for ZIP streaming — set same  |                                          |
 
 ### CDN
 
-| Variable | Description |
-|---|---|
-| `CDN_PROVIDER` | `cloudflare` (HMAC worker, **SaaS only**) / `cloudfront` / omit for S3 pre-signed |
-| `CDN_DOMAIN` | Worker URL or CloudFront `dxxx.cloudfront.net` |
-| `CLOUDFLARE_WEBHOOK_SECRET` | HMAC secret for bandwidth webhook — SaaS required if `cloudflare` |
-| `CLOUDFRONT_PRIVATE_KEY` / `CLOUDFRONT_PUBLIC_KEY_ID` | For CloudFront signer (`\n` as `\\n`) |
+| Variable                                              | Description                                                                       |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `CDN_PROVIDER`                                        | `cloudflare` (HMAC worker, **SaaS only**) / `cloudfront` / omit for S3 pre-signed |
+| `CDN_DOMAIN`                                          | Worker URL or CloudFront `dxxx.cloudfront.net`                                    |
+| `CLOUDFLARE_WEBHOOK_SECRET`                           | HMAC secret for bandwidth webhook — SaaS required if `cloudflare`                 |
+| `CLOUDFRONT_PRIVATE_KEY` / `CLOUDFRONT_PUBLIC_KEY_ID` | For CloudFront signer (`\n` as `\\n`)                                             |
 
 ### OAuth
 
-| Variable | Description |
-|---|---|
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | Google login |
-| `GOOGLE_DRIVE_REDIRECT_URI` | Drive import (`drive.readonly`, `prompt consent`) |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` / `GITHUB_REDIRECT_URI` | GitHub login |
+| Variable                                                            | Description                                       |
+| ------------------------------------------------------------------- | ------------------------------------------------- |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | Google login                                      |
+| `GOOGLE_DRIVE_REDIRECT_URI`                                         | Drive import (`drive.readonly`, `prompt consent`) |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` / `GITHUB_REDIRECT_URI` | GitHub login                                      |
 
 ### Payments (Razorpay — SaaS only)
 
-| Variable | Description |
-|---|---|
-| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` | Live — used when `NODE_ENV=production` |
-| `TEST_RAZORPAY_KEY_ID` / `TEST_RAZORPAY_KEY_SECRET` / `TEST_RAZORPAY_WEBHOOK_SECRET` | Test — used when `NODE_ENV !== production` |
-| `SUBSCRIPTION_PLAN_PRO_MONTHLY` | Razorpay plan ID |
-| `SUBSCRIPTION_PLAN_PRO_YEARLY` | Razorpay plan ID |
-| `SUBSCRIPTION_PLAN_BUSINESS_MONTHLY` | Razorpay plan ID |
-| `SUBSCRIPTION_PLAN_BUSINESS_YEARLY` | Razorpay plan ID |
-| `RAZORPAY_OFFER_*` | e.g. `RAZORPAY_OFFER_UPGRADE` — single offer for prorated upgrade credit |
+| Variable                                                                             | Description                                                              |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET`                | Live — used when `NODE_ENV=production`                                   |
+| `TEST_RAZORPAY_KEY_ID` / `TEST_RAZORPAY_KEY_SECRET` / `TEST_RAZORPAY_WEBHOOK_SECRET` | Test — used when `NODE_ENV !== production`                               |
+| `SUBSCRIPTION_PLAN_PRO_MONTHLY`                                                      | Razorpay plan ID                                                         |
+| `SUBSCRIPTION_PLAN_PRO_YEARLY`                                                       | Razorpay plan ID                                                         |
+| `SUBSCRIPTION_PLAN_BUSINESS_MONTHLY`                                                 | Razorpay plan ID                                                         |
+| `SUBSCRIPTION_PLAN_BUSINESS_YEARLY`                                                  | Razorpay plan ID                                                         |
+| `RAZORPAY_OFFER_*`                                                                   | e.g. `RAZORPAY_OFFER_UPGRADE` — single offer for prorated upgrade credit |
 
 ### Email
 
-| Variable | Description |
-|---|---|
-| `EMAIL_PROVIDER` | `resend` (HTTP) or `smtp` |
-| `RESEND_API_KEY` | Required if `resend` |
-| `FROM_EMAIL` | Sender — e.g. `StorageApp <support@example.com>` |
-| `ADMIN_EMAIL` | Feedback/admin alerts inbox — e.g. `support@example.com` |
-| `SUPPORT_EMAIL` | Shown in templates as contact — e.g. `support@example.com` |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_SECURE` | Required if `smtp` (`true` for 465) |
+| Variable                                                              | Description                                                |
+| --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `EMAIL_PROVIDER`                                                      | `resend` (HTTP) or `smtp`                                  |
+| `RESEND_API_KEY`                                                      | Required if `resend`                                       |
+| `FROM_EMAIL`                                                          | Sender — e.g. `StorageApp <support@example.com>`           |
+| `ADMIN_EMAIL`                                                         | Feedback/admin alerts inbox — e.g. `support@example.com`   |
+| `SUPPORT_EMAIL`                                                       | Shown in templates as contact — e.g. `support@example.com` |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_SECURE` | Required if `smtp` (`true` for 465)                        |
 
 > **Email by mode** — OTP and password-reset are sent in **all** modes. Share/ban/recover/bulk, feedback alerts, invoice, abandoned-cart, subscription changes are SaaS-only except `sendSharingNotificationEmail` and `sendBulkShareEmails` and ban/recover now also work selfhosted if `FROM_EMAIL` is set. Access revocation uses a dedicated `accessRevokedEmailTemplate` via `sendBulkRevokedEmails`.
 
 ### Misc
 
-| Variable | Description |
-|---|---|
+| Variable    | Description                                      |
+| ----------- | ------------------------------------------------ |
 | `MAX_DEPTH` | Max recursion for ZIP `serveZipS3` (default `5`) |
 
 `misc/constants.js:requiredEnvVars` (19 core) + `requiredSaaSVars` (4 plans) are checked on boot via `utils/helper.js checkEnv()` — missing throws.
@@ -266,16 +266,16 @@ Copy `.env.example` to `.env`. `APP_MODE` gates SaaS vs selfhosted.
 
 Per `misc/constants.js:PLAN_DETAILS` (`INSTANCE_CONFIG` for selfhosted fallback):
 
-| Limit | FREE | PRO | BUSINESS | Selfhosted (`APP_MODE=selfhosted`) |
-|---|---|---|---|---|
-| Storage quota | 2 GB | 100 GB | 500 GB | `user.maxQuota ?? Infinity` (admin-set) |
-| Max file size | 100 MB | 2 GB | 10 GB | 50 GB (`INSTANCE_CONFIG`) |
-| Monthly bandwidth | 5 GB | 200 GB | 1 TB | `Infinity` |
-| Upload concurrency | 1 | 4 | 4 | 4 |
-| Max devices | 1 | 3 | 5 | `Infinity` |
-| Trash retention | 5 days | 15 days | 30 days | 5 days |
-| Grace period | 7 days | 14 days | 30 days | 7 days |
-| Public links | ❌ | ✅ | ✅ | ✅ (forced true) |
+| Limit              | FREE   | PRO     | BUSINESS | Selfhosted (`APP_MODE=selfhosted`)      |
+| ------------------ | ------ | ------- | -------- | --------------------------------------- |
+| Storage quota      | 2 GB   | 100 GB  | 500 GB   | `user.maxQuota ?? Infinity` (admin-set) |
+| Max file size      | 100 MB | 2 GB    | 10 GB    | 50 GB (`INSTANCE_CONFIG`)               |
+| Monthly bandwidth  | 5 GB   | 200 GB  | 1 TB     | `Infinity`                              |
+| Upload concurrency | 1      | 4       | 4        | 4                                       |
+| Max devices        | 1      | 3       | 5        | `Infinity`                              |
+| Trash retention    | 5 days | 15 days | 30 days  | 5 days                                  |
+| Grace period       | 7 days | 14 days | 30 days  | 7 days                                  |
+| Public links       | ❌      | ✅       | ✅        | ✅ (forced true)                         |
 
 Admin `PATCH /api/admin/user/:id/quota` capped at 500 GB / 1 TB only in SaaS (`adminControllers.js:364`).
 
@@ -311,21 +311,21 @@ Server listens on `PORT` (default `4000`). `trust proxy 1` expects reverse proxy
 
 All authenticated routes need `sessionId` signed cookie.
 
-| Prefix | Description | Auth | Rate Limiter |
-|---|---|---|---|
-| `POST /api/auth/*` | Register, login, OTP, forgot-password, 2FA | Public | `auth` 20/15m |
-| `GET /api/oauth/*` | Google, GitHub, Google Drive (PKCE) | Mixed | `auth` 20/15m |
-| `POST /api/subscriptions/webhook` | Razorpay events (HMAC raw body) | HMAC | `global` 1000/15m |
-| `POST /api/files/webhook` | Cloudflare bandwidth (SaaS) | HMAC+SaaS | `global` |
-| `GET /api/public/shared/:token` | Public preview/download/info | Token | `public` 200/15m |
-| `/api/files/*` | File CRUD, share, copy, trash/restore | Session | `global` |
-| `/api/directories/*` | Directory CRUD, share, ZIP download | Session | `global` |
-| `/api/uploads/*` | Initiate/complete/retry/cancel (uploadLimiter) | Session | `upload` 100/15m |
-| `/api/user/*` | Profile, stats/usage (cached 60s), search/bin/recents/starred/shared, feedback (SaaS), avatar, logout, sessions | Session | `global` |
-| `/api/subscriptions/*` | Plans, current-plan (cached 900s/30s), history, create/verify/update/cancel | Session + `requireSaasMode` | `global` |
-| `/api/import/*` | Drive `picker-token`, `initiate`, `start-import` 202, `progress`, `complete` | Session | `global` |
-| `/api/notifications/*` | List, unread-count, mark-read | Session | `global` |
-| `/api/admin/*` | Users, dashboard, ban/recover/delete, feedback | Session + `SUPER_ROLES` | `global` |
+| Prefix                            | Description                                                                                                     | Auth                        | Rate Limiter      |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------- | ----------------- |
+| `POST /api/auth/*`                | Register, login, OTP, forgot-password, 2FA                                                                      | Public                      | `auth` 20/15m     |
+| `GET /api/oauth/*`                | Google, GitHub, Google Drive (PKCE)                                                                             | Mixed                       | `auth` 20/15m     |
+| `POST /api/subscriptions/webhook` | Razorpay events (HMAC raw body)                                                                                 | HMAC                        | `global` 1000/15m |
+| `POST /api/files/webhook`         | Cloudflare bandwidth (SaaS)                                                                                     | HMAC+SaaS                   | `global`          |
+| `GET /api/public/shared/:token`   | Public preview/download/info                                                                                    | Token                       | `public` 200/15m  |
+| `/api/files/*`                    | File CRUD, share, copy, trash/restore                                                                           | Session                     | `global`          |
+| `/api/directories/*`              | Directory CRUD, share, ZIP download                                                                             | Session                     | `global`          |
+| `/api/uploads/*`                  | Initiate/complete/retry/cancel (uploadLimiter)                                                                  | Session                     | `upload` 100/15m  |
+| `/api/user/*`                     | Profile, stats/usage (cached 60s), search/bin/recents/starred/shared, feedback (SaaS), avatar, logout, sessions | Session                     | `global`          |
+| `/api/subscriptions/*`            | Plans, current-plan (cached 900s/30s), history, create/verify/update/cancel                                     | Session + `requireSaasMode` | `global`          |
+| `/api/import/*`                   | Drive `picker-token`, `initiate`, `start-import` 202, `progress`, `complete`                                    | Session                     | `global`          |
+| `/api/notifications/*`            | List, unread-count, mark-read                                                                                   | Session                     | `global`          |
+| `/api/admin/*`                    | Users, dashboard, ban/recover/delete, feedback                                                                  | Session + `SUPER_ROLES`     | `global`          |
 
 Full request/response for each endpoint is in [`docs/`](./docs/).
 
@@ -407,17 +407,17 @@ Oversize Google Docs exports → saved as `webviewLink` size 0.
 
 BullMQ `Queue("StorageApp-Cron-Queue")` uses the Redis connection resolved by `parseRedisUrl()` (`REDIS_URL`, or the legacy `REDIS_HOST/PORT/PASSWORD` trio as fallback). `node jobs/queueJobs.js scheduler` registers; `node jobs/queueJobs.js worker` consumes (scale workers horizontally).
 
-| Job | Schedule | What It Does |
-|---|---|---|
-| `downgrade-executor` | `0 0 * * *` daily 00:00 | Applies `downgrade_requested` where `currentPeriodEnd ≤ now` → User plan + limits + grace, sub `active` |
-| `cancel-executor` | `0 0 * * *` daily 00:00 | `cancelation_requested` where `endedAt ≤ now` → FREE, sub `cancelled` |
-| `trash-collector` | `0 1 * * *` daily 01:00 | `isDeleted && permanentDeleteAt ≤ now` → S3 dedup (count key), `Directory/UserFile` bulkWrite, notify |
-| `quota-reaper` | `0 2 * * *` daily 02:00 | `gracePeriodEndsAt ≤ now` + over quota → delete oldest files until quota met |
-| `bandwidth-reset` | `0 0 * * *` daily 00:00 | `bandwidthResetAt ≤ now` (or null) → `used 0, reset +30d`, bust cache, notify |
-| `share-token-invalidator` | `0 0 * * *` daily 00:00 | `shareTokenExpiresAt < now` → `$unset` shareToken/publicRole |
-| `halted-subscription-reaper` | `0 4 * * *` daily 04:00 | `status halted` older than `gracePeriod` (FREE 7d etc) → FREE |
-| `abandoned-cart-tracker` | `*/15 * * * *` every 15m | `status created` + 30m ago → email `CLIENT_APP_URL/pricing?resume=plan` |
-| `active-users-sweeper` | `0 3 * * *` daily 03:00 | `ZREMRANGEBYSCORE storageApp:active_users 0 (now-30d)` |
+| Job                          | Schedule                 | What It Does                                                                                            |
+| ---------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `downgrade-executor`         | `0 0 * * *` daily 00:00  | Applies `downgrade_requested` where `currentPeriodEnd ≤ now` → User plan + limits + grace, sub `active` |
+| `cancel-executor`            | `0 0 * * *` daily 00:00  | `cancelation_requested` where `endedAt ≤ now` → FREE, sub `cancelled`                                   |
+| `trash-collector`            | `0 1 * * *` daily 01:00  | `isDeleted && permanentDeleteAt ≤ now` → S3 dedup (count key), `Directory/UserFile` bulkWrite, notify   |
+| `quota-reaper`               | `0 2 * * *` daily 02:00  | `gracePeriodEndsAt ≤ now` + over quota → delete oldest files until quota met                            |
+| `bandwidth-reset`            | `0 0 * * *` daily 00:00  | `bandwidthResetAt ≤ now` (or null) → `used 0, reset +30d`, bust cache, notify                           |
+| `share-token-invalidator`    | `0 0 * * *` daily 00:00  | `shareTokenExpiresAt < now` → `$unset` shareToken/publicRole                                            |
+| `halted-subscription-reaper` | `0 4 * * *` daily 04:00  | `status halted` older than `gracePeriod` (FREE 7d etc) → FREE                                           |
+| `abandoned-cart-tracker`     | `*/15 * * * *` every 15m | `status created` + 30m ago → email `CLIENT_URL/pricing?resume=plan`                                     |
+| `active-users-sweeper`       | `0 3 * * *` daily 03:00  | `ZREMRANGEBYSCORE storageApp:active_users 0 (now-30d)`                                                  |
 
 `JOB_OPTS removeOnComplete 7d/100`, `recalculateTrashExpiry` helper.
 

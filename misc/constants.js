@@ -13,7 +13,9 @@ export const EMAIL_REGEX = /^[\w.%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$/;
 export const SUPER_ROLES = ["admin", "super_admin"];
 
 export const IS_SAAS_MODE =
-  String(process.env.APP_MODE || "").trim().toLowerCase() === "saas";
+  String(process.env.APP_MODE || "")
+    .trim()
+    .toLowerCase() === "saas";
 export const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || "resend";
 
 export const t = {
@@ -141,7 +143,7 @@ export const requiredEnvVars = [
   // Frontend URLs
   "CLIENT_AUTH_CALLBACK_URL",
   "CLIENT_URL",
-  "CLIENT_APP_URL",
+  "CLIENT_URL",
 
   // Security
   "OAUTH_TOKEN_ENCRYPTION_KEY",

@@ -156,7 +156,7 @@ export const sharingNotificationTemplate = (
               ${message ? `<div class="message-box"><strong>They also left a message for you:</strong><br><br><em>"${message}"</em></div>` : ""}
               <p>You can view and access it right now by logging into your account.</p>
               <div style="text-align: left;">
-                <a href=${process.env.CLIENT_APP_URL} class="cta-button">View in ${appName}</a>
+                <a href=${process.env.CLIENT_URL} class="cta-button">View in ${appName}</a>
               </div>
               <p>Best,<br>The ${appName} Team</p>
             </div>
@@ -212,7 +212,7 @@ export const accessRevokedEmailTemplate = (
               ${message ? `<div class="message-box"><strong>They also left a message for you:</strong><br><br><em>"${message}"</em></div>` : ""}
               <p>You can no longer view or access this item through your account.</p>
               <div style="text-align: left;">
-                <a href=${process.env.CLIENT_APP_URL} class="cta-button">View in ${appName}</a>
+                <a href=${process.env.CLIENT_URL} class="cta-button">View in ${appName}</a>
               </div>
               <p>Best,<br>The ${appName} Team</p>
             </div>
@@ -315,7 +315,12 @@ export const accountRecoveredTemplate = (username) => {
   };
 };
 
-export const invoiceEmailTemplate = (username, planName, amount, invoiceUrl) => {
+export const invoiceEmailTemplate = (
+  username,
+  planName,
+  amount,
+  invoiceUrl,
+) => {
   return {
     subject: `Thank you for upgrading to ${planName}! (Receipt inside) - ${appName}`,
     html: `
@@ -356,7 +361,7 @@ export const invoiceEmailTemplate = (username, planName, amount, invoiceUrl) => 
           </div>
         </body>
       </html>
-    `
+    `,
   };
 };
 
@@ -396,11 +401,16 @@ export const abandonedCartEmailTemplate = (username, checkoutUrl) => {
           </div>
         </body>
       </html>
-    `
+    `,
   };
 };
 
-export const subscriptionActionTemplate = (username, action, stage, effectiveDate) => {
+export const subscriptionActionTemplate = (
+  username,
+  action,
+  stage,
+  effectiveDate,
+) => {
   const isCancel = action === "cancel";
   const isUpgrade = action === "upgrade";
   const isRequested = stage === "requested";
@@ -417,8 +427,10 @@ export const subscriptionActionTemplate = (username, action, stage, effectiveDat
     subject = `Your plan has been upgraded - ${appName}`;
     description = `Great news! Your plan has been successfully upgraded as of today. Your new premium limits are now active on your account. Your new billing cycle ends on <strong>${effectiveDate}</strong>.`;
   } else if (isRequested) {
-    title = isCancel ? "Cancellation Request Received" : "Downgrade Request Received";
-    subject = isCancel 
+    title = isCancel
+      ? "Cancellation Request Received"
+      : "Downgrade Request Received";
+    subject = isCancel
       ? `We've received your cancellation request - ${appName}`
       : `We've scheduled your plan downgrade - ${appName}`;
 
@@ -426,7 +438,9 @@ export const subscriptionActionTemplate = (username, action, stage, effectiveDat
       ? `We're genuinely sorry to see you go, but we wanted to confirm that we've received your cancellation request. Please note that your premium features and storage limits will remain fully active until the end of your current billing cycle on <strong>${effectiveDate}</strong>.`
       : `We wanted to confirm that we've successfully scheduled your plan downgrade. Your current premium limits will remain fully active until the end of your billing cycle on <strong>${effectiveDate}</strong>.`;
   } else {
-    title = isCancel ? "Subscription Officially Ended" : "Plan Downgrade Complete";
+    title = isCancel
+      ? "Subscription Officially Ended"
+      : "Plan Downgrade Complete";
     subject = isCancel
       ? `Your subscription has now ended - ${appName}`
       : `Your plan downgrade is now active - ${appName}`;
@@ -465,10 +479,10 @@ export const subscriptionActionTemplate = (username, action, stage, effectiveDat
                 <p><span class="icon">${icon}</span>${description}</p>
               </div>
               
-              ${isUpgrade ? `<p>Enjoy your new features! If you have any questions about your new plan, feel free to reach out to our support team.</p>` : ''}
-              ${isRequested && isCancel ? `<p>If you change your mind before your cycle ends, you can easily resume your subscription from your billing dashboard. Otherwise, we want to say a huge thank you for giving our premium features a try—we really appreciate your past support.</p>` : ''}
-              ${isRequested && !isCancel && !isUpgrade ? `<p>If you change your mind before your cycle ends, you can cancel this request from your billing dashboard. Thank you for continuing to use ${appName}!</p>` : ''}
-              ${!isRequested && !isUpgrade ? `<p>You're always welcome to upgrade your plan again anytime from your billing dashboard. Thank you for being part of the ${appName} community!</p>` : ''}
+              ${isUpgrade ? `<p>Enjoy your new features! If you have any questions about your new plan, feel free to reach out to our support team.</p>` : ""}
+              ${isRequested && isCancel ? `<p>If you change your mind before your cycle ends, you can easily resume your subscription from your billing dashboard. Otherwise, we want to say a huge thank you for giving our premium features a try—we really appreciate your past support.</p>` : ""}
+              ${isRequested && !isCancel && !isUpgrade ? `<p>If you change your mind before your cycle ends, you can cancel this request from your billing dashboard. Thank you for continuing to use ${appName}!</p>` : ""}
+              ${!isRequested && !isUpgrade ? `<p>You're always welcome to upgrade your plan again anytime from your billing dashboard. Thank you for being part of the ${appName} community!</p>` : ""}
               
               <p>Warmly,<br>The ${appName} Team</p>
             </div>
@@ -529,7 +543,13 @@ export const feedbackUserConfirmationTemplate = (userName, category) => {
   };
 };
 
-export const feedbackAdminAlertTemplate = (userEmail, category, title, description, screenshotUrl) => {
+export const feedbackAdminAlertTemplate = (
+  userEmail,
+  category,
+  title,
+  description,
+  screenshotUrl,
+) => {
   return {
     subject: `🚨 New ${category.toUpperCase()}: ${title}`,
     html: `
