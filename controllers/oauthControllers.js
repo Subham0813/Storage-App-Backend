@@ -25,6 +25,7 @@ import {
   setCsrfCookie,
 } from "../utils/helper.js";
 import { authTokenSchema } from "../schemas/authSchema.js";
+export const AUTH_CALLBACK = `${process.env.CLIENT_URL}/auth/callback`;
 
 const googleClient = new google.auth.OAuth2(
   GOOGLE_CLIENT_ID,
@@ -315,9 +316,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
           ? "twoFactor=required"
           : "sessionLimit=true";
 
-        return res.redirect(
-          `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?success=true&${flag}`,
-        );
+        return res.redirect(`${AUTH_CALLBACK}/google?success=true&${flag}`);
       }
 
       token = crypto.randomBytes(32).toString("hex");
@@ -343,15 +342,13 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     );
     setCsrfCookie(res);
 
-    return res.redirect(
-      `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?success=true`,
-    );
+    return res.redirect(`${AUTH_CALLBACK}/google?success=true`);
   } catch (err) {
     // console.log(err);
     // return res.redirect(
-    //   `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?error=server_error`,
+    //   `${AUTH_CALLBACK}/google?error=server_error`,
     // );
-    err.redirectUrl = `${process.env.CLIENT_AUTH_CALLBACK_URL}/google?error=server_error`;
+    err.redirectUrl = `${AUTH_CALLBACK}/google?error=server_error`;
     next(err);
   }
 };
@@ -530,9 +527,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
           ? "twoFactor=required"
           : "sessionLimit=true";
 
-        return res.redirect(
-          `${process.env.CLIENT_AUTH_CALLBACK_URL}/github?success=true&${flag}`,
-        );
+        return res.redirect(`${AUTH_CALLBACK}/github?success=true&${flag}`);
       }
 
       token = crypto.randomBytes(32).toString("hex");
@@ -559,15 +554,13 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
     );
     setCsrfCookie(res);
 
-    return res.redirect(
-      `${process.env.CLIENT_AUTH_CALLBACK_URL}/github?success=true`,
-    );
+    return res.redirect(`${AUTH_CALLBACK}/github?success=true`);
   } catch (err) {
     // return res.redirect(
-    //   `${process.env.CLIENT_AUTH_CALLBACK_URL}/github?error=server_error`,
+    //   `${AUTH_CALLBACK}/github?error=server_error`,
     // );
-    err.redirectUrl = `${process.env.CLIENT_AUTH_CALLBACK_URL}/github?error=server_error`;
-    next(err)
+    err.redirectUrl = `${AUTH_CALLBACK}/github?error=server_error`;
+    next(err);
   }
 };
 
@@ -677,14 +670,12 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
     const userKey = `storageApp:user:${user._id}:userdata`;
     await redisClient.del(userKey);
 
-    return res.redirect(
-      `${process.env.CLIENT_AUTH_CALLBACK_URL}/google-drive?success=true`,
-    );
+    return res.redirect(`${AUTH_CALLBACK}/google-drive?success=true`);
   } catch (err) {
     // console.log(err);
-    return res.redirect(
-      `${process.env.CLIENT_AUTH_CALLBACK_URL}/google-drive?error=server_error`,
-    );
+    // return res.redirect(`${AUTH_CALLBACK}/google-drive?error=server_error`);
+    err.redirectUrl = `${AUTH_CALLBACK}/google-drive?error=server_error`;
+    next(err);
   }
 };
 

@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { getErrorObject } from "../utils/helper.js";
+import { AUTH_CALLBACK } from "../controllers/oauthControllers.js";
 
 /**
  * Middleware: restrictRoot
@@ -36,7 +37,7 @@ export const checkAuthProviderStatus = (provider) => {
   return async (req, res, next) => {
     if (req.user.authProviders && req.user.authProviders.includes(provider))
       return res.redirect(
-        `${process.env.CLIENT_AUTH_CALLBACK_URL}/${provider}?success=true&message=already_connected`,
+        `${AUTH_CALLBACK}/${provider}?success=true&message=already_connected`,
       );
 
     next();
