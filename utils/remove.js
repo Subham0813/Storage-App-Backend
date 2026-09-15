@@ -25,34 +25,65 @@ export const recursiveRemove = async (dirId, session, permanentDeleteAt) => {
 };
 
 // Permanently delete all descendants of dirId
-export const recursiveDelete = async (dirId, session, s3KeysToDelete = []) => {
+export const recursiveDelete = async (
+  dirId,
+  session,
+  s3KeysToDelete = [],
+  s3ThumbnailsToDelete = [],
+) => {
   const files = await UserFile.find({ path: dirId })
-    .select("_id key size")
+    .select("_id key versionId thumbnailKey thumbId size")
     .session(session)
     .lean();
   const fileIds = files.map((f) => f._id);
-  const uniqueKeys = new Set();
+
+  const uniqueKeys = new Map();
+  const uniqueThumbs = new Map();
   for (const file of files) {
-    if (file.key) {
-      uniqueKeys.add(file.key);
-    }
+    if (file.key && !uniqueKeys.has(file.key))
+      uniqueKeys.set(file.key, { key: file.key, id: file.versionId });
+    if (file.thumbnailKey && !uniqueThumbs.has(file.thumbnailKey))
+      uniqueThumbs.set(file.thumbnailKey, {
+        key: file.thumbnailKey,
+        id: file.thumbId,
+      });
   }
 
-  const keysToCheck = Array.from(uniqueKeys);
-  const otherFilesWithKeys = await UserFile.find({
-    key: { $in: keysToCheck },
-    _id: { $nin: fileIds },
-  })
-    .select("key")
-    .session(session)
-    .lean();
+  const keysToCheck = Array.from(uniqueKeys.keys());
+  const thumbsToCheck = Array.from(uniqueThumbs.keys());
+
+  const [otherFilesWithKeys, otherFilesWithThumbs] = await Promise.all([
+    keysToCheck.length > 0
+      ? UserFile.find({
+          key: { $in: keysToCheck },
+          _id: { $nin: fileIds },
+        })
+          .select("key")
+          .session(session)
+          .lean()
+      : Promise.resolve([]),
+    thumbsToCheck.length > 0
+      ? UserFile.find({
+          thumbnailKey: { $in: thumbsToCheck },
+          _id: { $nin: fileIds },
+        })
+          .select("thumbnailKey")
+          .session(session)
+          .lean()
+      : Promise.resolve([]),
+  ]);
 
   const keysWithOtherCopies = new Set(otherFilesWithKeys.map((f) => f.key));
+  const thumbsWithOtherCopies = new Set(
+    otherFilesWithThumbs.map((f) => f.thumbnailKey),
+  );
 
   for (const key of keysToCheck) {
-    if (!keysWithOtherCopies.has(key)) {
-      s3KeysToDelete.push({ key });
-    }
+    if (!keysWithOtherCopies.has(key)) s3KeysToDelete.push(uniqueKeys.get(key));
+  }
+  for (const key of thumbsToCheck) {
+    if (!thumbsWithOtherCopies.has(key))
+      s3ThumbnailsToDelete.push(uniqueThumbs.get(key));
   }
 
   // sum all file sizes under this dir
@@ -80,5 +111,5 @@ export const recursiveDelete = async (dirId, session, s3KeysToDelete = []) => {
     UserFile.deleteMany({ path: dirId }).session(session),
   ]);
 
-  return s3KeysToDelete;
+  return { s3KeysToDelete, s3ThumbnailsToDelete };
 };

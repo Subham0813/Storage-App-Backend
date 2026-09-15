@@ -255,9 +255,17 @@ await db.command({
           bsonType: "string",
           description: "S3 object key for the file.",
         },
+        versionId: {
+          bsonType: "string",
+          description: "S3 object version id for the file.",
+        },
         thumbnailKey: {
           bsonType: "string",
           description: "S3 object key for the thumbnail.",
+        },
+        thumbId: {
+          bsonType: "string",
+          description: "S3 object version id for the thumbnail.",
         },
         webviewLink: {
           bsonType: ["string", "null"],
@@ -756,7 +764,14 @@ await db.command({
         },
         category: {
           bsonType: "string",
-          enum: ["upload", "preview", "sharing", "billing", "performance", "other"],
+          enum: [
+            "upload",
+            "preview",
+            "sharing",
+            "billing",
+            "performance",
+            "other",
+          ],
           description: "Feedback category.",
         },
         title: {

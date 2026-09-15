@@ -9,9 +9,10 @@ const fileSchema = new Schema(
     parentId: { type: Schema.Types.ObjectId, ref: "Directory", required: true },
 
     key: { type: String },
+    versionId: { type: String },
     thumbnailKey: { type: String },
+    thumbId: { type: String },
     webviewLink: { type: String },
-    // versionId: { type: String },
 
     name: {
       type: String,

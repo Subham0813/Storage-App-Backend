@@ -568,22 +568,25 @@ export const deleteUser = async (req, res, next) => {
     return next(getErrorObject("You don't have this permission.", 409));
 
   try {
-    const user = await User.findById(id).select("_id avatarKey").lean();
+    const user = await User.findById(id)
+      .select("_id avatarKey avatarVersionId")
+      .lean();
     if (!user) return next(getErrorObject("User not found.", 404));
 
     const files = await UserFile.find({ userId: user._id })
-      .select("key thumbnailKey")
+      .select("key thumbnailKey versionId thumbId")
       .lean();
 
-    const v = new Set();
-    const th = new Set();
+    const v = new Map();
+    const th = new Map();
     files.forEach((f) => {
-      if (f.key) v.add(f.key);
-      if (f.thumbnailKey) th.add(f.thumbnailKey);
+      if (f.key) v.set(f.key, { key: f.key, id: f.versionId });
+      if (f.thumbnailKey)
+        th.set(f.thumbnailKey, { key: f.thumbnailKey, id: f.thumbId });
     });
 
-    const filesToDelete = Array.from(v);
-    const thumbnailsToDelete = Array.from(th);
+    const filesToDelete = Array.from(v.values());
+    const thumbnailsToDelete = Array.from(th.values());
 
     const session = await mongoose.startSession();
     try {
@@ -601,9 +604,10 @@ export const deleteUser = async (req, res, next) => {
     }
 
     if (user.avatarKey) {
-      await deleteS3Objects([user.avatarKey], true).catch((err) =>
-        console.error("S3 Deletion failed:", err),
-      );
+      await deleteS3Objects(
+        [{ key: user.avatarKey, id: user.avatarVersionId }],
+        true,
+      ).catch((err) => console.error("S3 Deletion failed:", err));
     }
 
     if (filesToDelete.length > 0) {

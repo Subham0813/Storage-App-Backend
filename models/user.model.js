@@ -63,6 +63,7 @@ const userSchema = new Schema(
     twoFactorSecret: { type: String, select: false },
 
     avatarKey: { type: String, default: "" },
+    avatarVersionId: { type: String, default: "" },
 
     googleId: { type: String },
     githubId: { type: String },

@@ -42,7 +42,6 @@ if (process.env.PUBLIC_ENDPOINT) {
 export const s3PublicClient = new S3Client(s3PublicConnectionConfig);
 export const PUBLIC_BUCKET_NAME = process.env.PUBLIC_BUCKET_NAME;
 
-
 export const getStandardPresignedUrl = async (key, mime, contentLength) => {
   try {
     const command = new PutObjectCommand({
@@ -111,12 +110,20 @@ export const deleteS3Objects = async (keys = [], isPublicObjects = false) => {
       return { Deleted: [], Errors: [] };
     }
 
-    let normalizedKeys = keys;
-    if (typeof keys[0] === "string") {
-      normalizedKeys = keys.map((key) => ({ key }));
-    }
+    const normalizedKeys = keys.map((item) =>
+      typeof item === "string"
+        ? { key: item, id: undefined }
+        : { key: item?.key, id: item?.id },
+    );
 
-    const validKeys = normalizedKeys.filter((item) => item && item.key);
+    const validKeys = normalizedKeys.filter((item) => item && item.key && item.id);
+    const skippedKeys = normalizedKeys.filter((item) => item && item.key && !item.id);
+    if (skippedKeys.length > 0) {
+      console.warn(
+        `[deleteS3Objects] Skipping ${skippedKeys.length} object(s) without a version id (strict delete):`,
+        skippedKeys.map((item) => item.key),
+      );
+    }
     if (validKeys.length === 0) {
       return { Deleted: [], Errors: [] };
     }
@@ -135,18 +142,19 @@ export const deleteS3Objects = async (keys = [], isPublicObjects = false) => {
           const deleteCommand = new DeleteObjectsCommand({
             Bucket: BUCKET_NAME,
             Delete: {
-              Objects: batch.map(({ key }) => ({ Key: key })),
+              Objects: batch.map(({ key, id }) => ({ Key: key, VersionId:id })),
             },
           });
 
           const response = await s3Client.send(deleteCommand);
           if (response.Deleted) allResults.Deleted.push(...response.Deleted);
           if (response.Errors) allResults.Errors.push(...response.Errors);
+
         } else {
           const deleteCommand = new DeleteObjectsCommand({
             Bucket: PUBLIC_BUCKET_NAME,
             Delete: {
-              Objects: batch.map(({ key }) => ({ Key: key })),
+              Objects: batch.map(({ key, id }) => ({ Key: key , VersionId: id })),
             },
           });
 
@@ -167,6 +175,12 @@ export const deleteS3Objects = async (keys = [], isPublicObjects = false) => {
     }
 
     console.log("Deleted objects results: ", { d: allResults.Deleted });
+    if (allResults.Errors.length > 0) {
+      console.warn(
+        `[deleteS3Objects] ${allResults.Errors.length} object(s) failed to delete:`,
+        allResults.Errors.map((e) => e?.Key),
+      );
+    }
     return allResults;
   } catch (err) {
     throw new Error("Error in deleting objects: " + err.message);

@@ -25,11 +25,7 @@ import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
 import { feedbackSchema, nameSchema } from "../schemas/authSchema.js";
 import { uploadCompleteSchema } from "../schemas/userSchema.js";
-import {
-  DeleteObjectCommand,
-  DeleteObjectsCommand,
-  PutObjectCommand,
-} from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { t, THUMBNAIL_SIZE } from "../misc/constants.js";
 import { Permission } from "../models/permission.model.js";
 import { Subscription } from "../models/subscription.model.js";
@@ -233,9 +229,14 @@ export const updateAvatar = async (req, res, next) => {
     }
 
     const avatarKey = `avatars/${req.user._id.toString()}/${Date.now()}.webp`;
+    let avatarVersionId = "";
+
+    const prevAvatar = await User.findById(req.user._id)
+      .select("avatarKey avatarVersionId")
+      .lean();
 
     try {
-      await s3PublicClient.send(
+      const putResp = await s3PublicClient.send(
         new PutObjectCommand({
           Bucket: PUBLIC_BUCKET_NAME,
           Key: avatarKey,
@@ -245,21 +246,28 @@ export const updateAvatar = async (req, res, next) => {
           ContentEncoding: "base64",
         }),
       );
+      avatarVersionId = putResp.VersionId;
 
-      await User.findByIdAndUpdate(req.user._id, { $set: { avatarKey } });
+      await User.findByIdAndUpdate(req.user._id, {
+        $set: { avatarKey, avatarVersionId },
+      });
+
+      if (prevAvatar?.avatarKey) {
+        await deleteS3Objects(
+          [{ key: prevAvatar.avatarKey, id: prevAvatar.avatarVersionId }],
+          true,
+        ).catch(console.error);
+      }
+
       await redisClient.del(`storageApp:user:${req.user._id}:userdata`);
       await invalidateUser(req.user._id);
     } catch (s3Err) {
       console.error(s3Err);
-      s3PublicClient
-        .send(
-          new DeleteObjectsCommand({
-            Bucket: PUBLIC_BUCKET_NAME,
-            Delete: { Objects: [{ Key: avatarKey }] },
-          }),
-        )
-        .catch(console.error);
-
+      await deleteS3Objects(
+        [{ key: avatarKey, id: avatarVersionId }],
+        true,
+      ).catch(console.error);
+      
       return next(getErrorObject("Avatar upload failed.", 500));
     }
 
@@ -340,20 +348,25 @@ export const deleteProfileHandler = async (req, res, next) => {
   const session = await mongoose.startSession();
   try {
     const files = await UserFile.find({ userId, key: { $exists: true } })
-      .select("key size thumbnailKey")
-      .populate("userId", "avatarKey")
+      .select("key versionId thumbnailKey thumbId size")
+      .populate("userId", "avatarKey avatarVersionId")
       .lean();
 
-    const v = new Set();
-    const th = new Set();
+    const v = new Map();
+    const th = new Map();
     files.forEach((f) => {
-      if (f.key) v.add(f.key);
-      if (f.thumbnailKey) th.add(f.thumbnailKey);
-      if (f.userId.avatarKey) th.add(f.userId.avatarKey);
+      if (f.key) v.set(f.key, { key: f.key, id: f.versionId });
+      if (f.thumbnailKey)
+        th.set(f.thumbnailKey, { key: f.thumbnailKey, id: f.thumbId });
+      if (f.userId.avatarKey)
+        th.set(`${f.userId._id}:avatar`, {
+          key: f.userId.avatarKey,
+          id: f.userId.avatarVersionId,
+        });
     });
 
-    const filesToDelete = Array.from(v);
-    const thumbnailsToDelete = Array.from(th);
+    const filesToDelete = Array.from(v.values());
+    const thumbnailsToDelete = Array.from(th.values());
 
     const indexKey = `storageApp:user:${req.user._id}:session_index`;
     const sessions = await redisClient.sMembers(indexKey);
@@ -455,7 +468,7 @@ export const emptyTrash = async (req, res, next) => {
   try {
     const [trashedFiles, trashedDirs] = await Promise.all([
       UserFile.find({ userId, isDeleted: true, deletedBy: "user" })
-        .select("key size parentId path")
+        .select("key versionId thumbnailKey thumbId size parentId path")
         .lean(),
       Directory.find({ userId, isDeleted: true, deletedBy: "user" })
         .select("size parentId path _id")
@@ -474,20 +487,37 @@ export const emptyTrash = async (req, res, next) => {
       ...trashedDirs.map((d) => d._id),
     ];
 
-    const uniqueKeys = [
-      ...new Set(trashedFiles.map((f) => f.key).filter((k) => k)),
-    ];
-
     const keysToDelete = [];
-    if (uniqueKeys.length > 0) {
-      for (const key of uniqueKeys) {
-        const remainingCount = await UserFile.countDocuments({
-          key,
-          _id: { $nin: allItemIds },
-          isDeleted: false,
-        }).session(session);
-        if (remainingCount === 0) keysToDelete.push({ key });
-      }
+    const thumbnailsToDelete = [];
+
+    const uniqueKeys = new Map();
+    const uniqueThumbs = new Map();
+    for (const f of trashedFiles) {
+      if (f.key && !uniqueKeys.has(f.key))
+        uniqueKeys.set(f.key, { key: f.key, id: f.versionId });
+      if (f.thumbnailKey && !uniqueThumbs.has(f.thumbnailKey))
+        uniqueThumbs.set(f.thumbnailKey, {
+          key: f.thumbnailKey,
+          id: f.thumbId,
+        });
+    }
+
+    for (const [key, item] of uniqueKeys) {
+      const remainingCount = await UserFile.countDocuments({
+        key,
+        _id: { $nin: allItemIds },
+        isDeleted: false,
+      }).session(session);
+      if (remainingCount === 0) keysToDelete.push(item);
+    }
+
+    for (const [key, item] of uniqueThumbs) {
+      const remainingCount = await UserFile.countDocuments({
+        thumbnailKey: key,
+        _id: { $nin: allItemIds },
+        isDeleted: false,
+      }).session(session);
+      if (remainingCount === 0) thumbnailsToDelete.push(item);
     }
 
     const ancestorIds = new Set();
@@ -529,9 +559,20 @@ export const emptyTrash = async (req, res, next) => {
 
     if (keysToDelete.length > 0) {
       try {
-        await deleteS3Objects(keysToDelete.map((k) => ({ key: k.key })));
+        await deleteS3Objects(keysToDelete);
       } catch (s3Err) {
         console.error(`S3 deletion failed during empty trash:`, s3Err.message);
+      }
+    }
+
+    if (thumbnailsToDelete.length > 0) {
+      try {
+        await deleteS3Objects(thumbnailsToDelete, true);
+      } catch (s3Err) {
+        console.error(
+          `S3 thumbnail deletion failed during empty trash:`,
+          s3Err.message,
+        );
       }
     }
 

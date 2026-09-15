@@ -9,12 +9,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Version-aware S3 deletes** — every write path now captures the object `VersionId` and every delete path deletes by that version (no delete markers / hidden files): multipart complete (`completeUpload`), Google Drive import (`record.versionId`, `record.thumbId`), avatars (`avatarVersionId` on `User`). `deleteS3Objects` now accepts both strings and `{ key, id }`, strictly skips+warns on entries missing a version id, surfaces `Errors` from both buckets, and logs when deletions fail.
+- **Delete call-sites fixed end-to-end** — `deleteFileHandler` deletes thumbnails only when it's the last reference (was: `ReferenceError` on `thumbId`), `copyFileHandler` forwards `versionId`/`thumbId`, admin `deleteUser` uses `{ key, id }` (was: `{ k, id }`), `emptyTrash`, account delete, trash-collector and quota-reaper now version-delete files **and** thumbnails (thumbs previously were never deleted).
+- **Thumbnail keys unique per upload** — `thumbnails/{userId}/{Date.now()}-{name}.webp` (was name-based) so re-uploads no longer stack versions and version-deletes remove them for real. Import thumbnails already used unique keys.
 - **Multipart chunk sizes** — `backend/misc/constants.js`: FREE `5e6 → 8e6`; PRO & BUSINESS `8e6/10e6 → 16e6` bytes. Fewer S3 parts and write operations; applies via `partSize = min(size, limits.chunkSize)` with no code ripple. Existing subscriptions keep their snapshot `chunkSize` until renewal / `migratePlans.js`.
-- **Upload resilience (frontend)** — `frontend/src/utils/uploadManager.js`: per-part XHR timeout (150s), transient-failure retry (3 attempts, 2s→4s→8s backoff, never on 4xx), clean abort handling; upload modal now shows `Part X/Y` + ETA. Frontend changes tracked in `Storage-App-Frontend` changelog.
+- **Upload resilience (frontend)** — `frontend/src/utils/uploadManager.js`: per-part XHR timeout (150s), transient-failure retry (3 attempts, 2s→4s→8s backoff, never on 4xx), clean abort handling; upload modal now shows `uploaded/total` + ETA. Frontend changes tracked in `Storage-App-Frontend` changelog.
 
 ### Fixed
 
 - **Uncaught `TypeError` on every multipart progress tick** — removed the dead `onProgress` handler in `uploadPartXhr` that invoked an `undefined` callback. Per-part progress (percent bump per completed part) is unchanged.
+
+### Added
+
+- **`session-reaper` BullMQ job (every 30 min)** — reclaims expired upload/import sessions (`storageApp:user:*:upload:*` / `:*:import:*`). Completed-but-never-finalized objects are deleted strictly by their captured `VersionId` (every object has one — all uploads are multipart). Lingering `completed` sessions are just dropped; unfinished multipart parts are handled by the lifecycle's `daysFromStartingToCancelUnfinishedLargeFiles`.
+- **Session lifecycle is BullMQ-owned** — orchestrating per-session Redis TTLs removed; `record.expire` is the canonical 1-day deadline and the key keeps a `t._day + 120` memory backstop only. `completeUpload` persists `s3ObjectCreated`/`thumbId` and the import flow persists `versionId`, so the reaper and `completeGoogleImport` can always version-delete.
+- **`completeUpload` crash-window cleanup** — a finalized object that errors before the Redis session is deleted is now version-deleted in the catch (multipart abort only when not yet finalized).
+
+### Infrastructure (B2/R2, not code)
+
+- Apply bucket lifecycle rules to **both** buckets (private + public):
+  ```
+  "lifecycleRules": [
+    { "daysFromHidingToDeleting": 1, "fileNamePrefix": "" },
+    { "daysFromStartingToCancelUnfinishedLargeFiles": 1, "fileNamePrefix": "" }
+  ]
+  ```
+  Do **not** set `daysFromUploadingToHiding` on `files/` — that would hide real completed files 1 day after upload (app fetches by key without a `VersionId`).
 
 ---
 

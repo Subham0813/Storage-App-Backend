@@ -358,6 +358,7 @@ export const deleteDirectoryHandler = async (req, res, next) => {
   try {
     const session = await mongoose.startSession();
     const s3KeysToDelete = [];
+    const s3ThumbnailsToDelete = [];
     let directoryName, directoryParentId;
 
     try {
@@ -375,7 +376,12 @@ export const deleteDirectoryHandler = async (req, res, next) => {
         directoryName = directory.name;
         directoryParentId = directory.parentId;
 
-        await recursiveDelete(directory._id, session, s3KeysToDelete);
+        await recursiveDelete(
+          directory._id,
+          session,
+          s3KeysToDelete,
+          s3ThumbnailsToDelete,
+        );
       });
     } finally {
       await session.endSession();
@@ -386,6 +392,14 @@ export const deleteDirectoryHandler = async (req, res, next) => {
         await deleteS3Objects(s3KeysToDelete);
       } catch (err) {
         console.error("Failed to delete S3 objects:", err);
+      }
+    }
+
+    if (s3ThumbnailsToDelete.length > 0) {
+      try {
+        await deleteS3Objects(s3ThumbnailsToDelete, true);
+      } catch (err) {
+        console.error("Failed to delete S3 thumbnail objects:", err);
       }
     }
 

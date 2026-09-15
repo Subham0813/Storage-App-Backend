@@ -203,22 +203,28 @@ export const copyFileHandler = async (req, res, next) => {
     await session.withTransaction(async () => {
       const currentUsedStorage = targetUser.root?.size || 0;
       const copyLimits = getUserLimits(targetUser);
-      if (copyLimits.maxStorage !== Infinity && currentUsedStorage + file.size > copyLimits.maxStorage) {
+      if (
+        copyLimits.maxStorage !== Infinity &&
+        currentUsedStorage + file.size > copyLimits.maxStorage
+      ) {
         throw getErrorObject("Insufficient storage quota.", 400);
       }
 
-      const { key, webviewLink, extension, mime, size, thumbnailKey } = file;
+      const { key, versionId, webviewLink, extension, mime, size, thumbnailKey, thumbId } =
+        file;
       const newFileObj = {
         userId: fileUserId,
         parentId: req.target._id,
         path: req.target.path,
         name: `Copy of ${file.name}`,
         key,
+        versionId,
+        thumbnailKey,
+        thumbId,
         webviewLink,
         mime,
         size,
         extension,
-        thumbnailKey,
         lastModifiedBy: targetUser._id,
       };
 
@@ -265,51 +271,67 @@ export const deleteFileHandler = async (req, res, next) => {
     return next(getErrorObject("Invalid id."));
 
   const session = await mongoose.startSession();
-  let key, thumbnailKey, fileName, fileParentId;
+  let key, versionId, thumbnailKey, thumbId, fileName, fileParentId;
 
   try {
-    [key, thumbnailKey] = await session.withTransaction(async () => {
-      const file = await UserFile.findOneAndDelete(
-        {
-          _id: req.params.id,
-          userId: req.user._id,
-        },
-        { session },
-      )
-        .select("name path parentId key thumbnailKey size")
-        .lean();
+    [key, versionId, thumbnailKey, thumbId] = await session.withTransaction(
+      async () => {
+        const file = await UserFile.findOneAndDelete(
+          {
+            _id: req.params.id,
+            userId: req.user._id,
+          },
+          { session },
+        )
+          .select("name path parentId key versionId thumbnailKey thumbId size")
+          .lean();
 
-      if (!file)
-        throw getErrorObject("File not found or already deleted.", 404);
+        if (!file)
+          throw getErrorObject("File not found or already deleted.", 404);
 
-      fileName = file.name;
-      fileParentId = file.parentId;
+        fileName = file.name;
+        fileParentId = file.parentId;
 
-      await Permission.deleteMany({ itemId: file._id }).session(session);
-      const dirsToUpdate = [...(file.path || []), file.parentId];
+        await Permission.deleteMany({ itemId: file._id }).session(session);
+        const dirsToUpdate = [...(file.path || []), file.parentId];
 
-      await Directory.updateMany(
-        { _id: { $in: dirsToUpdate } },
-        { $inc: { size: -file.size }, lastModifiedBy: req.user._id },
-        { session },
-      );
+        await Directory.updateMany(
+          { _id: { $in: dirsToUpdate } },
+          { $inc: { size: -file.size }, lastModifiedBy: req.user._id },
+          { session },
+        );
 
-      const count = await UserFile.countDocuments({
-        key: file.key,
-      }).session(session);
+        const count = await UserFile.countDocuments({
+          key: file.key,
+        }).session(session);
+        const keyToDelete = count === 0 && file.key ? file.key : null;
 
-      await redisClient.del(`storageApp:user:${req.user._id}:userdata`);
-      await invalidateUser(req.user._id);
-      return count === 0 && file.key ? [file.key, file.thumbnailKey] : [];
-    });
+        let thumbToDelete = null;
+        let thumbVersion = null;
+        if (file.thumbnailKey) {
+          const thumbCount = await UserFile.countDocuments({
+            thumbnailKey: file.thumbnailKey,
+          }).session(session);
+          if (thumbCount === 0) {
+            thumbToDelete = file.thumbnailKey;
+            thumbVersion = file.thumbId;
+          }
+        }
+
+        await redisClient.del(`storageApp:user:${req.user._id}:userdata`);
+        await invalidateUser(req.user._id);
+        return [keyToDelete, file.versionId, thumbToDelete, thumbVersion];
+      },
+    );
 
     // S3 deletion AFTER transaction
-    if (key && thumbnailKey) {
+    if (key) {
       try {
-        await Promise.all([
-          deleteS3Objects([key]),
-          deleteS3Objects([thumbnailKey], true),
-        ]);
+        const deletes = [deleteS3Objects([{ key, id: versionId }])];
+        if (thumbnailKey && thumbId) {
+          deletes.push(deleteS3Objects([{ key: thumbnailKey, id: thumbId }], true));
+        }
+        await Promise.all(deletes);
       } catch (s3Err) {
         console.error("S3 Deletion failed:", s3Err);
         throw s3Err;

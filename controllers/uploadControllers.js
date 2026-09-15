@@ -23,7 +23,7 @@ import {
 } from "../schemas/userSchema.js";
 import { t, THUMBNAIL_SIZE } from "../misc/constants.js";
 import { getErrorObject, getFileDoc, getUserLimits } from "../utils/helper.js";
-import { DeleteObjectsCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 
 const twoDaysMs = 2 * t._day * t._ms;
 
@@ -39,11 +39,13 @@ export const createFileHandler = async (upload) => {
             userId: upload.userId,
             parentId: upload.targetId,
             key: upload.key,
+            versionId: upload.versionId || "",
             name: upload.name,
             mime: upload.mime,
             size: upload.size,
             extension: upload.extension,
-            thumbnailKey: upload.thumbnailKey,
+            thumbnailKey: upload.thumbnailKey || "",
+            thumbId: upload.thumbId || "",
           },
         ],
         { session },
@@ -122,30 +124,30 @@ export const initiateUpload = async (req, res, next) => {
 
     let uploadId, presignedUrls, totalParts, partSize, uploadType;
 
-    if (size <= 5 * 1e6) {
-      uploadType = "standard";
-      uploadId = crypto.randomBytes(12).toString("hex");
-      totalParts = 1;
-      partSize = size;
+    // if (size <= 5 * 1e6) {
+    //   uploadType = "standard";
+    //   uploadId = crypto.randomBytes(12).toString("hex");
+    //   totalParts = 1;
+    //   partSize = size;
 
-      const singleUrl = await getStandardPresignedUrl(key, mime, size);
-      presignedUrls = [{ partNumber: 1, contentLength: size, url: singleUrl }];
-    } else {
-      uploadType = "multipart";
+    //   const singleUrl = await getStandardPresignedUrl(key, mime, size);
+    //   presignedUrls = [{ partNumber: 1, contentLength: size, url: singleUrl }];
+    // } else {
+    uploadType = "multipart";
 
-      partSize = size > limits.chunkSize ? limits.chunkSize : size;
-      totalParts = Math.ceil(size / partSize) || 1;
-      const lastPartSize = size - (totalParts - 1) * partSize;
+    partSize = size > limits.chunkSize ? limits.chunkSize : size;
+    totalParts = Math.ceil(size / partSize) || 1;
+    const lastPartSize = size - (totalParts - 1) * partSize;
 
-      uploadId = await getS3UploadId(key, mime);
+    uploadId = await getS3UploadId(key, mime);
 
-      const parts = Array.from({ length: totalParts }, (_, i) => ({
-        partNumber: i + 1,
-        contentLength: i + 1 === totalParts ? lastPartSize : partSize,
-      }));
+    const parts = Array.from({ length: totalParts }, (_, i) => ({
+      partNumber: i + 1,
+      contentLength: i + 1 === totalParts ? lastPartSize : partSize,
+    }));
 
-      presignedUrls = await getUploadS3PresignedUrls(key, uploadId, parts);
-    }
+    presignedUrls = await getUploadS3PresignedUrls(key, uploadId, parts);
+    // }
 
     // Save session to Redis
     const record = {
@@ -167,7 +169,7 @@ export const initiateUpload = async (req, res, next) => {
     const uploadKey = `storageApp:user:${userId}:upload:${uploadId}`;
     await Promise.all([
       redisClient.json.set(uploadKey, "$", record),
-      redisClient.expire(uploadKey, t._day + 15),
+      redisClient.expire(uploadKey, t._day + 120),
     ]);
 
     delete record.key;
@@ -236,29 +238,32 @@ export const completeUpload = async (req, res, next) => {
     let file = null;
     let thumbnailKey = null;
     try {
+      let versionId = "";
       if (uploadType === "multipart") {
-        const { $metadata } = await completeMultipartUpload(
+        const { $metadata, VersionId } = await completeMultipartUpload(
           upload.key,
           uploadId,
           sorted,
         );
+        versionId = VersionId || "";
 
         if ($metadata.httpStatusCode !== 200) {
           throw getErrorObject("Failed to complete multipart upload.", 500);
         }
       }
+      upload.versionId = versionId;
 
       const realSize = await getObjectSize(upload.key);
       if (realSize !== upload.size) {
-        if (uploadType === "multipart") {
-          abortS3Upload(upload.key, uploadId).catch(console.error);
-        }
-        await deleteS3Objects([upload.key]);
+        await deleteS3Objects([{ key: upload.key, id: upload.versionId }]);
         throw getErrorObject(
           "Uploaded file size does not match expected size.",
           413,
         );
       }
+
+      await redisClient.json.set(uploadKey, "$.versionId", versionId);
+      await redisClient.json.set(uploadKey, "$.s3ObjectCreated", true);
 
       if (thumbnailBase64) {
         try {
@@ -273,9 +278,9 @@ export const completeUpload = async (req, res, next) => {
             return next(getErrorObject("Thumbnail size exceeds limit.", 413));
           }
 
-          thumbnailKey = `thumbnails/${upload.userId}/${upload.name}.webp`;
+          thumbnailKey = `thumbnails/${upload.userId}/${Date.now()}-${upload.name}.webp`;
 
-          await s3PublicClient.send(
+          const thumbResp = await s3PublicClient.send(
             new PutObjectCommand({
               Bucket: PUBLIC_BUCKET_NAME,
               Key: thumbnailKey,
@@ -286,20 +291,25 @@ export const completeUpload = async (req, res, next) => {
               // Tagging: "type=thumbnail",
             }),
           );
+          upload.thumbnailKey = thumbnailKey;
+          upload.thumbId = thumbResp.VersionId;
+          await redisClient.json.set(uploadKey, "$.thumbId", upload.thumbId);
         } catch (thumbErr) {
           console.error("Thumbnail upload failed, skipping:", thumbErr.message);
-          s3PublicClient
-            .send(
-              new DeleteObjectsCommand({
-                Bucket: PUBLIC_BUCKET_NAME,
-                Delete: { Objects: [{ Key: thumbnailKey }] },
-              }),
-            )
-            .catch(console.error);
+          if (upload.thumbId) {
+            await deleteS3Objects(
+              [{ key: thumbnailKey, id: upload.thumbId }],
+              true,
+            ).catch(console.error);
+          } else {
+            console.warn(
+              "Thumbnail cleanup skipped: no version id captured for",
+              thumbnailKey,
+            );
+          }
         }
       }
 
-      upload.thumbnailKey = thumbnailKey;
       file = await createFileHandler(upload);
       await redisClient.del(uploadKey);
 
@@ -309,21 +319,22 @@ export const completeUpload = async (req, res, next) => {
     } catch (s3OrDbError) {
       console.error("Error during upload completion, aborting:", s3OrDbError);
 
-      if (upload.uploadType === "multipart") {
+      if (upload.uploadType === "multipart" && !upload.s3ObjectCreated) {
         abortS3Upload(upload.key, uploadId).catch(console.error);
       }
 
       if (thumbnailKey) {
-        s3PublicClient
-          .send(
-            new DeleteObjectsCommand({
-              Bucket: PUBLIC_BUCKET_NAME,
-              Delete: { Objects: [{ Key: thumbnailKey }] },
-            }),
-          )
-          .catch(console.error);
+        deleteS3Objects(
+          [{ key: thumbnailKey, id: upload.thumbId }],
+          true,
+        ).catch(console.error);
       }
 
+      if (upload.s3ObjectCreated) {
+        deleteS3Objects([{ key: upload.key, id: upload.versionId }]).catch(
+          console.error,
+        );
+      }
       redisClient.del(uploadKey).catch(console.error);
       throw s3OrDbError;
     }

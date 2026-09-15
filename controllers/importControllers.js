@@ -34,7 +34,6 @@ import { uploadInitSchema } from "../schemas/userSchema.js";
 
 const twoDaysMs = 2 * t._day * t._ms;
 const sixHrs = 6 * t._hr;
-const threeHrs = 3 * t._hr;
 const twoMins = 2 * t._min;
 
 /**
@@ -58,7 +57,7 @@ const makeImportThumbnail = async (drive, googleId, record, importKey) => {
     const ext = contentType.includes("webp") ? "webp" : "jpg";
     const thumbnailKey = `thumbnails/${record.userId}/${record.id}.${ext}`;
 
-    await s3PublicClient.send(
+    const putResp = await s3PublicClient.send(
       new PutObjectCommand({
         Bucket: PUBLIC_BUCKET_NAME,
         Key: thumbnailKey,
@@ -67,8 +66,10 @@ const makeImportThumbnail = async (drive, googleId, record, importKey) => {
         CacheControl: `public, max-age=${2 * t._hr * t._ms}`,
       }),
     );
+    record.thumbId = putResp.VersionId || "";
 
     await redisClient.json.set(importKey, "$.thumbnailKey", thumbnailKey);
+    await redisClient.json.set(importKey, "$.thumbId", record.thumbId);
   } catch (err) {
     console.warn("Import thumbnail generation failed:", err.message);
   }
@@ -121,7 +122,7 @@ const saveAsLink = async (record, webviewLink, importKey, time) => {
     record.fileId = newfile._id.toString();
 
     await redisClient.json.set(importKey, "$", record);
-    await redisClient.expire(importKey, time);
+    // await redisClient.expire(importKey, time);
   } catch (err) {
     throw new Error("Failed to save Google Doc as link: " + err.message);
   } finally {
@@ -191,7 +192,7 @@ export const initiateGoogleImport = async (req, res, next) => {
     };
 
     await redisClient.json.set(importKey, "$", record);
-    await redisClient.expire(importKey, sixHrs);
+    await redisClient.expire(importKey, t._day + 120);
 
     delete record.key;
     delete record.googleId;
@@ -234,7 +235,7 @@ export const startGoogleImport = async (req, res, next) => {
     if (!integration) return next(getErrorObject("Drive not connected."));
 
     await redisClient.json.set(importKey, "$.status", "on_progress");
-    await redisClient.expire(importKey, sixHrs);
+    // await redisClient.expire(importKey, sixHrs);
 
     const limits = getUserLimits(req.user);
     const activeKey = `import:active:${req.user._id.toString()}`;
@@ -283,7 +284,7 @@ export const startGoogleImport = async (req, res, next) => {
               });
               return await saveAsLink(
                 record,
-                link.data.webviewLink,
+                link.data.webViewLink,
                 importKey,
                 twoMins,
               );
@@ -305,10 +306,9 @@ export const startGoogleImport = async (req, res, next) => {
                 fileId: googleId,
                 fields: "webviewLink",
               });
-
               return await saveAsLink(
                 record,
-                link.data.webviewLink,
+                link.data.webViewLink,
                 importKey,
                 twoMins,
               );
@@ -316,7 +316,6 @@ export const startGoogleImport = async (req, res, next) => {
 
             if (downloadErr.response?.status === 404) {
               await redisClient.json.set(importKey, "$.status", "failed");
-              await redisClient.expire(importKey, twoMins);
               notifyImportFailed();
               return;
             }
@@ -342,26 +341,37 @@ export const startGoogleImport = async (req, res, next) => {
                 "$.bytesRead",
                 progress.loaded,
               );
-              await redisClient.expire(importKey, sixHrs);
+              // await redisClient.expire(importKey, sixHrs);
               lastDbUpdate = now;
             }
           });
 
-          const upload = await parallelUploads3.done();
-          key = upload.Key;
+          const uploadResult = await parallelUploads3.done();
+          key = uploadResult.Key;
+          record.versionId = uploadResult.VersionId || "";
+          // Persist so completeGoogleImport (and the session-reaper) can
+          // version-delete the object later.
+          await redisClient.json.set(
+            importKey,
+            "$.versionId",
+            record.versionId,
+          );
 
           await makeImportThumbnail(drive, googleId, record, importKey);
 
           await redisClient.json.set(importKey, "$.status", "can_complete");
-          await redisClient.expire(importKey, threeHrs);
         }
       } catch (err) {
         console.error("Import failed: ", err);
+
         await redisClient.json
           .set(importKey, "$.status", "failed")
           .catch(console.error);
-        await redisClient.expire(importKey, threeHrs).catch(console.error);
-        if (key) await deleteS3Objects([key]).catch(console.error);
+        if (key)
+          await deleteS3Objects([{ key, id: record.versionId }]).catch(
+            console.error,
+          );
+
         notifyImportFailed();
       } finally {
         decrActive();
@@ -414,7 +424,9 @@ export const completeGoogleImport = async (req, res, next) => {
 
     const realSize = await getObjectSize(record.key);
     if (realSize !== record.size) {
-      await deleteS3Objects([record.key]).catch(console.error);
+      await deleteS3Objects([{ key: record.key, id: record.versionId }]).catch(
+        console.error,
+      );
       await redisClient.del(importKey);
       return next(
         getErrorObject("Imported file size does not match expected size.", 413),
@@ -533,7 +545,9 @@ export const getPickerTokenGoogle = async (req, res, next) => {
         },
       );
       // bust user cache so next req sees fresh expiry
-      await redisClient.del(`storageApp:user:${req.user._id}:userdata`).catch(() => {});
+      await redisClient
+        .del(`storageApp:user:${req.user._id}:userdata`)
+        .catch(() => {});
 
       return res.status(200).json({
         success: true,

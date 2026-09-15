@@ -224,11 +224,19 @@ export const startBullMQWorker = () => {
           const tcFileBulkOps = [];
           const tcDirBulkOps = [];
           const tcS3KeysToDelete = [];
+          const tcThumbKeysToDelete = [];
           const expiredFileIds = expiredFiles.map((f) => f._id);
-          const tcUniqueKeys = new Set();
+          const tcUniqueKeys = new Map();
+          const tcUniqueThumbs = new Map();
 
           for (const file of expiredFiles) {
-            if (file.key) tcUniqueKeys.add(file.key);
+            if (file.key && !tcUniqueKeys.has(file.key))
+              tcUniqueKeys.set(file.key, { key: file.key, id: file.versionId });
+            if (file.thumbnailKey && !tcUniqueThumbs.has(file.thumbnailKey))
+              tcUniqueThumbs.set(file.thumbnailKey, {
+                key: file.thumbnailKey,
+                id: file.thumbId,
+              });
             tcDirectoryBulkOps.push({
               updateMany: {
                 filter: { _id: { $in: file.path } },
@@ -242,24 +250,49 @@ export const startBullMQWorker = () => {
             tcDirBulkOps.push({ deleteOne: { filter: { _id: dir._id } } });
           }
 
-          const tcKeysToCheck = Array.from(tcUniqueKeys);
-          const tcOtherFilesWithKeys = await UserFile.find({
-            key: { $in: tcKeysToCheck },
-            _id: { $nin: expiredFileIds },
-          })
-            .select("key")
-            .lean();
+          const tcKeysToCheck = Array.from(tcUniqueKeys.keys());
+          const tcThumbKeysToCheck = Array.from(tcUniqueThumbs.keys());
+
+          const [tcOtherFilesWithKeys, tcOtherFilesWithThumbs] =
+            await Promise.all([
+              tcKeysToCheck.length > 0
+                ? UserFile.find({
+                    key: { $in: tcKeysToCheck },
+                    _id: { $nin: expiredFileIds },
+                  })
+                    .select("key")
+                    .lean()
+                : Promise.resolve([]),
+              tcThumbKeysToCheck.length > 0
+                ? UserFile.find({
+                    thumbnailKey: { $in: tcThumbKeysToCheck },
+                    _id: { $nin: expiredFileIds },
+                  })
+                    .select("thumbnailKey")
+                    .lean()
+                : Promise.resolve([]),
+            ]);
 
           const tcKeysWithOtherCopies = new Set(
             tcOtherFilesWithKeys.map((f) => f.key),
           );
+          const tcThumbsWithOtherCopies = new Set(
+            tcOtherFilesWithThumbs.map((f) => f.thumbnailKey),
+          );
 
           for (const key of tcKeysToCheck) {
-            if (!tcKeysWithOtherCopies.has(key)) tcS3KeysToDelete.push(key);
+            if (!tcKeysWithOtherCopies.has(key))
+              tcS3KeysToDelete.push(tcUniqueKeys.get(key));
+          }
+          for (const key of tcThumbKeysToCheck) {
+            if (!tcThumbsWithOtherCopies.has(key))
+              tcThumbKeysToDelete.push(tcUniqueThumbs.get(key));
           }
 
           if (tcS3KeysToDelete.length > 0)
             await deleteS3Objects(tcS3KeysToDelete);
+          if (tcThumbKeysToDelete.length > 0)
+            await deleteS3Objects(tcThumbKeysToDelete, true);
 
           if (tcFileBulkOps.length > 0) {
             await Directory.bulkWrite(tcDirectoryBulkOps);
@@ -342,12 +375,18 @@ export const startBullMQWorker = () => {
             const qrDirectoryBulkOps = [];
             const qrFileBulkOps = [];
             const qrS3KeysToDelete = [];
-            const qrUniqueKeys = new Set();
+            const qrThumbKeysToDelete = [];
+            const qrUniqueKeys = new Map();
+            const qrUniqueThumbs = new Map();
 
             for (const file of filesToReap) {
-              if (file.key) {
-                qrUniqueKeys.add(file.key);
-              }
+              if (file.key && !qrUniqueKeys.has(file.key))
+                qrUniqueKeys.set(file.key, { key: file.key, id: file.versionId });
+              if (file.thumbnailKey && !qrUniqueThumbs.has(file.thumbnailKey))
+                qrUniqueThumbs.set(file.thumbnailKey, {
+                  key: file.thumbnailKey,
+                  id: file.thumbId,
+                });
 
               qrDirectoryBulkOps.push({
                 updateMany: {
@@ -361,26 +400,51 @@ export const startBullMQWorker = () => {
               });
             }
 
-            const qrKeysToCheck = Array.from(qrUniqueKeys);
-            const qrOtherFilesWithKeys = await UserFile.find({
-              key: { $in: qrKeysToCheck },
-              _id: { $nin: reapIds },
-            })
-              .select("key")
-              .lean();
+            const qrKeysToCheck = Array.from(qrUniqueKeys.keys());
+            const qrThumbKeysToCheck = Array.from(qrUniqueThumbs.keys());
+
+            const [qrOtherFilesWithKeys, qrOtherFilesWithThumbs] =
+              await Promise.all([
+                qrKeysToCheck.length > 0
+                  ? UserFile.find({
+                      key: { $in: qrKeysToCheck },
+                      _id: { $nin: reapIds },
+                    })
+                      .select("key")
+                      .lean()
+                  : Promise.resolve([]),
+                qrThumbKeysToCheck.length > 0
+                  ? UserFile.find({
+                      thumbnailKey: { $in: qrThumbKeysToCheck },
+                      _id: { $nin: reapIds },
+                    })
+                      .select("thumbnailKey")
+                      .lean()
+                  : Promise.resolve([]),
+              ]);
 
             const qrKeysWithOtherCopies = new Set(
               qrOtherFilesWithKeys.map((f) => f.key),
             );
+            const qrThumbsWithOtherCopies = new Set(
+              qrOtherFilesWithThumbs.map((f) => f.thumbnailKey),
+            );
 
             for (const key of qrKeysToCheck) {
-              if (!qrKeysWithOtherCopies.has(key)) {
-                qrS3KeysToDelete.push(key);
-              }
+              if (!qrKeysWithOtherCopies.has(key))
+                qrS3KeysToDelete.push(qrUniqueKeys.get(key));
+            }
+            for (const key of qrThumbKeysToCheck) {
+              if (!qrThumbsWithOtherCopies.has(key))
+                qrThumbKeysToDelete.push(qrUniqueThumbs.get(key));
             }
 
             if (qrS3KeysToDelete.length > 0) {
               await deleteS3Objects(qrS3KeysToDelete);
+            }
+
+            if (qrThumbKeysToDelete.length > 0) {
+              await deleteS3Objects(qrThumbKeysToDelete, true);
             }
 
             if (qrDirectoryBulkOps.length > 0) {
@@ -593,6 +657,69 @@ export const startBullMQWorker = () => {
           );
           break;
         }
+
+        case "session-reaper": {
+          // Reclaim expired upload/import sessions (version-delete orphans).
+          const sessionPatterns = [
+            "storageApp:user:*:upload:*",
+            "storageApp:user:*:import:*",
+          ];
+          let reclaimedKeys = 0;
+
+          for (const pattern of sessionPatterns) {
+            let cursor = 0;
+            do {
+              const { cursor: nextCursor, keys } = await redisClient.scan(
+                cursor,
+                { MATCH: pattern, COUNT: 100 },
+              );
+              cursor = Number(nextCursor);
+
+              for (const sessionKey of keys) {
+                try {
+                  const record = await redisClient.json.get(sessionKey);
+                  if (
+                    !record ||
+                    typeof record.expire !== "number" ||
+                    record.expire >= Date.now()
+                  ) {
+                    continue;
+                  }
+
+                  if (record.status !== "completed") {
+                    const fileFinalized =
+                      record.s3ObjectCreated === true ||
+                      record.status === "can_complete" ||
+                      record.status === "failed";
+                    if (record.key && (record.versionId || fileFinalized)) {
+                      await deleteS3Objects([
+                        { key: record.key, id: record.versionId },
+                      ]);
+                    }
+                    if (record.thumbnailKey && record.thumbId) {
+                      await deleteS3Objects(
+                        [{ key: record.thumbnailKey, id: record.thumbId }],
+                        true,
+                      );
+                    }
+                  }
+                  await redisClient.del(sessionKey);
+                  reclaimedKeys += 1;
+                } catch (err) {
+                  console.error(
+                    `session-reaper: failed to reclaim ${sessionKey}:`,
+                    err.message,
+                  );
+                }
+              }
+            } while (cursor !== 0);
+          }
+
+          console.log(
+            `Reclaimed ${reclaimedKeys} expired upload/import session(s).`,
+          );
+          break;
+        }
       }
     } catch (error) {
       console.log("Error occured executing jobs!!", error.message);
@@ -677,6 +804,13 @@ export const startBullMQJobs = async () => {
       "active-users-sweeper",
       {},
       { ...JOB_OPTS, repeat: { pattern: "0 3 * * *" } }, // daily at 3am
+    );
+    // Every 30 min — Reap expired upload/import sessions. Orphaned S3 objects
+    // are version-deleted, or hidden (versionless delete) for lifecycle purge.
+    await backgroundQueue.add(
+      "session-reaper",
+      {},
+      { ...JOB_OPTS, repeat: { pattern: "*/30 * * * *" } },
     );
     // 04:00 — Halted subscription reaper (per-plan gracePeriod, not hardcoded)
     await backgroundQueue.add(
