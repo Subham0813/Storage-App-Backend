@@ -36,7 +36,7 @@ This is the `user` object returned by `/info`. Frontend should treat this as the
   "limits": {
     "quotaBytes": 50000000000,
     "maxFileSize": 2000000000,
-    "chunkSize": 8388608,
+    "chunkSize": 16000000,
     "monthlyBandwidthLimit": 100000000000,
     "maxUploadConcurrency": 4,
     "maxDevices": 3,

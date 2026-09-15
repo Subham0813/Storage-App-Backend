@@ -112,7 +112,7 @@ No body. Just the `sessionId` cookie.
       "limits": {
         "quotaBytes": 100000000000,
         "maxFileSize": 2000000000,
-        "chunkSize": 8388608,
+        "chunkSize": 16000000,
         "monthlyBandwidthLimit": 200000000000,
         "maxUploadConcurrency": 4,
         "maxDevices": 3,

@@ -40,7 +40,7 @@ export const PLAN_DETAILS = {
     priceInRupees: 0,
     quotaBytes: 2 * 1e9, // 2GB
     maxFileSize: 100 * 1e6, // 100MB
-    chunkSize: 5e6,
+    chunkSize: 8e6,
     monthlyBandwidthLimit: 5 * 1e9, // 5GB
     maxUploadConcurrency: 2,
     maxDevices: 1,
@@ -56,7 +56,7 @@ export const PLAN_DETAILS = {
     priceInRupees: 99,
     quotaBytes: 100 * 1e9, // 100GB
     maxFileSize: 2 * 1e9, // 2GB
-    chunkSize: 8e6,
+    chunkSize: 16e6,
     monthlyBandwidthLimit: 200 * 1e9, // 200GB
     maxUploadConcurrency: 4,
     maxDevices: 3,
@@ -70,7 +70,7 @@ export const PLAN_DETAILS = {
     priceInRupees: 999,
     quotaBytes: 100 * 1e9, // 100GB
     maxFileSize: 2 * 1e9, // 2GB
-    chunkSize: 8e6,
+    chunkSize: 16e6,
     monthlyBandwidthLimit: 200 * 1e9, // 200GB
     maxUploadConcurrency: 4,
     maxDevices: 3,
@@ -86,7 +86,7 @@ export const PLAN_DETAILS = {
     priceInRupees: 299,
     quotaBytes: 500 * 1e9, // 500GB
     maxFileSize: 10 * 1e9, // 10GB
-    chunkSize: 10e6,
+    chunkSize: 16e6,
     monthlyBandwidthLimit: 1000 * 1e9, // 1000GB
     maxUploadConcurrency: 8,
     maxDevices: 5,
@@ -100,7 +100,7 @@ export const PLAN_DETAILS = {
     priceInRupees: 2999,
     quotaBytes: 500 * 1e9, // 500GB
     maxFileSize: 10 * 1e9, // 10GB
-    chunkSize: 10e6,
+    chunkSize: 16e6,
     monthlyBandwidthLimit: 1000 * 1e9, // 1000GB
     maxUploadConcurrency: 8,
     maxDevices: 5,

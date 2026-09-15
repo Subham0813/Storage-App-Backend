@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Multipart chunk sizes** — `backend/misc/constants.js`: FREE `5e6 → 8e6`; PRO & BUSINESS `8e6/10e6 → 16e6` bytes. Fewer S3 parts and write operations; applies via `partSize = min(size, limits.chunkSize)` with no code ripple. Existing subscriptions keep their snapshot `chunkSize` until renewal / `migratePlans.js`.
+- **Upload resilience (frontend)** — `frontend/src/utils/uploadManager.js`: per-part XHR timeout (150s), transient-failure retry (3 attempts, 2s→4s→8s backoff, never on 4xx), clean abort handling; upload modal now shows `Part X/Y` + ETA. Frontend changes tracked in `Storage-App-Frontend` changelog.
+
+### Fixed
+
+- **Uncaught `TypeError` on every multipart progress tick** — removed the dead `onProgress` handler in `uploadPartXhr` that invoked an `undefined` callback. Per-part progress (percent bump per completed part) is unchanged.
+
+---
+
 ## [1.0.0] - 2026-09-01 — Initial Public Release
 
 > Previous `4.0.0` (2026-07) was internal iteration. First public launch is `1.0.0` — version reset. This entry reflects the actual **backend** codebase at `backendV3@7c3c505` with generic `https://example.com` examples. Frontend changes are tracked in `Storage-App-Frontend` changelog.

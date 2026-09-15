@@ -40,7 +40,7 @@ Admin endpoints return the same shape as `getUserPayload()` (same as `/api/user/
   "limits": {
     "quotaBytes": 5000000000,
     "maxFileSize": 100000000,
-    "chunkSize": 5242880,
+    "chunkSize": 8000000,
     "monthlyBandwidthLimit": 10000000000,
     "maxUploadConcurrency": 2,
     "maxDevices": 1,

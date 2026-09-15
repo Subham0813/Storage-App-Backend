@@ -82,19 +82,19 @@ Creates a new upload session. Validates file size against user's storage quota a
       "userId": "64f1a2b3c4d5e6f7a8b9c0d1",
       "name": "report.pdf",
       "mime": "application/pdf",
-      "size": 10485760,
+      "size": 16000000,
       "totalParts": 2,
-      "partSize": 5242880,
+      "partSize": 8000000,
       "maxConcurrency": 4,
       "urls": [
         {
           "partNumber": 1,
-          "contentLength": 5242880,
+          "contentLength": 8000000,
           "url": "https://b2-endpoint.com/bucket/key?partNumber=1&uploadId=..."
         },
         {
           "partNumber": 2,
-          "contentLength": 5242880,
+          "contentLength": 8000000,
           "url": "https://b2-endpoint.com/bucket/key?partNumber=2&uploadId=..."
         }
       ],
