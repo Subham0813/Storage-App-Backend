@@ -367,7 +367,7 @@ export const deleteDirectoryHandler = async (req, res, next) => {
           _id: req.params.id,
           userId: req.user._id,
         })
-          .select("_id name parentId")
+          .select("_id name parentId path isDeleted")
           .session(session)
           .lean();
 
@@ -381,6 +381,8 @@ export const deleteDirectoryHandler = async (req, res, next) => {
           session,
           s3KeysToDelete,
           s3ThumbnailsToDelete,
+          directory.path || [],
+          directory.isDeleted === true,
         );
       });
     } finally {

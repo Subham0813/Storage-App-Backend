@@ -267,7 +267,7 @@ export const updateAvatar = async (req, res, next) => {
         [{ key: avatarKey, id: avatarVersionId }],
         true,
       ).catch(console.error);
-      
+
       return next(getErrorObject("Avatar upload failed.", 500));
     }
 
@@ -463,6 +463,7 @@ export const deleteIntegration = async (req, res, next) => {
  */
 export const emptyTrash = async (req, res, next) => {
   const userId = req.user._id;
+  const { _id: rootId, size: rootSize } = req.user.root;
   const session = await mongoose.startSession();
 
   try {
@@ -520,31 +521,21 @@ export const emptyTrash = async (req, res, next) => {
       if (remainingCount === 0) thumbnailsToDelete.push(item);
     }
 
-    const ancestorIds = new Set();
     const totalSize = [...trashedFiles, ...trashedDirs].reduce(
       (sum, item) => sum + (item.size || 0),
       0,
     );
-    for (const item of [...trashedFiles, ...trashedDirs]) {
-      for (const pId of item.path || []) ancestorIds.add(pId.toString());
-      if (item.parentId) ancestorIds.add(item.parentId.toString());
-    }
 
     await session.withTransaction(async () => {
       await Permission.deleteMany({ itemId: { $in: allItemIds } }).session(
         session,
       );
 
-      if (ancestorIds.size > 0) {
+      if (totalSize > 0) {
+        const decr = Math.min(totalSize, rootSize);
         await Directory.updateMany(
-          {
-            _id: {
-              $in: [...ancestorIds].map(
-                (id) => new mongoose.Types.ObjectId(id),
-              ),
-            },
-          },
-          { $inc: { size: -totalSize } },
+          { _id: rootId, userId: req.user._id },
+          { $inc: { size: -decr } },
           { session },
         );
       }
@@ -578,6 +569,7 @@ export const emptyTrash = async (req, res, next) => {
 
     const userKey = `storageApp:user:${userId.toString()}:userdata`;
     await redisClient.del(userKey);
+    await invalidateUser(userId);
 
     return res.status(200).json({
       success: true,

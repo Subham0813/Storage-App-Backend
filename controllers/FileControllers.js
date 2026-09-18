@@ -243,6 +243,8 @@ export const copyFileHandler = async (req, res, next) => {
     await Promise.all([
       redisClient.del(fileUserKey),
       redisClient.del(targetUserKey),
+      invalidateUser(fileUserId),
+      invalidateUser(targetUser._id),
     ]);
 
     const copyWithUser = await UserFile.findById(copy._id)
@@ -283,7 +285,7 @@ export const deleteFileHandler = async (req, res, next) => {
           },
           { session },
         )
-          .select("name path parentId key versionId thumbnailKey thumbId size")
+          .select("name path parentId key versionId thumbnailKey thumbId size isDeleted")
           .lean();
 
         if (!file)
@@ -293,13 +295,27 @@ export const deleteFileHandler = async (req, res, next) => {
         fileParentId = file.parentId;
 
         await Permission.deleteMany({ itemId: file._id }).session(session);
-        const dirsToUpdate = [...(file.path || []), file.parentId];
 
-        await Directory.updateMany(
-          { _id: { $in: dirsToUpdate } },
-          { $inc: { size: -file.size }, lastModifiedBy: req.user._id },
-          { session },
-        );
+        const dirsToUpdate = file.isDeleted
+          ? req.user.root?._id
+            ? [req.user.root._id]
+            : []
+          : [...(file.path || []), file.parentId];
+
+        if (file.size > 0 && dirsToUpdate.length > 0) {
+          await Directory.updateMany(
+            { _id: { $in: dirsToUpdate } },
+            [
+              {
+                $set: {
+                  size: { $max: [0, { $subtract: ["$size", file.size] }] },
+                  lastModifiedBy: new mongoose.Types.ObjectId(req.user._id),
+                },
+              },
+            ],
+            { session, updatePipeline: true },
+          );
+        }
 
         const count = await UserFile.countDocuments({
           key: file.key,

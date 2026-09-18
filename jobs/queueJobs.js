@@ -237,12 +237,25 @@ export const startBullMQWorker = () => {
                 key: file.thumbnailKey,
                 id: file.thumbId,
               });
-            tcDirectoryBulkOps.push({
-              updateMany: {
-                filter: { _id: { $in: file.path } },
-                update: { $inc: { size: -file.size } },
-              },
-            });
+            if (file.path && file.path.length > 0) {
+              // Trashed bytes stay counted on the root until purge; 
+              // non-root folders were already de-counted when the item was trashed.
+              tcDirectoryBulkOps.push({
+                updateMany: {
+                  filter: { _id: file.path[0] },
+                  update: [
+                    {
+                      $set: {
+                        size: {
+                          $max: [0, { $subtract: ["$size", file.size] }],
+                        },
+                      },
+                    },
+                  ],
+                  updatePipeline: true,
+                },
+              });
+            }
             tcFileBulkOps.push({ deleteOne: { filter: { _id: file._id } } });
           }
 
@@ -329,13 +342,16 @@ export const startBullMQWorker = () => {
               const suffix = entry.names.length
                 ? ` (e.g., ${entry.names.join(", ")})`
                 : "";
-              return createNotification({
-                userId,
-                type: "storage_warning",
-                title: "Items permanently deleted",
-                message: `${parts.join(" and ")} permanently deleted from your Bin${suffix}.`,
-                link: "/bin",
-              });
+              return Promise.all([
+                invalidateUser(userId),
+                createNotification({
+                  userId,
+                  type: "storage_warning",
+                  title: "Items permanently deleted",
+                  message: `${parts.join(" and ")} permanently deleted from your Bin${suffix}.`,
+                  link: "/bin",
+                }),
+              ]);
             }),
           );
 
@@ -388,10 +404,22 @@ export const startBullMQWorker = () => {
                   id: file.thumbId,
                 });
 
+              // Quota-reaper deletes LIVE files: every ancestor (incl. root)
+              // still counts the bytes, so debit the full path — clamped so a
+              // stray stored value can never be driven below zero.
               qrDirectoryBulkOps.push({
                 updateMany: {
                   filter: { _id: { $in: file.path } },
-                  update: { $inc: { size: -file.size } },
+                  update: [
+                    {
+                      $set: {
+                        size: {
+                          $max: [0, { $subtract: ["$size", file.size] }],
+                        },
+                      },
+                    },
+                  ],
+                  updatePipeline: true,
                 },
               });
 

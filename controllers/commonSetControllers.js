@@ -26,6 +26,7 @@ import {
 import { notifyMany } from "../services/notificationService.js";
 import z from "zod";
 import { redisClient } from "../configs/redis.js";
+import { invalidateUser } from "../utils/responseCache.js";
 import { PLAN_DETAILS, t } from "../misc/constants.js";
 
 /**
@@ -193,6 +194,8 @@ export const moveItem = (model) => {
         };
       });
 
+      const fileOpsToRun = [];
+
       if (model === "dir") {
         const descendents = await Directory.find({
           path: { $in: [item._id] },
@@ -203,25 +206,60 @@ export const moveItem = (model) => {
         if (descendents.length > 0) {
           // update descendants
           const descOps = descendents.map((d) => {
-            const oldParentIdx = d.path.findIndex(
-              (a) => a.toString() === item._id.toString(),
-            );
-            const descNewAncestors = [
-              ...path,
-              ...d.path.slice(oldParentIdx + 1),
-            ];
-            return {
-              updateOne: {
-                filter: { _id: d._id },
-                update: {
-                  path: descNewAncestors,
-                  lastModifiedBy: target.userId._id,
+              const oldParentIdx = d.path.findIndex(
+                (a) => a.toString() === item._id.toString(),
+              );
+              if (oldParentIdx === -1) return null;
+              const descNewAncestors = [
+                ...path,
+                item._id,
+                ...d.path.slice(oldParentIdx + 1),
+              ];
+              return {
+                updateOne: {
+                  filter: { _id: d._id },
+                  update: {
+                    path: descNewAncestors,
+                    lastModifiedBy: target.userId._id,
+                  },
                 },
-              },
-            };
-          });
+              };
+            })
+            .filter(Boolean);
 
           itemBulkOps.push(...descOps);
+        }
+
+        const descFiles = await UserFile.find({ path: item._id })
+          .select("_id path")
+          .lean();
+
+        if (descFiles.length > 0) {
+          // update descendant files so their ancestor chain follows the move
+          const fileOps = descFiles
+            .map((f) => {
+              const oldParentIdx = f.path.findIndex(
+                (a) => a.toString() === item._id.toString(),
+              );
+              if (oldParentIdx === -1) return null;
+              const fileNewAncestors = [
+                ...path,
+                item._id,
+                ...f.path.slice(oldParentIdx + 1),
+              ];
+              return {
+                updateOne: {
+                  filter: { _id: f._id },
+                  update: {
+                    path: fileNewAncestors,
+                    lastModifiedBy: target.userId._id,
+                  },
+                },
+              };
+            })
+            .filter(Boolean);
+
+          fileOpsToRun.push(...fileOps);
         }
       }
 
@@ -242,6 +280,9 @@ export const moveItem = (model) => {
           await Directory.bulkWrite([...itemBulkOps, ...targetBulkOps], {
             session,
           });
+          if (fileOpsToRun.length > 0) {
+            await UserFile.bulkWrite(fileOpsToRun, { session });
+          }
         });
       } catch (dbErr) {
         return next(dbErr);
@@ -254,6 +295,8 @@ export const moveItem = (model) => {
       await Promise.all([
         redisClient.del(itemUserKey),
         redisClient.del(targetUserKey),
+        invalidateUser(item.userId),
+        invalidateUser(target.userId),
       ]);
 
       return res.status(200).json({
@@ -333,10 +376,13 @@ export const moveToBin = (model) => {
         await session.endSession();
       }
 
-      const itemUserKey = `storageApp:user:${item.userId.toString()}:userdata`;
-      await redisClient.del(itemUserKey);
+const itemUserKey = `storageApp:user:${item.userId.toString()}:userdata`;
+      await Promise.all([
+        redisClient.del(itemUserKey),
+        invalidateUser(item.userId),
+      ]);
 
-      res.status(200).json({
+      return res.status(200).json({
         success: true,
         message: "Item moved to bin.",
         data: {
@@ -433,7 +479,10 @@ export const restoreItem = (model) => {
       }
 
       const itemUserKey = `storageApp:user:${item.userId.toString()}:userdata`;
-      await redisClient.del(itemUserKey);
+      await Promise.all([
+        redisClient.del(itemUserKey),
+        invalidateUser(item.userId),
+      ]);
 
       return res.status(200).json({
         success: true,

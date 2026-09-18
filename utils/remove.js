@@ -24,15 +24,19 @@ export const recursiveRemove = async (dirId, session, permanentDeleteAt) => {
   ]);
 };
 
-// Permanently delete all descendants of dirId
+// Permanently delete all descendants of dirId.
+// dirPath    : ancestor chain of dirId ([root, ...]) — captured BEFORE the directory document itself is removed.
+// wasTrashed : true when dirId was soft-deleted, false for a live directory (not deleted yet).
 export const recursiveDelete = async (
   dirId,
   session,
   s3KeysToDelete = [],
   s3ThumbnailsToDelete = [],
+  dirPath = [],
+  wasTrashed = true,
 ) => {
   const files = await UserFile.find({ path: dirId })
-    .select("_id key versionId thumbnailKey thumbId size")
+    .select("_id key versionId thumbnailKey thumbId size isDeleted")
     .session(session)
     .lean();
   const fileIds = files.map((f) => f._id);
@@ -87,21 +91,33 @@ export const recursiveDelete = async (
   }
 
   // sum all file sizes under this dir
-  const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+  const allSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+  const liveSize = files.reduce(
+    (sum, f) => sum + (f.isDeleted ? 0 : f.size || 0),
+    0,
+  );
 
-  // decrement path of dirId itself
-  if (totalSize > 0) {
-    const dir = await Directory.findById(dirId)
-      .select("path")
-      .session(session)
-      .lean();
+  if (allSize > 0) {
+    const rootId = dirPath.length > 0 ? dirPath[0] : null;
 
-    if (dir) {
-      const path = [...dir.path, dirId];
+    if (rootId) {
+      // Root still counts every byte (live + trashed) of the subtree — it is
+      // always released. Clamp so a stray stored value can't go negative.
+      await Directory.updateOne(
+        { _id: rootId },
+        [{ $set: { size: { $max: [0, { $subtract: ["$size", allSize] }] } } }],
+        { session, updatePipeline: true },
+      );
+    }
+
+    // A live directory is still counted by its non-root ancestors; a trashed
+    // one was already de-counted at moveToBin( path.slice(1) ).
+    const ancestorDirsToDebit = wasTrashed ? [] : dirPath.slice(1);
+    if (liveSize > 0 && ancestorDirsToDebit.length > 0) {
       await Directory.updateMany(
-        { _id: { $in: path } },
-        { $inc: { size: -totalSize } },
-        { session },
+        { _id: { $in: ancestorDirsToDebit } },
+        [{ $set: { size: { $max: [0, { $subtract: ["$size", liveSize] }] } } }],
+        { session, updatePipeline: true },
       );
     }
   }

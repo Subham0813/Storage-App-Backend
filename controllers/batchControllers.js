@@ -8,6 +8,7 @@ import { Directory } from "../models/directory.model.js";
 import { Permission } from "../models/permission.model.js";
 import { s3Client, BUCKET_NAME } from "../services/s3Client.js";
 import { redisClient } from "../configs/redis.js";
+import { invalidateUser } from "../utils/responseCache.js";
 import { User } from "../models/user.model.js";
 import { getErrorObject, getUserLimits } from "../utils/helper.js";
 import { serveZipS3, sanitizeName } from "../utils/serve.js";
@@ -183,6 +184,7 @@ export const bulkDownloadHandler = async (req, res, next) => {
       redisClient
         .del(`storageApp:user:${userId}:userdata`)
         .catch(console.error);
+      await invalidateUser(userId);
     }
 
     console.info(
