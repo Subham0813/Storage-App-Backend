@@ -13,10 +13,10 @@ export const EMAIL_REGEX = /^[\w.%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$/;
 export const SUPER_ROLES = ["admin", "super_admin"];
 
 export const IS_SAAS_MODE =
-  String(process.env.APP_MODE || "")
+  String(process.env.APP_MODE || "saas")
     .trim()
     .toLowerCase() === "saas";
-export const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || "resend";
+export const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || "";
 
 export const t = {
   _ms: 1000,

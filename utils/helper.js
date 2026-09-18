@@ -155,9 +155,11 @@ export const getFileDoc = (file) => {
     safeFile.path = [];
   }
 
-  safeFile.thumbnailUrl = thumbnailKey
-    ? `${process.env.PUBLIC_BUCKET_CDN}/${file.thumbnailKey}`
-    : null;
+  if (fileDoc.type !== "directory") {
+    safeFile.thumbnailUrl = thumbnailKey
+      ? `${process.env.PUBLIC_BUCKET_CDN}/${file.thumbnailKey}`
+      : null;
+  }
 
   safeFile.shareTokenExpiresAt = shareTokenExpiresAt || null;
 

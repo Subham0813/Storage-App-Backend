@@ -136,6 +136,10 @@ await db.command({
           bsonType: "string",
           description: "S3 object key of the user avatar.",
         },
+        avatarVersionId: {
+          bsonType: "string",
+          description: "S3 object versionId of the user avatar.",
+        },
         maxQuota: {
           bsonType: ["int", "long", "double", "null"],
           minimum: 0,
