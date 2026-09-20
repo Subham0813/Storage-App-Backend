@@ -53,7 +53,7 @@ export const previewFileHandler = async (req, res, next) => {
     let file =
       req.Item ||
       (await UserFile.findOne({ _id: req.params.id, isDeleted: false })
-        .select("name key size mime webviewLink userId")
+        .select("name key size mime webviewLink userId publicRole")
         .lean());
 
     if (!file || (!file.key && !file.webviewLink))
@@ -70,6 +70,10 @@ export const previewFileHandler = async (req, res, next) => {
       Key: file.key,
       ResponseContentDisposition: `inline; filename="${encodeURIComponent(file.name)}"`,
       ResponseContentType: file.mime,
+     
+      ...(file.publicRole === "view"
+        ? { ResponseCacheControl: "public, max-age=21600, s-maxage=21600" }
+        : { ResponseCacheControl: "private, no-store" }),
     });
 
     const secureUrl = await generateSecureDownloadUrl(

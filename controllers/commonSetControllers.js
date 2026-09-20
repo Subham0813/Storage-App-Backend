@@ -27,6 +27,7 @@ import { notifyMany } from "../services/notificationService.js";
 import z from "zod";
 import { redisClient } from "../configs/redis.js";
 import { invalidateUser } from "../utils/responseCache.js";
+import { getActivePublicBytes } from "../utils/publicShare.js";
 import { PLAN_DETAILS, t } from "../misc/constants.js";
 
 /**
@@ -542,7 +543,7 @@ export const shareAccess = (model) => {
             userId: req.user._id,
             isDeleted: false,
           })
-            .select("_id name userId publicRole")
+            .select("_id name userId publicRole size")
             .populate("userId")
             .session(session)
             .lean());
@@ -551,14 +552,40 @@ export const shareAccess = (model) => {
         if (item.userId._id.toString() !== req.user._id.toString()) {
           throw getErrorObject("Only owner can share this item.", 403);
         }
-        if (
-          publicRole &&
-          !req.user.subscription?.limits?.canCreatePublicLinks
-        ) {
-          throw getErrorObject(
-            "Your current plan does not support public link sharing. Please upgrade.",
-            403,
-          );
+        if (publicRole === "view") {
+          const limits = getUserLimits(req.user);
+          if (!limits.canCreatePublicLinks) {
+            throw getErrorObject(
+              "Your current plan does not support public link sharing. Please upgrade.",
+              403,
+            );
+          }
+          
+          if (item.publicRole !== "view") {
+            const itemSize = Number(item.size) || 0;
+            if (
+              Number.isFinite(limits.maxPublicShareFileBytes) &&
+              itemSize > limits.maxPublicShareFileBytes
+            ) {
+              throw getErrorObject(
+                `This file exceeds the ${(
+                  limits.maxPublicShareFileBytes / 1e6
+                ).toFixed(0)} MB per-file public link limit. Please upgrade to share larger files publicly.`,
+                403,
+              );
+            }
+            if (Number.isFinite(limits.maxPublicShareBytes)) {
+              const activeBytes = await getActivePublicBytes(req.user._id);
+              if (activeBytes + itemSize > limits.maxPublicShareBytes) {
+                throw getErrorObject(
+                  `You're over the FREE public share cap of ${(
+                    limits.maxPublicShareBytes / 1e9
+                  ).toFixed(0)} GB total. Turn off some public links or upgrade.`,
+                  403,
+                );
+              }
+            }
+          }
         }
 
         const emails =

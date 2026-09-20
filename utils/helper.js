@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { EMAIL_PROVIDER, INSTANCE_CONFIG, PLAN_DETAILS, requiredEnvVars, requiredSaaSVars, smtpEnvVars, t } from "../misc/constants.js";
+import { EMAIL_PROVIDER, INSTANCE_CONFIG, IS_SAAS_MODE, PLAN_DETAILS, requiredEnvVars, requiredSaaSVars, smtpEnvVars, t } from "../misc/constants.js";
 import { Permission } from "../models/permission.model.js";
 import { redisClient } from "../configs/redis.js";
 import { safeDate } from "./formatDate.js";
@@ -102,6 +102,12 @@ export const getUserPayload = async (user) => {
 
   const { planId, billingCycle, priceInRupees, ...limits } =
     PLAN_DETAILS[user.plan || "FREE"];
+
+  if (!IS_SAAS_MODE) {
+    limits.canCreatePublicLinks = true;
+    limits.maxPublicShareBytes = null;
+    limits.maxPublicShareFileBytes = null;
+  }
   safeUser.limits = limits;
 
   try {
@@ -222,6 +228,8 @@ export const getUserLimits = (user) => {
       maxUploadConcurrency: planDetail.maxUploadConcurrency || 4,
       trashRetentionDays: planDetail.trashRetentionDays || 5,
       canCreatePublicLinks: planDetail.canCreatePublicLinks ?? false,
+      maxPublicShareBytes: planDetail.maxPublicShareBytes ?? null,
+      maxPublicShareFileBytes: planDetail.maxPublicShareFileBytes ?? null,
       maxDevices: planDetail.maxDevices || 1,
     };
   }
@@ -235,6 +243,8 @@ export const getUserLimits = (user) => {
     maxUploadConcurrency: INSTANCE_CONFIG.maxUploadConcurrency || 4,
     trashRetentionDays: PLAN_DETAILS.FREE.trashRetentionDays,
     canCreatePublicLinks: true,
+    maxPublicShareBytes: null,
+    maxPublicShareFileBytes: null,
     maxDevices: Infinity,
   };
 };

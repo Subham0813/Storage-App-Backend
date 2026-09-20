@@ -13,6 +13,12 @@ import {
 } from "../services/emailService.js";
 import { createNotification } from "../services/notificationService.js";
 import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
+import {
+  getActivePublicBytes,
+  revokePublicLinks,
+  revokePublicLinksOverCap,
+  startPublicShareGraceIfNeeded,
+} from "../utils/publicShare.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import connectMongoose from "../configs/connect.js";
 
@@ -47,6 +53,18 @@ function parseRedisUrl() {
 }
 
 const redisConnection = parseRedisUrl();
+
+const formatGb = (bytes) => `${Math.round((bytes / 1e9) * 100) / 100} GB`;
+
+const buildPlanChangedMessage = (planKey, graceDays) => {
+  const p = PLAN_DETAILS[planKey];
+  const publicNote = p.canCreatePublicLinks
+    ? p.maxPublicShareBytes
+      ? ` Public sharing is capped at ${formatGb(p.maxPublicShareBytes)} total.`
+      : ""
+    : "";
+  return `You're now on the ${planKey} plan, and your storage is ${formatGb(p.quotaBytes)}.${publicNote} Don't worry — nothing is deleted right away: you have ${graceDays} days to download or clean up, and anything still over the limit will be adjusted automatically after that. Upgrade anytime to enjoy more space and perks again.`;
+};
 
 // Recalculates permanentDeleteAt for all trashed files/dirs of a user
 // based on their deletedAt timestamp and the new plan's retention days.
@@ -119,14 +137,21 @@ export const startBullMQWorker = () => {
 
           for (const sub of pendingDowngrades) {
             const newPlan = PLAN_DETAILS[sub.planKey];
+            const { plan: currentPlan } = await User.findById(sub.user)
+              .select("plan")
+              .lean();
+            const graceDays =
+              (currentPlan && PLAN_DETAILS[currentPlan]?.gracePeriod) ||
+              newPlan.gracePeriod;
 
             const userDoc = await User.findByIdAndUpdate(sub.user, {
               plan: sub.planKey,
               maxQuota: newPlan.quotaBytes,
               maxBandwidthQuota: newPlan.monthlyBandwidthLimit,
               gracePeriodEndsAt: new Date(
-                now.getTime() + newPlan.gracePeriod * 24 * 60 * 60 * 1000,
+                now.getTime() + graceDays * 24 * 60 * 60 * 1000,
               ),
+              publicShareGraceEndsAt: null,
             });
 
             sub.status = "active";
@@ -151,7 +176,7 @@ export const startBullMQWorker = () => {
               userId: sub.user,
               type: "system",
               title: "Plan downgraded",
-              message: `Your plan has been changed to ${sub.planKey}.`,
+              message: buildPlanChangedMessage(sub.planKey, graceDays),
               link: "/billing",
             });
           }
@@ -170,6 +195,8 @@ export const startBullMQWorker = () => {
 
           for (const sub of expiredCancellations) {
             const freePlan = PLAN_DETAILS["FREE"];
+            const graceDays =
+              PLAN_DETAILS[sub.planKey]?.gracePeriod ?? freePlan.gracePeriod;
             const userDoc = await User.findByIdAndUpdate(sub.user, {
               plan: "FREE",
               maxQuota: freePlan.quotaBytes,
@@ -177,7 +204,7 @@ export const startBullMQWorker = () => {
               subscription: null,
               subscriptionExpiresAt: null,
               gracePeriodEndsAt: new Date(
-                now.getTime() + freePlan.gracePeriod * 24 * 60 * 60 * 1000,
+                now.getTime() + graceDays * 24 * 60 * 60 * 1000,
               ),
             });
 
@@ -193,12 +220,23 @@ export const startBullMQWorker = () => {
             await redisClient.del(`storageApp:user:${sub.user}:userdata`);
             await invalidateUser(sub.user);
 
+            const gracePaid = await startPublicShareGraceIfNeeded(sub.user);
+            if (gracePaid) {
+              await createNotification({
+                userId: sub.user,
+                type: "system",
+                title: "Public links over FREE limit",
+                message:
+                  "You're over the FREE plan's 2 GB public link limit. Turn off some links within 7 days, or your oldest links will be turned off automatically.",
+                link: "/myfiles",
+              });
+            }
+
             await createNotification({
               userId: sub.user,
               type: "system",
-              title: "Subscription cancelled",
-              message:
-                "Your subscription has ended. You are now on the FREE plan.",
+              title: "Subscription ended — you're now on FREE",
+              message: buildPlanChangedMessage("FREE", graceDays),
               link: "/billing",
             });
           }
@@ -548,8 +586,6 @@ export const startBullMQWorker = () => {
 
         case "halted-subscription-reaper":
           // console.log("Running Halted Subscription Reaper...");
-          // Fetch all halted subs; filter per-plan grace in JS since each
-          // tier has a different gracePeriod (FREE=7d, PRO=14d, BUSINESS=30d).
           const haltedSubs = await Subscription.find({
             status: "halted",
           }).lean();
@@ -564,19 +600,40 @@ export const startBullMQWorker = () => {
 
           for (const sub of subsToReap) {
             const freePlan = PLAN_DETAILS["FREE"];
+            const graceDays = sub.limits?.gracePeriod || freePlan.gracePeriod;
             await User.findByIdAndUpdate(sub.user, {
               plan: "FREE",
               maxQuota: freePlan.quotaBytes,
               maxBandwidthQuota: freePlan.monthlyBandwidthLimit,
               subscription: null,
               subscriptionExpiresAt: null,
-              gracePeriodEndsAt: new Date(nowMs + freePlan.gracePeriod * dayMs),
+              gracePeriodEndsAt: new Date(nowMs + graceDays * dayMs),
             });
             await Subscription.findByIdAndUpdate(sub._id, {
               status: "completed",
             });
             await redisClient.del(`storageApp:user:${sub.user}:userdata`);
             await invalidateUser(sub.user);
+
+            await createNotification({
+              userId: sub.user,
+              type: "system",
+              title: "Subscription halted — you're now on FREE",
+              message: buildPlanChangedMessage("FREE", graceDays),
+              link: "/billing",
+            });
+
+            const graceHalted = await startPublicShareGraceIfNeeded(sub.user);
+            if (graceHalted) {
+              await createNotification({
+                userId: sub.user,
+                type: "system",
+                title: "Public links over FREE limit",
+                message:
+                  "You're over the FREE plan's 2 GB public link limit. Turn off some links within 7 days, or your oldest links will be turned off automatically.",
+                link: "/myfiles",
+              });
+            }
           }
           console.log(`Reaped ${subsToReap.length} halted subscriptions.`);
           break;
@@ -674,6 +731,50 @@ export const startBullMQWorker = () => {
           );
 
           break;
+
+        case "public-share-reaper": {
+          const capBytes = PLAN_DETAILS["FREE"].maxPublicShareBytes;
+          const dueUsers = await User.find({
+            publicShareGraceEndsAt: { $lte: now, $ne: null },
+          })
+            .select("_id")
+            .lean();
+
+          let reaped = 0;
+          for (const user of dueUsers) {
+            const activeBytes = await getActivePublicBytes(user._id);
+            if (activeBytes <= capBytes) {
+              await User.updateOne(
+                { _id: user._id },
+                { $unset: { publicShareGraceEndsAt: 1 } },
+              );
+              continue;
+            }
+
+            const revoked = await revokePublicLinksOverCap(user._id, capBytes);
+            if (revoked.length > 0) {
+              await User.updateOne(
+                { _id: user._id },
+                { $unset: { publicShareGraceEndsAt: 1 } },
+              );
+              await redisClient.del(`storageApp:user:${user._id}:userdata`);
+              await invalidateUser(user._id);
+              await createNotification({
+                userId: user._id,
+                type: "system",
+                title: "Public links removed",
+                message:
+                  "Your public links were over the FREE plan's 2 GB total limit, so the oldest ones were turned off automatically.",
+                link: "/myfiles",
+              });
+              reaped += 1;
+            }
+          }
+          console.log(
+            `Public-share reaper: processed ${dueUsers.length} grace users, revoked overflow for ${reaped}.`,
+          );
+          break;
+        }
 
         case "active-users-sweeper": {
           // console.log("Running Active Users Sweeper...");
@@ -845,6 +946,11 @@ export const startBullMQJobs = async () => {
       "halted-subscription-reaper",
       {},
       { ...JOB_OPTS, repeat: { pattern: "0 4 * * *" } }, // daily at 4am
+    );
+    await backgroundQueue.add(
+      "public-share-reaper",
+      {},
+      { ...JOB_OPTS, repeat: { pattern: "30 0 * * *" } }, // daily at 00:30
     );
     // Every 15 min — Abandoned cart (revenue-sensitive, frequent)
     await backgroundQueue.add(

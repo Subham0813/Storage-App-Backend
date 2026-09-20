@@ -207,6 +207,7 @@ export const razorpayWebhook = async (req, res, next) => {
                   maxBandwidthQuota: updatedSub.limits.monthlyBandwidthLimit,
                   subscriptionExpiresAt: Date.now() + durationMs,
                   subscription: updatedSub._id,
+                  publicShareGraceEndsAt: null,
                   ...(planChanged && {
                     usedBandwidthQuota: 0,
                     bandwidthResetAt: getBandwidthResetAt(),

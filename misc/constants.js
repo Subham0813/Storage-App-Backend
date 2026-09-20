@@ -39,12 +39,14 @@ export const PLAN_DETAILS = {
     billingCycle: null,
     priceInRupees: 0,
     quotaBytes: 2 * 1e9, // 2GB
-    maxFileSize: 100 * 1e6, // 100MB
+    maxFileSize: 2 * 1e9, // 2GB
     chunkSize: 8e6,
     monthlyBandwidthLimit: 5 * 1e9, // 5GB
     maxUploadConcurrency: 2,
     maxDevices: 1,
-    canCreatePublicLinks: false,
+    canCreatePublicLinks: true,
+    maxPublicShareBytes: 2 * 1e9, // 2GB aggregate across all public links
+    maxPublicShareFileBytes: 500 * 1e6, // 500MB single file public share
     trashRetentionDays: 5,
     gracePeriod: 7,
   },
