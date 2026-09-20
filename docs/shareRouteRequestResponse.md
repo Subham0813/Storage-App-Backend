@@ -10,6 +10,10 @@
 
 These routes allow unauthenticated access to publicly shared files using a share token. The token is embedded in the URL path (not a query param).
 
+Public links are subject to the owner's **plan caps**: FREE users can share up to **500 MB per file** and **2 GB total** active public bytes. On a downgrade to FREE over the 2 GB total, links kept over the cap are revoked automatically after a 7-day grace window.
+
+The preview route responds with **`Cache-Control: public, max-age=21600, s-maxage=21600`** on the CDN URL so compatible browsers/edge cache the stream for 6 hours (private, no-store when the link is not public).
+
 If the token belongs to a **directory** (not a file), the server returns a `200` response prompting the user to log in for full access.
 
 ---

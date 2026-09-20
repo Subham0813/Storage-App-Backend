@@ -159,20 +159,22 @@ Verifies the OTP. On success for `login`/`register`: creates a session and sets 
       "rootId": "64f1a2b3c4d5e6f7a8b9c0d2",  // user's root directory ObjectId string
       "usedQuota": 0,                        // bytes — storage used
       "authProviders": "email",              // string — connected providers (e.g. "email&google")
-      "maxQuota": 5000000000,                // bytes — plan storage limit
-      "maxBandwidthQuota": 10000000000,      // bytes — plan bandwidth limit
+      "maxQuota": 2000000000,                // bytes — plan storage limit
+      "maxBandwidthQuota": 5000000000,       // bytes — plan bandwidth limit
       "usedBandwidthQuota": 0,               // bytes — bandwidth used
-      "plan": "FREE",                        // "FREE" | "PRO_MONTHLY" | "PRO_YEARLY" | "ULTRA_MONTHLY" | "ULTRA_YEARLY" | "PREMIUM_MONTHLY" | "PREMIUM_YEARLY" | "ELITE_MONTHLY" | "ELITE_YEARLY"
+      "plan": "FREE",                        // "FREE" | "PRO_MONTHLY" | "PRO_YEARLY" | "BUSINESS_MONTHLY" | "BUSINESS_YEARLY"
       "subscription": {},                    // {} for FREE users, or full subscription object
       "limits": {
-        "quotaBytes": 5000000000,
-        "maxFileSize": 100000000,
+        "quotaBytes": 2000000000,
+        "maxFileSize": 2000000000,
         "chunkSize": 8000000,
-        "monthlyBandwidthLimit": 10000000000,
+        "monthlyBandwidthLimit": 5000000000,
         "maxUploadConcurrency": 2,
         "maxDevices": 1,
-        "canCreatePublicLinks": false,
-        "trashRetentionDays": 7,
+        "canCreatePublicLinks": true,
+        "maxPublicShareBytes": 2000000000,
+        "maxPublicShareFileBytes": 500000000,
+        "trashRetentionDays": 5,
         "gracePeriod": 7
       },
       "integrations": "",                    // string — connected integration keys (e.g. "googleDrive")

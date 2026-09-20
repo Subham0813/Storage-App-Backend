@@ -14,16 +14,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Thumbnail keys unique per upload** — `thumbnails/{userId}/{Date.now()}-{name}.webp` (was name-based) so re-uploads no longer stack versions and version-deletes remove them for real. Import thumbnails already used unique keys.
 - **Multipart chunk sizes** — `backend/misc/constants.js`: FREE `5e6 → 8e6`; PRO & BUSINESS `8e6/10e6 → 16e6` bytes. Fewer S3 parts and write operations; applies via `partSize = min(size, limits.chunkSize)` with no code ripple. Existing subscriptions keep their snapshot `chunkSize` until renewal / `migratePlans.js`.
 - **Upload resilience (frontend)** — `frontend/src/utils/uploadManager.js`: per-part XHR timeout (150s), transient-failure retry (3 attempts, 2s→4s→8s backoff, never on 4xx), clean abort handling; upload modal now shows `uploaded/total` + ETA. Frontend changes tracked in `Storage-App-Frontend` changelog.
+- **FREE plan limits** — `maxFileSize` 100 MB → 2 GB (`2e9`), `maxUploadConcurrency` 1 → 2; `maxDevices` 1, trash 5 days, grace 7 days unchanged.
+- **BUSINESS upload concurrency** — `4 → 8` in `PLAN_DETAILS`.
+- **Grace semantics on downgrade** — `downgrade-executor` / `cancel-executor` / `halted-subscription-reaper` compute the grace window from the plan being left (`PLAN_DETAILS[sub.planKey].gracePeriod` / `sub.limits.gracePeriod`), not the smaller target plan.
 
 ### Fixed
 
 - **Uncaught `TypeError` on every multipart progress tick** — removed the dead `onProgress` handler in `uploadPartXhr` that invoked an `undefined` callback. Per-part progress (percent bump per completed part) is unchanged.
+- **Legacy FREE limits drift** — FREE `maxFileSize` now matches the actual product value (2 GB) instead of the outdated 100 MB advertised in docs.
 
 ### Added
 
 - **`session-reaper` BullMQ job (every 30 min)** — reclaims expired upload/import sessions (`storageApp:user:*:upload:*` / `:*:import:*`). Completed-but-never-finalized objects are deleted strictly by their captured `VersionId` (every object has one — all uploads are multipart). Lingering `completed` sessions are just dropped; unfinished multipart parts are handled by the lifecycle's `daysFromStartingToCancelUnfinishedLargeFiles`.
 - **Session lifecycle is BullMQ-owned** — orchestrating per-session Redis TTLs removed; `record.expire` is the canonical 1-day deadline and the key keeps a `t._day + 120` memory backstop only. `completeUpload` persists `s3ObjectCreated`/`thumbId` and the import flow persists `versionId`, so the reaper and `completeGoogleImport` can always version-delete.
 - **`completeUpload` crash-window cleanup** — a finalized object that errors before the Redis session is deleted is now version-deleted in the catch (multipart abort only when not yet finalized).
+- **FREE-tier public sharing with caps** — `PLAN_DETAILS.FREE` now has `canCreatePublicLinks: true`, `maxPublicShareFileBytes: 500e6` (500 MB per file) and `maxPublicShareBytes: 2e9` (2 GB total active public bytes). `shareAccess` enforces both at share time (`403` on exceed); `getUserLimits` exposes the fields to clients.
+- **`public-share-reaper` BullMQ job (daily 00:30)** — ends `publicShareGraceEndsAt` windows for users over the FREE 2 GB cap: self-heals (clears grace) if they dropped under it, otherwise revokes the oldest public links (`utils/publicShare.js` `getActivePublicBytes` / `revokePublicLinksOverCap`) and notifies. Runs after the midnight resets.
+- **Downgrade/cancel/halt notifications** — landing on FREE (or a paid→paid downgrade) now generates an in-app notification summarizing the plan change and grace window; an over-cap public-link notice is sent when the FREE 2 GB cap is exceeded on downgrade. Grace on downgrade uses the **previous plan's** grace period (PRO→FREE = 14d, BUSINESS→FREE = 30d).
+- **Public preview cache headers** — `FileControllers` preview now sets `Cache-Control: public, max-age=21600, s-maxage=21600` when the item is publicly shared (`publicRole === "view"`), otherwise `private, no-store`.
+- **`publicShareGraceEndsAt` lifecycle** — set on downgrade to FREE when over the cap (FREE's own 7 days), cleared on `subscription.charged`/`resumed` and paid-plan downgrades.
 
 ### Infrastructure (B2/R2, not code)
 

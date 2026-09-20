@@ -57,7 +57,7 @@ A production-ready, enterprise-grade backend for an open source cloud storage pl
   - Stateful sessions in Redis with signed `sessionId` cookies (7-day TTL, sliding window), per-plan device limits.
 - **Role-Based Sharing**
   - Share files/directories with specific users by email (`view` / `edit`).
-  - Public share links with optional expiry (`expiresIn` days).
+  - Public share links with optional expiry (`expiresIn` days) — available on **FREE** too, capped at **500 MB per file** and **2 GB total** active public bytes. Downgrades to FREE get a 7-day window to drop under the cap before the oldest links are auto-revoked.
   - Token regeneration and per-user revocation. Guest access via `/api/public/shared/:token`.
 - **Google Drive Import** — server-side streaming from Drive directly to S3/B2 with real-time progress polling. Google Docs exported to Office formats; oversized exports saved as webview links.
 - **Live Subscription Billing (Razorpay)** — **SaaS only** (`APP_MODE=saas`)
@@ -65,7 +65,7 @@ A production-ready, enterprise-grade backend for an open source cloud storage pl
   - Blocked if usage exceeds target quota. UPI fallback for scheduled downgrades.
   - Webhook handles `subscription.activated|charged|resumed|cancelled|completed|halted` + `invoice.paid`.
 - **Feedback (SaaS only)** — tiered rate limit via Redis fixed 7-day window: `FREE 2/week → GitHub issues`, `PRO 5/week` and `BUSINESS 10/week` → `mailto:support@example.com`. Screenshot `≤1 MB` to public bucket, emails to user + admin.
-- **Background Jobs (BullMQ)** — 9 scheduled jobs (separate scheduler/worker): downgrade/cancel executors, trash-collector, quota-reaper, abandoned-cart, share-token invalidation, bandwidth reset, halted reaper, active-users sweeper.
+- **Background Jobs (BullMQ)** — 12 scheduled jobs (separate scheduler/worker): downgrade/cancel executors, trash-collector, quota-reaper, session-reaper, bandwidth reset, share-token invalidation, public-share-reaper, abandoned cart, halted reaper, active-users sweeper, abandoned-subscription reaper.
 - **Admin Controls** — paginated users, role changes, forced logout, soft-delete (ban), recovery, permanent deletion with S3 cleanup, feedback moderation and direct email.
 - **Notifications** — in-app `GET /api/notifications`, unread count, mark-all-read.
 - **Security** — Helmet, CSRF double-submit + origin check, 4-tier Redis rate limiting, `httpOnly` signed cookies, HMAC webhooks, bcrypt cost 12.
@@ -100,7 +100,7 @@ Client (https://example.com)
   ├─→ MongoDB (users, files, dirs, permissions, subscriptions)
   ├─→ S3 ×2  (STORAGE: private files, PUBLIC: thumbnails/avatars)
   ├─→ CDN Router (Cloudflare Worker HMAC → bandwidthWebhook | CloudFront signer | S3)
-  └─→ BullMQ (scheduler ↔ worker) → 9 cron jobs → S3/Mongo/Notifications
+  └─→ BullMQ (scheduler ↔ worker) → 12 cron jobs → S3/Mongo/Notifications
 Webhooks in: Razorpay HMAC (raw body) → subscription state → User.plan; Cloudflare HMAC → bandwidth increment
 ```
 
@@ -161,7 +161,7 @@ backend/
 │   ├── formatDate.js / emailTemplates.js
 │   └── ...
 ├── misc/constants.js             # PLAN_DETAILS, INSTANCE_CONFIG, t, requiredEnvVars
-├── jobs/queueJobs.js             # BullMQ Queue + Worker + Scheduler (9 jobs)
+├── jobs/queueJobs.js             # BullMQ Queue + Worker + Scheduler (12 jobs)
 ├── docs/                         # Per-route request/response Markdown (10 files)
 ├── .env.example / package.json / CHANGELOG.md
 └── public/                       # gitignored generated assets
@@ -266,16 +266,18 @@ Copy `.env.example` to `.env`. `APP_MODE` gates SaaS vs selfhosted.
 
 Per `misc/constants.js:PLAN_DETAILS` (`INSTANCE_CONFIG` for selfhosted fallback):
 
-| Limit              | FREE   | PRO     | BUSINESS | Selfhosted (`APP_MODE=selfhosted`)      |
-| ------------------ | ------ | ------- | -------- | --------------------------------------- |
-| Storage quota      | 2 GB   | 100 GB  | 500 GB   | `user.maxQuota ?? Infinity` (admin-set) |
-| Max file size      | 100 MB | 2 GB    | 10 GB    | 50 GB (`INSTANCE_CONFIG`)               |
-| Monthly bandwidth  | 5 GB   | 200 GB  | 1 TB     | `Infinity`                              |
-| Upload concurrency | 1      | 4       | 4        | 4                                       |
-| Max devices        | 1      | 3       | 5        | `Infinity`                              |
-| Trash retention    | 5 days | 15 days | 30 days  | 5 days                                  |
-| Grace period       | 7 days | 14 days | 30 days  | 7 days                                  |
-| Public links       | ❌      | ✅       | ✅        | ✅ (forced true)                         |
+| Limit              | FREE       | PRO     | BUSINESS | Selfhosted (`APP_MODE=selfhosted`)      |
+| ------------------ | ---------- | ------- | -------- | --------------------------------------- |
+| Storage quota      | 2 GB       | 100 GB  | 500 GB   | `user.maxQuota ?? Infinity` (admin-set) |
+| Max file size      | 2 GB       | 2 GB    | 10 GB    | 50 GB (`INSTANCE_CONFIG`)               |
+| Monthly bandwidth  | 5 GB       | 200 GB  | 1 TB     | `Infinity`                              |
+| Upload concurrency | 2          | 4       | 8        | 4                                       |
+| Max devices        | 1          | 3       | 5        | `Infinity`                              |
+| Trash retention    | 5 days     | 15 days | 30 days  | 5 days                                  |
+| Grace period       | 7 days     | 14 days | 30 days  | 7 days                                  |
+| Public links       | ✅ 500 MB/file, 2 GB total | ✅ | ✅ | ✅ (forced true) |
+
+> **Grace on downgrade** — a downgrade/cancellation grants the **previous plan's** grace (e.g. PRO→FREE = 14 days, BUSINESS→FREE = 30 days) before the new plan's quotas are enforced. Public links dropped onto FREE get FREE's own 7-day window to get under the 2 GB aggregate cap; after that the oldest public links are revoked automatically by `public-share-reaper`.
 
 Admin `PATCH /api/admin/user/:id/quota` capped at 500 GB / 1 TB only in SaaS (`adminControllers.js:364`).
 
@@ -296,7 +298,7 @@ npm run dev              # hot reload via --watch
 npm start                # production
 
 # 4. Background jobs (production — run scheduler once + N workers)
-npm run worker:scheduler # registers 9 repeatables
+npm run worker:scheduler # registers 12 repeatables
 npm run worker           # consumes — scale horizontally
 
 # 5. Health
@@ -378,7 +380,7 @@ S3 never proxies through Node — pre-signed PUTs:
 
 ## Subscription & Billing
 
-SaaS only (`APP_MODE=saas`, `requireSaasMode` → 404 selfhosted). Plans `FREE`, `PRO_MONTHLY/YEARLY`, `BUSINESS_MONTHLY/YEARLY` (yearly discount computed). Each plan snapshot stores `quotaBytes, maxFileSize, chunkSize, monthlyBandwidth, maxUploadConcurrency, maxDevices, trashRetentionDays, gracePeriod, canCreatePublicLinks`.
+SaaS only (`APP_MODE=saas`, `requireSaasMode` → 404 selfhosted). Plans `FREE`, `PRO_MONTHLY/YEARLY`, `BUSINESS_MONTHLY/YEARLY` (yearly discount computed). Each plan snapshot stores `quotaBytes, maxFileSize, chunkSize, monthlyBandwidth, maxUploadConcurrency, maxDevices, trashRetentionDays, gracePeriod, canCreatePublicLinks, maxPublicShareBytes, maxPublicShareFileBytes`.
 
 * **Create:** `POST /api/subscriptions/create {plan}` → checks `active` status, dedup `created` <15m, Redis lock `lock:createSub:{id}` 30s → `razorpay.subscriptions.create total_count 120, notes {userId,plan}` → Subscription `created`.
 * **Verify:** `POST /api/subscriptions/verify {razorpay_payment_id, subscription_id, signature}` → `validatePaymentVerification` + `fetch`, cancels `oldSubId` if `isUpgrade`, transaction `status active, currentPeriodStart/End`, `retireOldSubscriptions` sets others `upgraded`, updates `User plan/maxQuota/maxBandwidthQuota/subscription`.
@@ -409,15 +411,18 @@ BullMQ `Queue("StorageApp-Cron-Queue")` uses the Redis connection resolved by `p
 
 | Job                          | Schedule                 | What It Does                                                                                            |
 | ---------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `downgrade-executor`         | `0 0 * * *` daily 00:00  | Applies `downgrade_requested` where `currentPeriodEnd ≤ now` → User plan + limits + grace, sub `active` |
-| `cancel-executor`            | `0 0 * * *` daily 00:00  | `cancelation_requested` where `endedAt ≤ now` → FREE, sub `cancelled`                                   |
+| `downgrade-executor`         | `0 0 * * *` daily 00:00  | Applies `downgrade_requested` where `currentPeriodEnd ≤ now` → User plan + limits + previous-plan grace, sub `active`, notify |
+| `cancel-executor`            | `0 0 * * *` daily 00:00  | `cancelation_requested` where `endedAt ≤ now` → FREE + previous-plan grace, sub `cancelled`, notify     |
+| `share-token-invalidator`    | `0 0 * * *` daily 00:00  | `shareTokenExpiresAt < now` → `$unset` shareToken/publicRole                                            |
+| `bandwidth-reset`            | `0 0 * * *` daily 00:00  | `bandwidthResetAt ≤ now` (or null) → `used 0, reset +30d`, bust cache, notify                           |
+| `public-share-reaper`        | `30 0 * * *` daily 00:30 | Ends `publicShareGraceEndsAt` windows: self-heals if under the 2 GB cap, else revokes oldest public links until under |
 | `trash-collector`            | `0 1 * * *` daily 01:00  | `isDeleted && permanentDeleteAt ≤ now` → S3 dedup (count key), `Directory/UserFile` bulkWrite, notify   |
 | `quota-reaper`               | `0 2 * * *` daily 02:00  | `gracePeriodEndsAt ≤ now` + over quota → delete oldest files until quota met                            |
-| `bandwidth-reset`            | `0 0 * * *` daily 00:00  | `bandwidthResetAt ≤ now` (or null) → `used 0, reset +30d`, bust cache, notify                           |
-| `share-token-invalidator`    | `0 0 * * *` daily 00:00  | `shareTokenExpiresAt < now` → `$unset` shareToken/publicRole                                            |
-| `halted-subscription-reaper` | `0 4 * * *` daily 04:00  | `status halted` older than `gracePeriod` (FREE 7d etc) → FREE                                           |
-| `abandoned-cart-tracker`     | `*/15 * * * *` every 15m | `status created` + 30m ago → email `CLIENT_URL/pricing?resume=plan`                                     |
 | `active-users-sweeper`       | `0 3 * * *` daily 03:00  | `ZREMRANGEBYSCORE storageApp:active_users 0 (now-30d)`                                                  |
+| `halted-subscription-reaper` | `0 4 * * *` daily 04:00  | `status halted` older than `sub.limits.gracePeriod` → FREE + previous-plan grace, notify                |
+| `session-reaper`             | `*/30 * * * *` every 30m | Reclaims expired upload/import Redis sessions; orphaned S3 objects version-deleted                      |
+| `abandoned-cart-tracker`     | `*/15 * * * *` every 15m | `status created` + 30m ago → email `CLIENT_URL/pricing?resume=plan`                                     |
+| `abandoned-subscription-reaper` | `0 4 * * 0` weekly   | Expires `created`/`abandoned` subs older than 7 days: cancels on Razorpay + deletes the Mongo row       |
 
 `JOB_OPTS removeOnComplete 7d/100`, `recalculateTrashExpiry` helper.
 

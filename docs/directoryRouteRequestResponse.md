@@ -342,6 +342,7 @@ Shares the directory with specific users by email and/or sets a public share lin
 | 400    | Validation failed               | validation message                                                                         |
 | 400    | No valid share target           | `"No valid share target provided. Provide at least one email or set a public share role."` |
 | 403    | Plan doesn't allow public links | `"Your current plan does not support public link sharing. Please upgrade."`                |
+| 403    | Item over aggregate public cap  | `"You're over the FREE public share cap of 2 GB total. Turn off some public links or upgrade."` |
 | 404    | Directory not found             | `"Item does not exist."`                                                                   |
 
 ---

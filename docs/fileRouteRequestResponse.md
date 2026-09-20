@@ -298,6 +298,8 @@ Shares the file with specific users by email and/or sets a public share link. **
 | 400    | Validation failed               | e.g. `"Invalid email."`                                                                    |
 | 400    | No valid share target           | `"No valid share target provided. Provide at least one email or set a public share role."` |
 | 403    | Plan doesn't allow public links | `"Your current plan does not support public link sharing. Please upgrade."`                |
+| 403    | File over per-file public cap   | `"This file exceeds the 500 MB per-file public link limit. Please upgrade to share larger files publicly."` |
+| 403    | Over aggregate public cap       | `"You're over the FREE public share cap of 2 GB total. Turn off some public links or upgrade."` |
 | 404    | File not found or not owner     | `"Item does not exist."`                                                                   |
 
 ---

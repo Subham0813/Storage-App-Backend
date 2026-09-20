@@ -117,6 +117,8 @@ No body. Just the `sessionId` cookie.
         "maxUploadConcurrency": 4,
         "maxDevices": 3,
         "canCreatePublicLinks": true,
+        "maxPublicShareBytes": null,
+        "maxPublicShareFileBytes": null,
         "trashRetentionDays": 15,
         "gracePeriod": 14
       }

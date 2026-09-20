@@ -34,15 +34,17 @@ This is the `user` object returned by `/info`. Frontend should treat this as the
     "subscriptionExpiresAt": null
   },
   "limits": {
-    "quotaBytes": 50000000000,
+    "quotaBytes": 100000000000,
     "maxFileSize": 2000000000,
     "chunkSize": 16000000,
-    "monthlyBandwidthLimit": 100000000000,
+    "monthlyBandwidthLimit": 200000000000,
     "maxUploadConcurrency": 4,
     "maxDevices": 3,
     "canCreatePublicLinks": true,
+    "maxPublicShareBytes": null,
+    "maxPublicShareFileBytes": null,
     "trashRetentionDays": 15,
-    "gracePeriod": 15
+    "gracePeriod": 14
   },
   "integrations": "googleDrive",
   "isLogged": true,
