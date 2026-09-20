@@ -335,6 +335,7 @@ export const invoiceEmailTemplate = (
             .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
             .btn { display: inline-block; padding: 12px 24px; background-color: #667eea; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; margin-top: 20px; }
             .details { background: white; padding: 15px; border-radius: 5px; margin: 20px 0; border: 1px solid #eee; }
+            .footnote { margin-top: 20px; font-size: 12px; color: #888; }
           </style>
         </head>
         <body>
@@ -348,13 +349,15 @@ export const invoiceEmailTemplate = (
               <p>A huge thank you from all of us for choosing the <strong>${planName}</strong> plan! We're absolutely thrilled to have you with us, and your payment was successfully processed.</p>
               <p>Your new storage limits and premium features are already active on your account.</p>
               <div class="details">
+                <p><strong>Issued by:</strong> Subham Bachar (Proprietor, trading as OwnStorage)</p>
                 <p><strong>Amount Paid:</strong> ₹${amount}</p>
                 <p><strong>Plan:</strong> ${planName}</p>
               </div>
-              <p>If you need a copy of your receipt for your records, you can download your official PDF invoice using the link below:</p>
+              <p>If you need a copy of your receipt for your records, you can download your official PDF receipt using the link below:</p>
               <div style="text-align: center;">
-                <a href="${invoiceUrl}" class="btn" target="_blank">View My Invoice</a>
+                <a href="${invoiceUrl}" class="btn" target="_blank">View My Receipt</a>
               </div>
+              <p class="footnote">Payment processed by <strong>Subham Bachar</strong>, sole proprietor of OwnStorage. No GST is charged on this transaction. For refunds, cancellations, or receipt queries, reply to this email.</p>
               <p style="margin-top: 30px; font-size: 14px; color: #666;">If you ever need help getting the most out of your new features, please don't hesitate to reply to this email—we'd love to chat!</p>
               <p>Warmly,<br>The ${appName} Team</p>
             </div>
@@ -487,6 +490,7 @@ export const subscriptionActionTemplate = (
               <p>Warmly,<br>The ${appName} Team</p>
             </div>
             <div class="footer">
+              <p>Payments processed by Subham Bachar (trading as "OwnStorage").</p>
               <p>&copy; ${new Date().getFullYear()} ${appName}. All rights reserved.</p>
             </div>
           </div>
