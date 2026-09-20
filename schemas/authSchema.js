@@ -35,6 +35,9 @@ export const loginSchema = z.object({
 
 export const registerSchema = loginSchema.extend({
   name: nameSchema,
+  agreedToTerms: z.literal(true, {
+    message: "You must be at least 18 years old and agree to the Terms of Service",
+  }),
 });
 
 export const requestOtpSchema = z.object({

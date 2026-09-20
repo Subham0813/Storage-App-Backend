@@ -338,6 +338,8 @@ export const registerHandler = async (req, res, next) => {
               maxQuota: MAX_USER_QUOTA,
               maxBandwidthQuota: MAX_USER_BANDWIDTH,
               bandwidthResetAt: getBandwidthResetAt(),
+              isAgeConfirmed: true,
+              termsAgreedAt: new Date(),
             },
           ],
           { session },

@@ -196,6 +196,18 @@ await db.command({
           bsonType: ["date", "null"],
           description: "Timestamp when the grace period ends.",
         },
+        isAgeConfirmed: {
+          bsonType: "bool",
+          description: "Flag confirming user is 18 years or older.",
+        },
+        termsAgreedAt: {
+          bsonType: ["date", "null"],
+          description: "Timestamp of terms & privacy policy agreement.",
+        },
+        publicShareGraceEndsAt: {
+          bsonType: ["date", "null"],
+          description: "Timestamp when public share grace period ends.",
+        },
         createdAt: {
           bsonType: "date",
           description: "Timestamp of user creation.",

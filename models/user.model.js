@@ -112,6 +112,9 @@ const userSchema = new Schema(
     deletedAt: { type: Date },
     deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
     gracePeriodEndsAt: { type: Date, default: null },
+    isAgeConfirmed: { type: Boolean, default: false },
+    termsAgreedAt: { type: Date, default: null },
+    publicShareGraceEndsAt: { type: Date, default: null },
   },
   { strict: "throw", timestamps: true },
 );
