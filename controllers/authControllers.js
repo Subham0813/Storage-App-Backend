@@ -158,15 +158,14 @@ export const verifyOtpHandler = async (req, res, next) => {
     else if (!safeCompare(storedOtp.otp, otp) || storedOtp.email !== email)
       throw getErrorObject("Invalid email or OTP.");
 
-    await redisClient.del(otpKey);
-    res.clearCookie("authToken");
-
     const token = crypto.randomBytes(32).toString("hex");
     if (authData.purpose === "forgot-password") {
       const resetKey = `storageApp:user:${userId}:resetPass:${token}`;
       await redisClient.set(resetKey, email, { EX: fiveMins });
-
+      await redisClient.del(otpKey);
+      
       return res
+        .clearCookie("authToken")
         .cookie(
           "resetToken",
           { token, id: userId },
@@ -235,10 +234,12 @@ export const verifyOtpHandler = async (req, res, next) => {
       redisClient.expire(userKey, 2 * t._min),
       redisClient.expire(sessionKey, sevenDays),
       redisClient.expire(indexKey, sevenDays),
+      redisClient.del(otpKey),
     ]);
 
     // setCsrfCookie(res);
     return res
+      .clearCookie("authToken")
       .cookie(
         "sessionId",
         { token, id: user._id },
