@@ -74,6 +74,16 @@ export const renameItem = (model) => {
 };
 
 /**
+ * Owner id regardless of shape: checkAccess populates userId ({ _id, ... })
+ * on req.Item, while direct lookups leave it an ObjectId.
+ */
+const ownerIdOf = (item) => {
+  const u = item?.userId;
+  if (!u) return "";
+  return u._id ? u._id.toString() : u.toString();
+};
+
+/**
  * path: /api/files/starred/:id or /api/directories/starred/:id
  * what it do: Toggle the starred state of a file or directory.
  * requirements:
@@ -96,6 +106,23 @@ export const starredItem = (model) => {
       return next(getErrorObject("Invalid payload."));
 
     try {
+      // Authorized by checkAccess("owner") via req.Item; the fallback lookup
+      // keeps the controller correct when used standalone.
+      const existing =
+        req.Item ||
+        (await Model.findOne({
+          _id: req.params.id,
+          isDeleted: false,
+        })
+          .select("_id userId")
+          .lean());
+      if (!existing) return next(getErrorObject("Item not found.", 404));
+      if (ownerIdOf(existing) !== req.user._id.toString()) {
+        return next(
+          getErrorObject("Only the owner can star this item.", 403),
+        );
+      }
+
       const item = await Model.findOneAndUpdate(
         {
           _id: req.params.id,
@@ -536,11 +563,12 @@ export const shareAccess = (model) => {
 
     try {
       await session.withTransaction(async () => {
+        // Authorized by checkAccess("owner") via req.Item; the fallback lookup
+        // keeps the controller correct when used standalone.
         item =
           req.Item ||
           (await Model.findOne({
             _id: req.params.id,
-            userId: req.user._id,
             isDeleted: false,
           })
             .select("_id name userId publicRole size")
@@ -549,7 +577,7 @@ export const shareAccess = (model) => {
             .lean());
 
         if (!item) throw getErrorObject("Item does not exist.", 404);
-        if (item.userId._id.toString() !== req.user._id.toString()) {
+        if (ownerIdOf(item) !== req.user._id.toString()) {
           throw getErrorObject("Only owner can share this item.", 403);
         }
         if (publicRole === "view") {
@@ -746,18 +774,22 @@ export const revokeAccess = (model) => {
 
     try {
       await session.withTransaction(async () => {
+        // Authorized by checkAccess("owner") via req.Item; the fallback lookup
+        // keeps the controller correct when used standalone.
         const item =
           req.Item ||
           (await Model.findOne({
             _id: req.params.id,
-            userId: req.user._id,
             isDeleted: false,
           })
-            .select("_id")
+            .select("_id userId")
             .session(session)
             .lean());
 
         if (!item) throw getErrorObject("Item not found.", 404);
+        if (ownerIdOf(item) !== req.user._id.toString()) {
+          throw getErrorObject("Only the owner can revoke access.", 403);
+        }
 
         const emails =
           rawEmails?.filter((e) => e !== req.user.email).map((e) => e) || [];
@@ -866,14 +898,22 @@ export const newShareToken = (model) => {
 
     const session = await mongoose.startSession();
     try {
-      const item = await Model.findOne({
-        _id: req.params.id,
-        userId: req.user._id,
-        isDeleted: false,
-      })
-        .select("_id name parentId")
-        .lean();
+      // Authorized by checkAccess("owner") via req.Item; the fallback lookup
+      // keeps the controller correct when used standalone.
+      const item =
+        req.Item ||
+        (await Model.findOne({
+          _id: req.params.id,
+          isDeleted: false,
+        })
+          .select("_id name parentId userId")
+          .lean());
       if (!item) return next(getErrorObject("item not found.", 404));
+      if (ownerIdOf(item) !== req.user._id.toString()) {
+        return next(
+          getErrorObject("Only the owner can regenerate the share link.", 403),
+        );
+      }
 
       await session.withTransaction(async () => {
         const { modifiedCount } = await Model.updateOne(

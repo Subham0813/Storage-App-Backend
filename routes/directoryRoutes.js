@@ -57,13 +57,33 @@ router.get(
 
 // POST Routes
 router.post("/new", loadParentDir, createDirectoryHandler);
-router.post("/share/:id", restrictRoot, shareAccess("dir"));
+router.post(
+  "/share/:id",
+  restrictRoot,
+  checkAccess("dir", "owner"),
+  shareAccess("dir"),
+);
 
 // PATCH Routes
-router.patch("/new-token/:id", restrictRoot, newShareToken("dir"));
-router.patch("/revoke-access/:id", restrictRoot, revokeAccess("dir"));
+router.patch(
+  "/new-token/:id",
+  restrictRoot,
+  checkAccess("dir", "owner"),
+  newShareToken("dir"),
+);
+router.patch(
+  "/revoke-access/:id",
+  restrictRoot,
+  checkAccess("dir", "owner"),
+  revokeAccess("dir"),
+);
 
-router.patch("/starred/:id", restrictRoot, starredItem("dir"));
+router.patch(
+  "/starred/:id",
+  restrictRoot,
+  checkAccess("dir", "owner"),
+  starredItem("dir"),
+);
 router.patch(
   "/rename/:id",
   restrictRoot,

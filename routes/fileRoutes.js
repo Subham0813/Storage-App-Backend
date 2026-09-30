@@ -45,14 +45,30 @@ router.post(
   loadParentDir,
   copyFileHandler,
 );
-router.post("/share/:id", shareAccess("file"));
+router.post(
+  "/share/:id",
+  checkAccess("file", "owner"),
+  shareAccess("file"),
+);
 router.post("/bulk-download", bulkDownloadHandler);
 
 // PATCH Routes
-router.patch("/new-token/:id", newShareToken("file"));
-router.patch("/revoke-access/:id", revokeAccess("file"));
+router.patch(
+  "/new-token/:id",
+  checkAccess("file", "owner"),
+  newShareToken("file"),
+);
+router.patch(
+  "/revoke-access/:id",
+  checkAccess("file", "owner"),
+  revokeAccess("file"),
+);
 
-router.patch("/starred/:id", starredItem("file"));
+router.patch(
+  "/starred/:id",
+  checkAccess("file", "owner"),
+  starredItem("file"),
+);
 router.patch("/rename/:id", checkAccess("file", "owner"), renameItem("file"));
 router.patch(
   "/move/:id",
