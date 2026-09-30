@@ -196,6 +196,12 @@ export const abortS3Upload = async (key, uploadId) => {
     });
     return await s3Client.send(command);
   } catch (err) {
+    if (
+      err?.name === "NoSuchUpload" ||
+      err?.$metadata?.httpStatusCode === 404
+    ) {
+      return null;
+    }
     throw new Error("Error in aborting multipart upload: " + err.message);
   }
 };
