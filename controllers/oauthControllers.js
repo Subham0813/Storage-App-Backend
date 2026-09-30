@@ -621,7 +621,7 @@ export const googleDriveOAuthHandler = async (req, res, next) => {
       access_type: "offline", // for refresh token
       prompt: "consent", // ensures refresh token
 
-      scope: ["https://www.googleapis.com/auth/drive.readonly"],
+      scope: ["https://www.googleapis.com/auth/drive.file"],
       state,
       code_challenge: codeChallenge,
       code_challenge_method: "S256",
