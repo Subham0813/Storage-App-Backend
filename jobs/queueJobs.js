@@ -4,12 +4,13 @@ import { User } from "../models/user.model.js";
 import { Subscription } from "../models/subscription.model.js";
 import { UserFile } from "../models/user_file.model.js";
 import { Directory } from "../models/directory.model.js";
-import { PLAN_DETAILS } from "../misc/constants.js";
+import { PLAN_DETAILS, IS_SAAS_MODE } from "../misc/constants.js";
 import { redisClient } from "../configs/redis.js";
 import { invalidateUser } from "../utils/responseCache.js";
 import { deleteS3Objects } from "../services/s3Client.js";
 import {
   sendAbandonedCartEmail,
+  sendInvoiceEmail,
 } from "../services/emailService.js";
 import { createNotification } from "../services/notificationService.js";
 import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
@@ -19,7 +20,7 @@ import {
   revokePublicLinksOverCap,
   startPublicShareGraceIfNeeded,
 } from "../utils/publicShare.js";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import connectMongoose from "../configs/connect.js";
 
 let _rzpInstance = null;
@@ -653,8 +654,14 @@ export const startBullMQWorker = () => {
           const subIdsToUpdate = [];
 
           for (const sub of abandonedSubs) {
-            // Generate a link back to your pricing/checkout page
-            const checkoutUrl = `${process.env.CLIENT_URL}/pricing?resume=${sub.planKey}`;
+            // Generate a link back to your pricing/checkout page.
+            // Recovery emails are SaaS-only (sendAbandonedCartEmail is gated on
+            // IS_SAAS_MODE), but keep the base mode-aware so a self-hosted
+            // install can never emit an ownstorage.space link.
+            const checkoutBase = IS_SAAS_MODE
+              ? "https://ownstorage.space"
+              : process.env.CLIENT_URL;
+            const checkoutUrl = `${checkoutBase}/pricing?resume=${sub.planKey}`;
 
             sendAbandonedCartEmail(
               sub.user.name,
@@ -702,6 +709,152 @@ export const startBullMQWorker = () => {
           }
           console.log(
             `Reaped ${expiredSubs.length} abandoned subscriptions.`,
+          );
+          break;
+        }
+
+        case "subscription-reconciler": {
+          const candidates = await Subscription.find({
+            status: { $in: ["active", "created", "abandoned"] },
+          }).lean();
+
+          let synced = 0;
+          let credited = 0;
+          let invoiced = 0;
+          let emailed = 0;
+          let failed = 0;
+          const dayMs = 24 * 60 * 60 * 1000;
+
+          for (const sub of candidates) {
+            try {
+              const remote = await getRazorpay().subscriptions.fetch(
+                sub.razorpaySubscriptionId,
+              );
+              const rzpStatus = remote.status;
+              const paidCount = remote.paid_count ?? sub.paidCount;
+              const remoteEndAt = remote.ended_at
+                ? new Date(remote.ended_at * 1000)
+                : null;
+              const periodStart = remote.current_start
+                ? new Date(remote.current_start * 1000)
+                : undefined;
+              const periodEnd = remote.current_end
+                ? new Date(remote.current_end * 1000)
+                : undefined;
+              const cancelAtPeriodEnd = Boolean(remote.cancel_at_period_end);
+
+              const becameActive =
+                rzpStatus === "active" &&
+                paidCount > 0 &&
+                sub.status !== "active";
+
+              const update = {
+                ...(paidCount !== sub.paidCount ? { paidCount } : {}),
+                ...(periodStart &&
+                (!sub.currentPeriodStart ||
+                  periodStart.getTime() !==
+                    sub.currentPeriodStart.getTime())
+                  ? { currentPeriodStart: periodStart }
+                  : {}),
+                ...(periodEnd &&
+                (!sub.currentPeriodEnd ||
+                  periodEnd.getTime() !== sub.currentPeriodEnd.getTime())
+                  ? { currentPeriodEnd: periodEnd }
+                  : {}),
+                ...(rzpStatus !== sub.status ? { status: rzpStatus } : {}),
+                ...(remoteEndAt && !sub.endedAt ? { endedAt: remoteEndAt } : {}),
+                ...(cancelAtPeriodEnd !== Boolean(sub.cancelAtPeriodEnd)
+                  ? { cancelAtPeriodEnd }
+                  : {}),
+              };
+
+              const missedCharge =
+                typeof sub.paidCount === "number" &&
+                sub.status === "active" &&
+                paidCount > sub.paidCount;
+
+              if (becameActive || missedCharge) {
+                const planInfo = PLAN_DETAILS[sub.planKey];
+                if (planInfo) {
+                  const isYearly = sub.planKey.includes("YEARLY");
+                  const durationMs = isYearly ? 365 * dayMs : 30 * dayMs;
+                  await User.findByIdAndUpdate(sub.user, {
+                    plan: sub.planKey,
+                    maxQuota: planInfo.quotaBytes,
+                    maxBandwidthQuota: planInfo.monthlyBandwidthLimit,
+                    subscriptionExpiresAt: Date.now() + durationMs,
+                    subscription: sub._id,
+                    publicShareGraceEndsAt: null,
+                  });
+                  await redisClient.del(`storageApp:user:${sub.user}:userdata`);
+                  await invalidateUser(sub.user);
+                  update.status = "active";
+                  credited++;
+                }
+              }
+
+              if (Object.keys(update).length > 0) {
+                await Subscription.findByIdAndUpdate(sub._id, update);
+                synced++;
+              }
+
+              const invoiceRes = await getRazorpay()
+                .invoices.all({
+                  subscription_id: sub.razorpaySubscriptionId,
+                  status: "paid",
+                  count: 100,
+                })
+                .catch(() => ({ items: [] }));
+
+              const paidInvoices = invoiceRes.items || [];
+              const latestInvoice = paidInvoices.reduce(
+                (latest, inv) =>
+                  inv.created_at &&
+                  (!latest || inv.created_at > latest.created_at)
+                    ? inv
+                    : latest,
+                null,
+              );
+
+              if (latestInvoice) {
+                const invoiceUrl =
+                  latestInvoice.short_url || latestInvoice.hosted_url;
+                if (invoiceUrl && invoiceUrl !== sub.invoiceUrl) {
+                  await Subscription.findByIdAndUpdate(sub._id, {
+                    invoiceUrl,
+                  });
+                  invoiced++;
+                  const userDoc = await User.findById(sub.user)
+                    .select("name email")
+                    .lean();
+                  if (userDoc) {
+                    sendInvoiceEmail(
+                      userDoc.name,
+                      userDoc.email,
+                      sub.planKey,
+                      (latestInvoice.amount || 0) / 100,
+                      invoiceUrl,
+                    ).catch((err) =>
+                      console.error(
+                        `subscription-reconciler: invoice email failed for ${sub.razorpaySubscriptionId}:`,
+                        err,
+                      ),
+                    );
+                    emailed++;
+                  }
+                }
+              }
+            } catch (err) {
+              failed++;
+              console.error(
+                `subscription-reconciler: failed for ${sub.razorpaySubscriptionId}:`,
+                err,
+              );
+            }
+          }
+
+          console.log(
+            `subscription-reconciler: processed ${candidates.length} subs — ${synced} synced, ${credited} re-credited, ${invoiced} invoices backfilled, ${emailed} receipts emailed, ${failed} failed.`,
           );
           break;
         }
@@ -778,12 +931,12 @@ export const startBullMQWorker = () => {
 
         case "active-users-sweeper": {
           // console.log("Running Active Users Sweeper...");
-          const cutoff = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
-          await redisClient.zRemRangeByScore(
-            "storageApp:active_users",
-            0,
-            `(${cutoff}`,
-          );
+            const cutoff = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
+            await redisClient.zRemRangeByScore(
+              "storageApp:active_users",
+              "0",
+              `(${cutoff}`,
+            );
           break;
         }
 
@@ -799,7 +952,7 @@ export const startBullMQWorker = () => {
             let cursor = 0;
             do {
               const { cursor: nextCursor, keys } = await redisClient.scan(
-                cursor,
+                String(cursor),
                 { MATCH: pattern, COUNT: 100 },
               );
               cursor = Number(nextCursor);
@@ -851,8 +1004,8 @@ export const startBullMQWorker = () => {
         }
       }
     } catch (error) {
-      console.log("Error occured executing jobs!!", error.message);
-      return error;
+      console.error(`Error executing job "${job.name}":`, error);
+      throw error;
     }
   },
   { connection: redisConnection },
@@ -965,6 +1118,13 @@ export const startBullMQJobs = async () => {
       {},
       { ...JOB_OPTS, repeat: { pattern: "0 4 * * 0" } }, // weekly on Sunday at 4am
     );
+    // Every hour — Reconcile active/created subs against Razorpay so a lost
+    // webhook never leaves entitlements or invoice receipts permanently stale.
+    await backgroundQueue.add(
+      "subscription-reconciler",
+      {},
+      { ...JOB_OPTS, repeat: { pattern: "0 * * * *" } }, // hourly at :00
+    );
 
     // Only start consuming AFTER schedulers are (re)registered
     startBullMQWorker();
@@ -977,7 +1137,7 @@ export const startBullMQJobs = async () => {
 // Standalone entrypoint: `node jobs/queueJobs.js [scheduler|worker]`
 // Run the worker on its own process to avoid duplicate execution when app.js is scaled across multiple instances.
 const isMain =
-  process.argv[1] && fileURLToPath(import.meta.url) === pathToFileURL(process.argv[1]).href;
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
   const mode = process.argv[2] || process.env.QUEUE_MODE || "worker";
@@ -988,3 +1148,19 @@ if (isMain) {
     startBullMQWorker();
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

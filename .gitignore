@@ -52,6 +52,10 @@ public/
 # Ignore test output
 *.out
 
+# Ignore on-demand queue test script
+jobs/trigger-test-jobs.js
+jobs/verify-queue-jobs.js
+
 # Ignore backup files
 *.bak
 
