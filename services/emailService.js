@@ -27,7 +27,7 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || FROM_EMAIL;
  */
 export const sendOtpEmail = async (username, email, otp, purpose) => {
   try {
-    const template = otpEmailTemplate(username, otp, purpose);
+    const template = otpEmailTemplate(username, email, otp, purpose);
 
     const response = await sendMail({
       to: email,
@@ -318,17 +318,15 @@ export const sendAbandonedCartEmail = async (username, email, checkoutUrl) => {
 };
 
 /**
- * Send email for subscription changes (Requested or Executed)
+ * Send email for subscription changes (only fires once a change is executed)
  * @param {string} email - Recipient email address
- * @param {string} action - "cancel" | "downgrade"
- * @param {string} stage - "requested" | "executed"
+ * @param {string} action - "activation" | "upgrade" | "downgrade" | "cancel"
  * @param {string} effectiveDate - Formatted date string
  */
 export const sendSubscriptionActionEmail = async (
   username,
   email,
   action,
-  stage,
   effectiveDate,
 ) => {
   if (!IS_SAAS_MODE) return null;
@@ -337,7 +335,6 @@ export const sendSubscriptionActionEmail = async (
     const template = subscriptionActionTemplate(
       username,
       action,
-      stage,
       effectiveDate,
     );
 
@@ -354,7 +351,7 @@ export const sendSubscriptionActionEmail = async (
     return response;
   } catch (error) {
     console.error(
-      `Failed to send ${stage} ${action} email to ${email}:`,
+      `Failed to send ${action} email to ${email}:`,
       error.message,
     );
     return null;
@@ -445,11 +442,15 @@ export const sendAdminDirectEmail = async (user, subject, message) => {
   if (!IS_SAAS_MODE) return null;
 
   try {
-    const template = adminDirectEmailTemplate(user.name || "there", message);
+    const template = adminDirectEmailTemplate(
+      user.name || "there",
+      message,
+      subject,
+    );
 
     const response = await sendMail({
       to: user.email,
-      subject,
+      subject: template.subject,
       html: template.html,
     });
 

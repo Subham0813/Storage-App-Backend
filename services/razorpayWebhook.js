@@ -143,7 +143,6 @@ export const razorpayWebhook = async (req, res, next) => {
                   userDoc.name,
                   userDoc.email,
                   "downgrade",
-                  "executed",
                   formatDate(subPayload.current_end),
                 ).catch((err) => console.error("Downgrade email failed:", err));
               }
@@ -154,7 +153,6 @@ export const razorpayWebhook = async (req, res, next) => {
                   userDoc.name,
                   userDoc.email,
                   "upgrade",
-                  "executed",
                   formatDate(subPayload.current_end),
                 ).catch((err) => console.error("Upgrade email failed:", err));
               }
@@ -165,7 +163,6 @@ export const razorpayWebhook = async (req, res, next) => {
                   userDoc.name,
                   userDoc.email,
                   "activation",
-                  "executed",
                   formatDate(subPayload.current_end),
                 ).catch((err) =>
                   console.error("Activation email failed:", err),
@@ -235,7 +232,6 @@ export const razorpayWebhook = async (req, res, next) => {
                   userDoc.name,
                   userDoc.email,
                   isPlanUpgrade ? "upgrade" : "downgrade",
-                  "executed",
                   formatDate(new Date(subPayload.current_end * 1000)),
                 ).catch((err) =>
                   console.error("Plan change email failed:", err),
@@ -252,7 +248,6 @@ export const razorpayWebhook = async (req, res, next) => {
                 userDoc.name,
                 userDoc.email,
                 "cancel",
-                "executed",
                 formatDate(
                   subPayload.ended_at
                     ? new Date(subPayload.ended_at * 1000)
