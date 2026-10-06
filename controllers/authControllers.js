@@ -11,6 +11,7 @@ import {
   getUserPayload,
   cookieOptions,
   safeCompare,
+  getMaxDevices,
   setCsrfCookie,
 } from "../utils/helper.js";
 import { getBandwidthResetAt } from "../utils/bandwidthWindow.js";
@@ -163,7 +164,7 @@ export const verifyOtpHandler = async (req, res, next) => {
       const resetKey = `storageApp:user:${userId}:resetPass:${token}`;
       await redisClient.set(resetKey, email, { EX: fiveMins });
       await redisClient.del(otpKey);
-      
+
       return res
         .clearCookie("authToken")
         .cookie(
@@ -189,12 +190,16 @@ export const verifyOtpHandler = async (req, res, next) => {
       throw getErrorObject("Two-factor authentication required.", 403);
 
     const sessionKeys = await redisClient.sMembers(indexKey);
-    const maxDevices = user.subscription?.limits?.maxDevices || 1;
+    const maxDevices = getMaxDevices(user);
 
     if (sessionKeys.length >= maxDevices) {
       if (logoutLastSession) {
-        await redisClient.sRem(indexKey, sessionKeys[0]);
-        await redisClient.del(sessionKeys[0]);
+        // Evict enough sessions to make room
+        const evictCount = sessionKeys.length - maxDevices + 1;
+        for (const key of sessionKeys.slice(0, evictCount)) {
+          await redisClient.sRem(indexKey, key);
+          await redisClient.del(key);
+        }
       } else {
         throw getErrorObject(
           "Session creation failed. Max. limit reached.",
@@ -208,7 +213,14 @@ export const verifyOtpHandler = async (req, res, next) => {
       await _session.withTransaction(async () => {
         user = await User.findByIdAndUpdate(
           user._id,
-          { $set: { isEmailVerified:true, isActive: true, isLogged: true, lastLogin: new Date() } },
+          {
+            $set: {
+              isEmailVerified: true,
+              isActive: true,
+              isLogged: true,
+              lastLogin: new Date(),
+            },
+          },
           { returnDocument: "after" },
         )
           .populate("root", "_id name size")

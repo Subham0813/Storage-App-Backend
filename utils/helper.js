@@ -249,6 +249,9 @@ export const getUserLimits = (user) => {
   };
 };
 
+export const getMaxDevices = (user) =>
+  user?.subscription?.limits?.maxDevices ?? PLAN_DETAILS.FREE.maxDevices;
+
 export const checkEnv = () => {
   const missingVars = requiredEnvVars.filter((v) => !process.env[v]);
   if (EMAIL_PROVIDER === "smtp") {

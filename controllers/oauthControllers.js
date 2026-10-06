@@ -22,6 +22,7 @@ import {
   getUserPayload,
   cookieOptions,
   getErrorObject,
+  getMaxDevices,
   setCsrfCookie,
 } from "../utils/helper.js";
 import { authTokenSchema } from "../schemas/authSchema.js";
@@ -320,7 +321,7 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
     if (!userSession) {
       const indexKey = `storageApp:user:${user._id}:session_index`;
       const sessionKeys = await redisClient.sMembers(indexKey);
-      const maxDevices = user.subscription?.limits?.maxDevices || 2;
+      const maxDevices = getMaxDevices(user);
 
       if (user.isTwoFactorEnabled || sessionKeys.length >= maxDevices) {
         res.cookie(
@@ -473,7 +474,9 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
                 // username: login,
                 email,
                 isEmailVerified: true,
-                name: (name && name.trim().length > 0 ? name : login) || email.split("@")[0],
+                name:
+                  (name && name.trim().length > 0 ? name : login) ||
+                  email.split("@")[0],
                 maxQuota: MAX_USER_QUOTA,
                 maxBandwidthQuota: MAX_USER_BANDWIDTH,
                 bandwidthResetAt: getBandwidthResetAt(),
@@ -542,7 +545,7 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
     if (!userSession) {
       const indexKey = `storageApp:user:${user._id}:session_index`;
       const sessionKeys = await redisClient.sMembers(indexKey);
-      const maxDevices = user.subscription?.limits?.maxDevices || 2;
+      const maxDevices = getMaxDevices(user);
 
       if (user.isTwoFactorEnabled || sessionKeys.length >= maxDevices) {
         res.cookie(
@@ -739,12 +742,16 @@ export const completeOauthLoginHandler = async (req, res, next) => {
 
     const indexKey = `storageApp:user:${data.id}:session_index`;
     const sessionKeys = await redisClient.sMembers(indexKey);
-    const maxDevices = user.subscription?.limits?.maxDevices || 1;
+    const maxDevices = getMaxDevices(user);
 
     if (sessionKeys.length >= maxDevices) {
       if (logoutLastSession) {
-        await redisClient.sRem(indexKey, sessionKeys[0]);
-        await redisClient.del(sessionKeys[0]);
+        // Evict enough sessions to make room
+        const evictCount = sessionKeys.length - maxDevices + 1;
+        for (const key of sessionKeys.slice(0, evictCount)) {
+          await redisClient.sRem(indexKey, key);
+          await redisClient.del(key);
+        }
       } else {
         throw getErrorObject(
           "Session creation failed. Max. limit reached.",
