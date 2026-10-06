@@ -121,7 +121,7 @@ const renderLayout = ({ title, subject, body, tone = "blue", appealTo = null, fo
             <tr>
               <td style="padding:22px 32px;background:#f8fafc;border-top:1px solid #eef2f7;">
                 ${appealTo ? `<p style="margin:0 0 10px;font-family:Arial,sans-serif;font-size:13px;line-height:1.6;color:#475569;text-align:center;">For account issues, reach us at <a href="mailto:${appealTo}" style="color:${TONES[tone]?.accent || TONES.blue.accent};text-decoration:none;font-weight:600;">${appealTo}</a></p>` : ""}
-                <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;line-height:1.6;color:#64748b;text-align:center;">Need help? <a href="mailto:${SUPPORT_EMAIL}" style="color:${TONES[tone]?.accent || TONES.blue.accent};text-decoration:none;font-weight:600;">${SUPPORT_EMAIL}</a></p>
+                ${SUPPORT_EMAIL ? `<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;line-height:1.6;color:#64748b;text-align:center;">Need help? <a href="mailto:${SUPPORT_EMAIL}" style="color:${TONES[tone]?.accent || TONES.blue.accent};text-decoration:none;font-weight:600;">${SUPPORT_EMAIL}</a></p>` : ""}
                 ${footer ? `<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;line-height:1.6;color:#94a3b8;text-align:center;">${footer}</p>` : ""}
                 <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;line-height:1.6;color:#94a3b8;text-align:center;">&copy; ${year()} <strong>${escapeHtml(appName)}</strong>. All rights reserved. <a href="${APP_URL}" style="color:#94a3b8;text-decoration:underline;">Visit us</a></p>
               </td>
@@ -270,7 +270,7 @@ export const accountBannedTemplate = (username) => {
     ${box(`<strong>&#9888;&#65039; Your account has been temporarily suspended.</strong>`, "red")}
     <p style="margin:0 0 6px;">We are writing to let you know that we&rsquo;ve had to place a temporary suspension on your <strong>${escapeHtml(appName)}</strong> account due to a violation of our terms of service.</p>
     <p style="margin:0 0 6px;">We completely understand this might be frustrating or confusing. If you believe this was a mistake, or if you&rsquo;d like to discuss the situation with us, we are more than happy to review it.</p>
-    <p style="margin:0 0 6px;">Please reach out to our team directly at <a href="mailto:${ADMIN_EMAIL}" style="color:#2563eb;text-decoration:none;font-weight:600;">${ADMIN_EMAIL}</a> and we&rsquo;ll look into it for you.</p>
+    ${ADMIN_EMAIL ? `<p style="margin:0 0 6px;">Please reach out to our team directly at <a href="mailto:${ADMIN_EMAIL}" style="color:#2563eb;text-decoration:none;font-weight:600;">${ADMIN_EMAIL}</a> and we&rsquo;ll look into it for you.</p>` : ""}
     <p style="margin:18px 0 0;">Regards,<br><strong>${escapeHtml(appName)} Trust &amp; Safety Team</strong></p>
   `;
 
