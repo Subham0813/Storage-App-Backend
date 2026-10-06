@@ -25,6 +25,9 @@ const subscriptionSchema = new Schema(
       // enum: ["created","active","completed","cancelled","halted","past_due",],
       default: "created",
     },
+    // Hard cap on abandoned-cart recovery emails, independent of `status`
+    // so no amount of status churn can re-trigger a send.
+    abandonedCartEmailsSent: { type: Number, default: 0 },
 
     price: { type: Number, required: true },
     paidCount: { type: Number },

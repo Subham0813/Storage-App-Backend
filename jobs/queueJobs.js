@@ -23,6 +23,11 @@ import {
 import { pathToFileURL } from "node:url";
 import connectMongoose from "../configs/connect.js";
 
+// One recovery email per abandoned cart — it is a reminder, not a sequence.
+// Counted independently of `status` so churn between the tracker and the
+// reconciler can never turn the reminder into a second send.
+const MAX_ABANDONED_CART_EMAILS = 1;
+
 let _rzpInstance = null;
 const getRazorpay = () => {
   if (!_rzpInstance) {
@@ -654,6 +659,13 @@ export const startBullMQWorker = () => {
           const subIdsToUpdate = [];
 
           for (const sub of abandonedSubs) {
+            // Hard cap, checked independently of `status` so a status flip
+            // can never push a cart past MAX_ABANDONED_CART_EMAILS.
+            if ((sub.abandonedCartEmailsSent ?? 0) >= MAX_ABANDONED_CART_EMAILS) {
+              continue;
+            }
+            if (!sub.user?.email) continue;
+
             // Generate a link back to your pricing/checkout page.
             // Recovery emails are SaaS-only (sendAbandonedCartEmail is gated on
             // IS_SAAS_MODE), but keep the base mode-aware so a self-hosted
@@ -677,11 +689,15 @@ export const startBullMQWorker = () => {
             subIdsToUpdate.push(sub._id);
           }
 
-          // Update status to "abandoned" so they are never emailed again
+          // Mark abandoned AND count the send in one atomic op so a crash
+          // between them can't lose track of how many emails went out.
           if (subIdsToUpdate.length > 0) {
             await Subscription.updateMany(
               { _id: { $in: subIdsToUpdate } },
-              { $set: { status: "abandoned" } },
+              {
+                $set: { status: "abandoned" },
+                $inc: { abandonedCartEmailsSent: 1 },
+              },
             );
           }
 
@@ -689,12 +705,12 @@ export const startBullMQWorker = () => {
           break;
 
         case "abandoned-subscription-reaper": {
-          // Expire created/abandoned subs older than 7 days to prevent
-          // permanent orphan rows on both Razorpay and Mongo.
-          const weekMs = 7 * 24 * 60 * 60 * 1000;
+          // Drop created/abandoned subs that have been stale for >= 24h so a
+          // never-completed checkout can't linger on Razorpay and Mongo.
+          const staleMs = 24 * 60 * 60 * 1000;
           const expiredSubs = await Subscription.find({
             status: { $in: ["created", "abandoned"] },
-            createdAt: { $lt: new Date(Date.now() - weekMs) },
+            createdAt: { $lt: new Date(Date.now() - staleMs) },
           }).lean();
 
           for (const sub of expiredSubs) {
@@ -748,6 +764,15 @@ export const startBullMQWorker = () => {
                 paidCount > 0 &&
                 sub.status !== "active";
 
+              // Razorpay reports "created" for every sub that never
+              // activated, which carries no new information. Letting it
+              // overwrite a local "abandoned" resurrects the cart, and the
+              // abandoned-cart tracker then re-mails on its next tick.
+              const nextStatus =
+                rzpStatus === "created" && sub.status === "abandoned"
+                  ? sub.status
+                  : rzpStatus;
+
               const update = {
                 ...(paidCount !== sub.paidCount ? { paidCount } : {}),
                 ...(periodStart &&
@@ -761,7 +786,7 @@ export const startBullMQWorker = () => {
                   periodEnd.getTime() !== sub.currentPeriodEnd.getTime())
                   ? { currentPeriodEnd: periodEnd }
                   : {}),
-                ...(rzpStatus !== sub.status ? { status: rzpStatus } : {}),
+                ...(nextStatus !== sub.status ? { status: nextStatus } : {}),
                 ...(remoteEndAt && !sub.endedAt ? { endedAt: remoteEndAt } : {}),
                 ...(cancelAtPeriodEnd !== Boolean(sub.cancelAtPeriodEnd)
                   ? { cancelAtPeriodEnd }
@@ -1111,12 +1136,13 @@ export const startBullMQJobs = async () => {
       {},
       { ...JOB_OPTS, repeat: { pattern: "*/15 * * * *" } }, // every 15 min
     );
-    // Every Sunday 4am — Expire abandoned created subs older than 7 days on
-    // Razorpay side + delete from Mongo, preventing permanent orphan rows.
+    // Every hour — Cancel on Razorpay + delete from Mongo any created/
+    // abandoned sub stale for >= 24h. The schedule must be finer than the
+    // 24h window, so the old weekly run could not have enforced it.
     await backgroundQueue.add(
       "abandoned-subscription-reaper",
       {},
-      { ...JOB_OPTS, repeat: { pattern: "0 4 * * 0" } }, // weekly on Sunday at 4am
+      { ...JOB_OPTS, repeat: { pattern: "7 * * * *" } }, // hourly at :07
     );
     // Every hour — Reconcile active/created subs against Razorpay so a lost
     // webhook never leaves entitlements or invoice receipts permanently stale.
