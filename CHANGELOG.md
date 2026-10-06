@@ -12,16 +12,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Version-aware S3 deletes** — every write path now captures the object `VersionId` and every delete path deletes by that version (no delete markers / hidden files): multipart complete (`completeUpload`), Google Drive import (`record.versionId`, `record.thumbId`), avatars (`avatarVersionId` on `User`). `deleteS3Objects` now accepts both strings and `{ key, id }`, strictly skips+warns on entries missing a version id, surfaces `Errors` from both buckets, and logs when deletions fail.
 - **Delete call-sites fixed end-to-end** — `deleteFileHandler` deletes thumbnails only when it's the last reference (was: `ReferenceError` on `thumbId`), `copyFileHandler` forwards `versionId`/`thumbId`, admin `deleteUser` uses `{ key, id }` (was: `{ k, id }`), `emptyTrash`, account delete, trash-collector and quota-reaper now version-delete files **and** thumbnails (thumbs previously were never deleted).
 - **Thumbnail keys unique per upload** — `thumbnails/{userId}/{Date.now()}-{name}.webp` (was name-based) so re-uploads no longer stack versions and version-deletes remove them for real. Import thumbnails already used unique keys.
-- **Multipart chunk sizes** — `backend/misc/constants.js`: FREE `5e6 → 8e6`; PRO & BUSINESS `8e6/10e6 → 16e6` bytes. Fewer S3 parts and write operations; applies via `partSize = min(size, limits.chunkSize)` with no code ripple. Existing subscriptions keep their snapshot `chunkSize` until renewal / `migratePlans.js`.
-- **Upload resilience (frontend)** — `frontend/src/utils/uploadManager.js`: per-part XHR timeout (150s), transient-failure retry (3 attempts, 2s→4s→8s backoff, never on 4xx), clean abort handling; upload modal now shows `uploaded/total` + ETA. Frontend changes tracked in `Storage-App-Frontend` changelog.
+- **Multipart chunk sizes** — `misc/constants.js`: FREE `5e6 → 8e6`; PRO & BUSINESS `8e6/10e6 → 16e6` bytes. Fewer S3 parts and write operations; applies via `partSize = min(size, limits.chunkSize)` with no code ripple. Existing subscriptions keep their snapshot `chunkSize` until renewal — the `migratePlans.js` backfill script formerly used for that has since been deleted (`f305df0`, see **Removed**).
+- **Upload resilience (frontend)** — `Storage-App-Frontend` repo, `src/utils/uploadManager.js`: per-part XHR timeout (150s), transient-failure retry (3 attempts, 2s→4s→8s backoff, never on 4xx), clean abort handling; upload modal now shows `uploaded/total` + ETA. Frontend changes are tracked in the `Storage-App-Frontend` changelog.
 - **FREE plan limits** — `maxFileSize` 100 MB → 2 GB (`2e9`), `maxUploadConcurrency` 1 → 2; `maxDevices` 1, trash 5 days, grace 7 days unchanged.
 - **BUSINESS upload concurrency** — `4 → 8` in `PLAN_DETAILS`.
 - **Grace semantics on downgrade** — `downgrade-executor` / `cancel-executor` / `halted-subscription-reaper` compute the grace window from the plan being left (`PLAN_DETAILS[sub.planKey].gracePeriod` / `sub.limits.gracePeriod`), not the smaller target plan.
+- **Share/file/directory mutations resolve access through `checkAccess`** — `b4b5127`: non-owners now get explicit `403`s raised at the middleware/route layer (`routes/fileRoutes.js`, `routes/directoryRoutes.js`) instead of controller-specific ownership branches.
+- **Origin allowlist only for CSRF** — `a2594a5`: the double-submit `X-CSRF-Token` / `csrf`-cookie comparison was removed from `verifyCsrfOrigin` (`middlewares/validateSession.js`); the `Origin`/`Referer` allowlist for mutating methods stays.
+- **Google Drive scope narrowed** — `86f2ff6`: `https://www.googleapis.com/auth/drive.readonly` → `https://www.googleapis.com/auth/drive.file` on the Drive connect flow (`controllers/oauthControllers.js`).
+- **Env var renames** — `CLIENT_AUTH_CALLBACK_URL` → `AUTH_CALLBACK` (`e29a622`) and `CLIENT_APP_URL` → `CLIENT_URL` (`269af7d`).
+- **Docs re-sync** — `84e4857`: route request/response specs in `docs/` and `README.md` updated (note: `docs/adminRouteRequestResponse.md` still carries the pre-`e3fb192` headings `GET /api/admin/storage/:id` / `PATCH /api/admin/remove-user/:id`).
 
 ### Fixed
 
-- **Uncaught `TypeError` on every multipart progress tick** — removed the dead `onProgress` handler in `uploadPartXhr` that invoked an `undefined` callback. Per-part progress (percent bump per completed part) is unchanged.
+- **Uncaught `TypeError` on every multipart progress tick** — removed the dead `onProgress` handler in `uploadPartXhr` that invoked an `undefined` callback. Per-part progress (percent bump per completed part) is unchanged. (`uploadPartXhr` is a frontend symbol — it lives in the `Storage-App-Frontend` repo at `src/utils/uploadManager.js`, not in this backend.)
 - **Legacy FREE limits drift** — FREE `maxFileSize` now matches the actual product value (2 GB) instead of the outdated 100 MB advertised in docs.
+- **FREE users now hold exactly one session** — `2c89fd4`: new `getMaxDevices(user)` helper (`utils/helper.js:252`) replaces five divergent hardcoded fallbacks — Google/GitHub OAuth previously fell back to 2 sessions while password login and 2FA fell back to 1, because a FREE user has no `Subscription` document at all (`subscription.limits.maxDevices` is `undefined`). Also fixed `logoutLastSession` eviction to drop `length - maxDevices + 1` sessions instead of exactly one, so an already over-limit account actually returns to the cap.
+- **Abandoned-cart email loop** — `a7665f5`: the hourly `subscription-reconciler` was writing Razorpay's `status` verbatim, so a never-activated sub reporting `"created"` flipped a local `"abandoned"` cart back to `"created"` and the `*/15` `abandoned-cart-tracker` re-mailed every cycle (one email per hour until the weekly reaper). The reconciler now refuses to resurrect `abandoned`. Added `abandonedCartEmailsSent` with `MAX_ABANDONED_CART_EMAILS = 1`; `abandoned-subscription-reaper` threshold 7 days → 24h and cron weekly → hourly (`7 * * * *`).
+- **Google Drive tokens were never persisted** — `9b2d2e0`: `tokens.refresh_token_expires_in` does not exist on google-auth-library's `Credentials`, so `new Date(Date.now() + undefined * 1000)` produced an `Invalid Date`; Mongoose's cast failure aborted the whole `findOneAndUpdate`, so tokens were never written and every Google Drive connect threw. The `tokenExpiry` write was removed (the field was write-only).
+- **Email templates** — `dd21594` omits support/contact blocks when no address is configured; `8e9ab86` corrects subscription activation copy and removes dead email stages; `174dd6d` updates merchant identity disclosures.
+- **Standalone BullMQ worker** — `6af6e85`: `node jobs/queueJobs.js [scheduler|worker]` entrypoint repaired, Redis argument types fixed, and errors propagated instead of swallowed.
+- **Idempotent `abortS3Upload`** — `65e618b`: `NoSuchUpload` is treated as already-aborted so late/retried aborts don't fail; `package-lock.json` version corrected to `1.0.0`.
+- **Invalid Cookie error on login** — `1a7c446`.
+- **Storage could go negative on purge/trash** — `f20f168`: debits are root-only across purge, trash, empty-trash and the background jobs (error code 121).
+- **OAuth hardening** — `bd638c9` (OAuth error handling) and `16646d7` (GitHub primary-email verification via `GET /user/emails`, Google-parity refactor).
+- **Signup/OAuth state persisted** — `1679d87`: `isEmailVerified` / account state saved on signup and OAuth, FREE-plan quotas seeded, OAuth error redirects added.
+- **Mongo collection validators** — `9c60008`: validators realigned with the current Mongoose schemas.
 
 ### Added
 
@@ -33,6 +49,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Downgrade/cancel/halt notifications** — landing on FREE (or a paid→paid downgrade) now generates an in-app notification summarizing the plan change and grace window; an over-cap public-link notice is sent when the FREE 2 GB cap is exceeded on downgrade. Grace on downgrade uses the **previous plan's** grace period (PRO→FREE = 14d, BUSINESS→FREE = 30d).
 - **Public preview cache headers** — `FileControllers` preview now sets `Cache-Control: public, max-age=21600, s-maxage=21600` when the item is publicly shared (`publicRole === "view"`), otherwise `private, no-store`.
 - **`publicShareGraceEndsAt` lifecycle** — set on downgrade to FREE when over the cap (FREE's own 7 days), cleared on `subscription.charged`/`resumed` and paid-plan downgrades.
+- **18+ age confirmation & terms consent** — `126c556`: signup and OAuth flows record the age attestation and terms consent on `User`, with matching `schemas/authSchema.js` and `services/schemaValidator.js` definitions.
+- **Subscription recovery overhaul** — `0c7c6fa`: late-payment recovery, subscription reuse for returning customers, and an orphan-subscription reaper (`controllers/subscriptionControllers.js`, `jobs/queueJobs.js`, `services/razorpayWebhook.js`).
+
+### Removed
+
+- **`migratePlans.js` migration script** — `f305df0`: obsolete now that plan limits are snapshotted onto each `Subscription` at creation.
+- **Standard (single pre-signed PUT) upload type** — `ab47d45`: the `size ≤ 5 MB` branch in `controllers/uploadControllers.js` was commented out, so `uploadType` is always `"multipart"` and every file upload goes through S3 multipart (the 4.0.0 entry above documents the original behaviour).
+- **AI-generated comments and stale env vars** — `b968091`: comment noise stripped from controllers/jobs and dead variables removed from `.env.example` and subscription docs.
 
 ### Infrastructure (B2/R2, not code)
 
@@ -54,7 +78,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - **Response caching (Redis JSON, fail-open)** — `utils/responseCache.js` namespaces `storageApp:cache:user:{id}:info|usage|stats|plan` (60s, plan 30s) and `storageApp:cache:global:plans` (900s). Helper `cacheWrap` + `invalidateUser` busted on all mutating paths: `updateName/avatar`, upload `complete`, file/dir `delete`, `create/verify/update/cancel` subscription, admin quota, `razorpayWebhook`, `bandwidthWebhook`, BullMQ jobs.
-- **Tiered feedback rate limiting (SaaS only)** — `POST /api/user/feedback` gated by `requireSaasMode` (selfhosted → `404`). Redis fixed 7-day window `storageApp:feedback:{userId}:count` with limits `FREE 2/week`, `PRO 5/week`, `BUSINESS 10/week`. On exceed `429` with tiered fallback: `FREE` → `https://github.com/Subham0813/Storage-App-Backend/issues`, `PRO`/`BUSINESS` → `mailto:support@example.com`. Screenshot `≤1 MB` to `feedback/{userId}/{now}.webp` in public bucket.
+- **Tiered feedback rate limiting (SaaS only)** — `POST /api/user/feedback` gated by `requireSaasMode` (selfhosted → `404`). Redis fixed 7-day window `storageApp:feedback:{userId}:count` with limits `FREE 2/week`, `PRO 5/week`, `BUSINESS 10/week`. On exceed `429` with a tier-specific plain-text message (FREE: "Free plan limit: 2 feedbacks per week…", PRO/BUSINESS: "Limit n/week for PLAN …") — the response contains **no** URL or `mailto:`, so the fallback channel is the client's choice. Screenshot `≤1 MB` to `feedback/{userId}/{now}.webp` in public bucket.
 - **Google Drive integration hardening (backend)** — `revoke-drive-integration` now `POST https://oauth2.googleapis.com/revoke` best-effort + `del userdata` + `invalidateUser` idempotent; `getPickerTokenGoogle` busts `userdata` after refresh.
 - **Billing hardening** — `middlewares/requireSaasMode.js` and `misc/constants.js:IS_SAAS_MODE` now `trim().toLowerCase() === "saas"` to tolerate `SAAS`/` saas `.
 - **Sharing/ban emails for selfhosted** — ungated `sendSharingNotificationEmail`, `sendBulkShareEmails`, `sendAccountBannedEmail`, `sendAccountRecoveredEmail` in `services/emailService.js` so `SMTP`/`Resend` works outside `saas` when `FROM_EMAIL` is set. Revoke sends a dedicated `accessRevokedEmailTemplate` via `sendBulkRevokedEmails` (was: wrong "shared with you" template).
@@ -63,8 +87,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - **Version** `4.0.0 → 1.0.0` in `package.json` and `README.md` badges — first public release.
-- **Plans corrected** — internal `4.0.0` listed `ULTRA/PREMIUM/ELITE` (8 paid). Actual code is `FREE`, `PRO_MONTHLY/YEARLY`, `BUSINESS_MONTHLY/YEARLY` (4 paid) via `SUBSCRIPTION_PLAN_PRO_*` + `BUSINESS_*` and single `RAZORPAY_OFFER_*`. `README.md` and this changelog now reflect reality.
-- **Job schedules corrected** — `jobs/queueJobs.js:604` `downgrade-executor` and `cancel-executor` are `0 0 * * *` daily midnight (not hourly), `share-token-invalidator` `0 0 * * *` (not hourly), `bandwidth-reset` `0 0 * * *`, `active-users-sweeper` `0 3 * * *`, `halted-reaper` `0 4 * * *`.
+- **Plans corrected** — internal `4.0.0` listed `ULTRA/PREMIUM/ELITE` (8 paid). Actual code is `FREE`, `PRO_MONTHLY/YEARLY`, `BUSINESS_MONTHLY/YEARLY` (4 paid) via the `SUBSCRIPTION_PLAN_PRO_*` / `SUBSCRIPTION_PLAN_BUSINESS_*` plan ids in `misc/constants.js`. (`RAZORPAY_OFFER_*` is documented in `README.md`, but no code reads it.) `README.md` and this changelog now reflect reality.
+- **Job schedules corrected** — repeatable jobs are registered in `startBullMQJobs` at `jobs/queueJobs.js:1077-1153`: `downgrade-executor` and `cancel-executor` are `0 0 * * *` daily midnight (not hourly), `share-token-invalidator` `0 0 * * *` (not hourly), `bandwidth-reset` `0 0 * * *`, `active-users-sweeper` `0 3 * * *`, `halted-subscription-reaper` `0 4 * * *`.
 - **Email defaults** — `SUPPORT_EMAIL` default `support@example.com` (was `support@ownstorage.cloud`), `ADMIN_EMAIL` fallback to `FROM_EMAIL`, hardcoded `support@upstash.cloud` in `emailService.js:366` replaced by `ADMIN_EMAIL`.
 - **Example domains** — all docs now use generic `https://example.com` / `https://api.example.com` / `support@example.com` instead of `ownstorage.space` / `thatsubhambachar.pro`.
 - **`getUserStats`** cached 60s (self only), `getPlanOptions` 900s global, `getCurrentPlan` 30s per-user — previously uncached.
@@ -73,7 +97,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
-- **Dead code** — `models/activity_log.model.js` (37 lines) and `utils/activityLogger.js` (27 lines), 77 lines in `controllers/commonSetControllers.js` unused, `routes` legacy aliases (`B2_BUCKET_NAME` kept as alias for ZIP only).
+- **Dead code** — `models/activity_log.model.js` (37 lines) and `utils/activityLogger.js` (27 lines), 77 lines in `controllers/commonSetControllers.js` unused, `routes` legacy aliases. (`B2_BUCKET_NAME` is still documented in `.env.example` / `README.md` as an alias for ZIP streaming, but no code reads it.)
 - **`4.0.0` internal plans** `ULTRA` etc. removed from docs — replaced by actual `PRO`/`BUSINESS`.
 
 ### Fixed
@@ -100,12 +124,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Cloudflare CDN proxy for bandwidth tracking — preview and download URLs are now signed Cloudflare tokens (`/stream`, `/download`) instead of raw S3 pre-signed URLs; bandwidth is reported back via `POST /api/files/webhook`.
 - `bandwidthWebhook` — internal Cloudflare Worker webhook that increments `usedBandwidthQuota` and `accessCount` on the user document after each served byte.
 - Thumbnail upload on complete — `PUT /api/uploads/complete/:id` now accepts an optional `thumbnailBase64` (base64 webp) and stores it to S3 under `thumbnails/`.
-- Standard upload type — files ≤ 5 MB use a single pre-signed PUT URL (`uploadType: "standard"`) instead of S3 multipart; `uploadId` is a random hex string in this case.
+- Standard upload type — files ≤ 5 MB use a single pre-signed PUT URL (`uploadType: "standard"`) instead of S3 multipart; `uploadId` is a random hex string in this case. *(Later removed: the `size ≤ 5 MB` branch was commented out in `ab47d45`, so every file upload is multipart now — see **Removed** under `[Unreleased]`.)*
 - `uploadType` field in upload session and initiate response so the client knows which path to take.
 - `getShareInfo` field projection — response now returns `{ id, userId, grantedBy, permission }` per permission record; `onModel` and raw `itemId` are excluded.
 - `getAllUsers` now uses `getUserPayload()` — admin user list returns the same normalized shape as `/api/user/info` plus a `sessionCount` field.
-- `GET /api/admin/storage/:id` — returns `{ totalSize, totalFiles, totalDirs, breakdown }` with per-category (docs, images, videos, others) counts and sizes via MongoDB aggregation.
-- `reason` field required on `PATCH /api/admin/remove-user/:id` — minimum 10 characters enforced.
+- `GET /api/admin/user/:id/storage` — returns `{ totalSize, totalFiles, totalDirs, breakdown }` with per-category (docs, images, videos, others) counts and sizes via MongoDB aggregation. (Original `4.0.0` path was `GET /api/admin/storage/:id`; admin paths were normalized in `e3fb192`.)
+- `reason` field required on `PATCH /api/admin/user/:id/temp-remove` — minimum 10 characters enforced. (Original `4.0.0` path was `PATCH /api/admin/remove-user/:id`.)
 - `revoke-drive-integration` — `PUT /api/user/revoke-drive-integration` clears stored Google Drive tokens.
 - `active-users-sweeper` background job — prunes the Redis `storageApp:active_users` sorted set, removing users inactive for 30+ days. Runs daily at 3am.
 - Public share routes under `/api/public/shared/:token` — unauthenticated preview, download, and info endpoints for publicly shared files.
@@ -120,7 +144,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Google Drive import pipeline — `POST /api/import/google/initiate`, `PUT /api/import/google/start-import/:id`, `GET /api/import/google/progress/:id`, `PUT /api/import/google/complete/:id`, `GET /api/import/google/picker-token`.
 - Google Drive OAuth — `GET /api/oauth/google-drive/connect` and `GET /api/oauth/google-drive/callback` store refresh token in `user.integrations.googleDrive`.
 - PKCE for all OAuth flows — Google, GitHub, and Google Drive all use `code_challenge` / `code_verifier`.
-- `verifyCsrfOrigin` middleware — checks `Origin`/`Referer` header against `ALLOWED_ORIGINS` for all mutating methods in production.
+- `verifyCsrfOrigin` middleware — checks the `Origin`/`Referer` header against `ALLOWED_ORIGINS` for every mutating method (`POST,PATCH,PUT,DELETE`); there is no `NODE_ENV` gate, it runs in all modes. (The double-submit `X-CSRF-Token` check it shipped with was later removed — `a2594a5`, see `[Unreleased]`.)
 - Redis-backed rate limiting — global, auth, upload, and public-link limiters using `rate-limit-redis`.
 - BYO email provider — `EMAIL_PROVIDER` selects the transport: `resend` (default, HTTP API) or `smtp` (any SMTP relay via `nodemailer`); provider credentials are validated conditionally at startup.
 - SaaS-scoped notifications — action/notification emails (share, ban/recover, feedback, invoice, abandoned-cart, subscription changes) are only sent when `APP_MODE=saas`; OTP and password-reset emails remain active in all modes.
@@ -145,9 +169,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `createDirectoryHandler` body field is `targetId` (resolved by `loadParentDir`), not `parentId`.
 - `tempRemoveUser` now requires `reason` in request body (min 10 chars).
 - `cancelSubscriptionPlan` error path returns `500` with a support message instead of propagating the raw Razorpay error.
-- `app.js` — `GET /api/subscriptions/plans` (pricing) is mounted as a standalone anonymous public route (before `validateSession`), so the pricing endpoint works without a session in both modes.
+- `app.js` — `GET /api/subscriptions/plans` (pricing) was mounted as a standalone anonymous public route (before `validateSession`), so the pricing endpoint worked without a session in both modes. *(As of `4.0.0`; stale now — the whole subscriptions router is mounted after `app.use(verifyCsrfOrigin, validateSession)` in `app.js` and sits behind `requireSaasMode` in `routes/subscriptionRoutes.js`, so `/api/subscriptions/plans` needs a valid session in SaaS mode.)*
 - `app.js` — `POST /api/subscriptions/webhook` and `POST /api/files/webhook` mounted before `validateSession`; the files (Cloudflare bandwidth) webhook is now also gated to SaaS mode via `requireSaasMode`.
-- All docs in `docs/` fully rewritten and verified against actual controller output.
+- All docs in `docs/` fully rewritten and verified against actual controller output. *(Exception found later: `docs/adminRouteRequestResponse.md` still used the pre-`e3fb192` admin paths — see the docs note under `[Unreleased]`.)*
 
 ### Fixed
 

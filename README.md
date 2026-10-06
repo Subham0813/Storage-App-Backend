@@ -45,7 +45,7 @@ A production-ready, enterprise-grade backend for an open source cloud storage pl
 ## Features
 
 - **File & Directory Management** — create, rename, move, copy, star, trash, restore, and permanently delete files and directories with full recursive support.
-- **Resumable Chunked Uploads** — client-driven S3/B2 multipart uploads via pre-signed PUT URLs. Files ≤ 5 MB use a single standard PUT; larger files use S3 multipart with plan-based chunk sizes and concurrency limits.
+- **Resumable Chunked Uploads** — client-driven S3/B2 multipart uploads via pre-signed PUT URLs. Every upload uses S3 multipart with plan-based chunk sizes and concurrency limits (the ≤ 5 MB single standard-PUT branch is commented out in `uploadControllers.js`, so it never runs).
 - **Thumbnail Support** — optional base64 `webp` thumbnail uploaded to the public bucket on upload completion (`≤1 MB`).
 - **Bandwidth Tracking** — **SaaS:** previews and downloads are proxied through a Cloudflare Worker that reports bytes served via a signed HMAC webhook. **Self-hosted:** the server tracks bandwidth directly when generating download URLs (no worker needed).
 - **Authentication**
@@ -57,18 +57,18 @@ A production-ready, enterprise-grade backend for an open source cloud storage pl
   - Stateful sessions in Redis with signed `sessionId` cookies (7-day TTL, sliding window), per-plan device limits.
 - **Role-Based Sharing**
   - Share files/directories with specific users by email (`view` / `edit`).
-  - Public share links with optional expiry (`expiresIn` days) — available on **FREE** too, capped at **500 MB per file** and **2 GB total** active public bytes. Downgrades to FREE get a 7-day window to drop under the cap before the oldest links are auto-revoked.
+  - Public share links with optional expiry (`expiresIn` — the raw value is added to `Date.now()`, i.e. it is interpreted as **milliseconds**, not days) — available on **FREE** too, capped at **500 MB per file** and **2 GB total** active public bytes. Downgrades to FREE get a 7-day window to drop under the cap before the oldest links are auto-revoked.
   - Token regeneration and per-user revocation. Guest access via `/api/public/shared/:token`.
-- **Google Drive Import** — server-side streaming from Drive directly to S3/B2 with real-time progress polling. Google Docs exported to Office formats; oversized exports saved as webview links.
+- **Google Drive Import** — server-side streaming from Drive directly to S3/B2 with real-time progress polling. Google Docs exported to PDF (Sheets → xlsx, Slides → pptx); oversized exports saved as webview links.
 - **Live Subscription Billing (Razorpay)** — **SaaS only** (`APP_MODE=saas`)
   - Plans: `FREE`, `PRO` (monthly/yearly), `BUSINESS` (monthly/yearly). Create, verify, upgrade (immediate), downgrade (`schedule_change_at: cycle_end`), and cancel.
   - Blocked if usage exceeds target quota. UPI fallback for scheduled downgrades.
   - Webhook handles `subscription.activated|charged|resumed|cancelled|completed|halted` + `invoice.paid`.
-- **Feedback (SaaS only)** — tiered rate limit via Redis fixed 7-day window: `FREE 2/week → GitHub issues`, `PRO 5/week` and `BUSINESS 10/week` → `mailto:support@example.com`. Screenshot `≤1 MB` to public bucket, emails to user + admin.
-- **Background Jobs (BullMQ)** — 12 scheduled jobs (separate scheduler/worker): downgrade/cancel executors, trash-collector, quota-reaper, session-reaper, bandwidth reset, share-token invalidation, public-share-reaper, abandoned cart, halted reaper, active-users sweeper, abandoned-subscription reaper.
+- **Feedback (SaaS only)** — tiered rate limit via Redis fixed 7-day window: `FREE 2/week`, `PRO 5/week` and `BUSINESS 10/week` (429 with a plain-text message — it contains no link or mailto). Screenshot `≤1 MB` to public bucket, emails to user + admin.
+- **Background Jobs (BullMQ)** — 13 scheduled jobs (separate scheduler/worker): downgrade/cancel executors, trash-collector, quota-reaper, session-reaper, bandwidth reset, share-token invalidation, public-share-reaper, abandoned cart, halted-subscription-reaper, active-users sweeper, abandoned-subscription reaper, subscription-reconciler.
 - **Admin Controls** — paginated users, role changes, forced logout, soft-delete (ban), recovery, permanent deletion with S3 cleanup, feedback moderation and direct email.
 - **Notifications** — in-app `GET /api/notifications`, unread count, mark-all-read.
-- **Security** — Helmet, CSRF double-submit + origin check, 4-tier Redis rate limiting, `httpOnly` signed cookies, HMAC webhooks, bcrypt cost 12.
+- **Security** — Helmet, CSRF Origin/Referer allowlist (double-submit token check is disabled), 4-tier Redis rate limiting, `httpOnly` signed cookies, HMAC webhooks, bcrypt cost 12.
 
 ---
 
@@ -96,15 +96,15 @@ A production-ready, enterprise-grade backend for an open source cloud storage pl
 ```
 Client (https://example.com)
   ├─→ CloudFront (S3 frontend)  or  NGINX → PM2 → Node (https://api.example.com)
-  ├─→ Redis  (sessions, userdata cache 60s, responseCache 60s/900s, feedback 7d, rate-limit)
+  ├─→ Redis  (sessions, userdata cache 120s at creation / 60s refreshed per request, responseCache 60s/900s, feedback 7d, rate-limit)
   ├─→ MongoDB (users, files, dirs, permissions, subscriptions)
   ├─→ S3 ×2  (STORAGE: private files, PUBLIC: thumbnails/avatars)
   ├─→ CDN Router (Cloudflare Worker HMAC → bandwidthWebhook | CloudFront signer | S3)
-  └─→ BullMQ (scheduler ↔ worker) → 12 cron jobs → S3/Mongo/Notifications
+  └─→ BullMQ (scheduler ↔ worker) → 13 cron jobs → S3/Mongo/Notifications
 Webhooks in: Razorpay HMAC (raw body) → subscription state → User.plan; Cloudflare HMAC → bandwidth increment
 ```
 
-`app.js` sets `trust proxy 1`, `cors({origin: ALLOWED_ORIGINS, credentials:true})`, `cookieParser(COOKIE_SECRET)`, `helmet`, mounts `POST /api/subscriptions/webhook` and `POST /api/files/webhook` before `express.json`, then public `/api/auth|/oauth|/public/shared`, then `verifyCsrfOrigin` + `validateSession`, then authenticated `/api/uploads` (uploadLimiter), `/api/subscriptions` (SaaS), `/api/import`, `/api/user`, `/api/notifications`, `/api/files`, `/api/directories`, `/api/admin` (role guard). Graceful `SIGTERM/SIGINT` closes Redis and BullMQ.
+`app.js` sets `trust proxy 1`, `cors({origin: ALLOWED_ORIGINS, credentials:true})`, `cookieParser(COOKIE_SECRET)`, `helmet`, mounts `POST /api/subscriptions/webhook` before `express.json` (raw body for HMAC), then `express.json`, then `POST /api/files/webhook` (after `express.json`), then public `/api/auth|/oauth|/public/shared`, then `verifyCsrfOrigin` + `validateSession`, then authenticated `/api/uploads` (uploadLimiter), `/api/subscriptions` (SaaS), `/api/import`, `/api/user`, `/api/notifications`, `/api/files`, `/api/directories`, `/api/admin` (role guard). Graceful `SIGTERM/SIGINT` closes the HTTP server and Redis (`worker.close()` lives only in the standalone worker process).
 
 ---
 
@@ -132,7 +132,7 @@ backend/
 │   ├── notificationControllers.js# list, mark-read, unread-count
 │   └── batchControllers.js       # bulk-download ZIP
 ├── middlewares/
-│   ├── validateSession.js        # session + share token + CSRF origin double-submit
+│   ├── validateSession.js        # session + share token + CSRF origin allowlist (double-submit disabled)
 │   ├── checkAccessControl.js     # ownership / Permission / token fast-pass
 │   ├── loadParentDirectory.js    # resolves targetId → req.target/parent
 │   ├── rateLimiter.js            # global / auth / upload / public tiers (Redis)
@@ -161,7 +161,7 @@ backend/
 │   ├── formatDate.js / emailTemplates.js
 │   └── ...
 ├── misc/constants.js             # PLAN_DETAILS, INSTANCE_CONFIG, t, requiredEnvVars
-├── jobs/queueJobs.js             # BullMQ Queue + Worker + Scheduler (12 jobs)
+├── jobs/queueJobs.js             # BullMQ Queue + Worker + Scheduler (13 jobs)
 ├── docs/                         # Per-route request/response Markdown (10 files)
 ├── .env.example / package.json / CHANGELOG.md
 └── public/                       # gitignored generated assets
@@ -195,7 +195,7 @@ Copy `.env.example` to `.env`. `APP_MODE` gates SaaS vs selfhosted.
 | ---------------------------------------------- | --------------------------------------------------- | -------------------------------------------------- |
 | `MONGO_URI`                                    | MongoDB URI                                         | `mongodb://user:pass@host:27017/db?replicaSet=rs0` |
 | `REDIS_URL`                                    | Redis connection (app cache, sessions, BullMQ jobs) | `redis://:pass@host:6379`                          |
-| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | Legacy trio — only used when `REDIS_URL` is unset   | `127.0.0.1` / `6379`                               |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | Legacy trio — used only by the BullMQ job connection when `REDIS_URL` is unset; the app's own Redis client (`configs/redis.js`) reads `REDIS_URL` exclusively | `127.0.0.1` / `6379`                               |
 
 ### Storage (S3-compatible — AWS, R2, B2, MinIO)
 
@@ -206,9 +206,9 @@ Copy `.env.example` to `.env`. `APP_MODE` gates SaaS vs selfhosted.
 | `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` | Creds                                                       | `...`                                    |
 | `STORAGE_ENDPOINT`                          | Custom endpoint (R2/B2/MinIO) — omit for AWS                | `https://s3.us-east-005.backblazeb2.com` |
 | `STORAGE_FORCE_PATH_STYLE`                  | `true` for MinIO                                            | `false`                                  |
-| `PUBLIC_BUCKET_NAME` etc                    | Same 5 vars for public bucket (thumbnails/avatars/feedback) |                                          |
+| `PUBLIC_BUCKET_NAME` / `PUBLIC_ACCESS_KEY` / `PUBLIC_SECRET_KEY` | Public bucket (thumbnails/avatars/feedback) — required trio, plus optional `PUBLIC_ENDPOINT` and `PUBLIC_REGION` (default `us-east-1`) | `my-public-bucket`            |
 | `PUBLIC_BUCKET_CDN`                         | CDN that serves public bucket                               | `https://cdn.example.com`                |
-| `B2_BUCKET_NAME`                            | Alias = `STORAGE_BUCKET_NAME` for ZIP streaming — set same  |                                          |
+| `B2_BUCKET_NAME`                            | Listed in `.env.example` only — **no code reads it**; `STORAGE_BUCKET_NAME` is the sole private-bucket name used |                                          |
 
 ### CDN
 
@@ -224,20 +224,18 @@ Copy `.env.example` to `.env`. `APP_MODE` gates SaaS vs selfhosted.
 | Variable                                                            | Description                                       |
 | ------------------------------------------------------------------- | ------------------------------------------------- |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | Google login                                      |
-| `GOOGLE_DRIVE_REDIRECT_URI`                                         | Drive import (`drive.readonly`, `prompt consent`) |
+| `GOOGLE_DRIVE_REDIRECT_URI`                                         | Drive import (`drive.file`, `prompt consent`) |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` / `GITHUB_REDIRECT_URI` | GitHub login                                      |
 
 ### Payments (Razorpay — SaaS only)
 
 | Variable                                                                             | Description                                                              |
 | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET`                | Live — used when `NODE_ENV=production`                                   |
-| `TEST_RAZORPAY_KEY_ID` / `TEST_RAZORPAY_KEY_SECRET` / `TEST_RAZORPAY_WEBHOOK_SECRET` | Test — used when `NODE_ENV !== production`                               |
+| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET`                | Required in SaaS — the only Razorpay credentials used (no test/live switch)               |
 | `SUBSCRIPTION_PLAN_PRO_MONTHLY`                                                      | Razorpay plan ID                                                         |
 | `SUBSCRIPTION_PLAN_PRO_YEARLY`                                                       | Razorpay plan ID                                                         |
 | `SUBSCRIPTION_PLAN_BUSINESS_MONTHLY`                                                 | Razorpay plan ID                                                         |
 | `SUBSCRIPTION_PLAN_BUSINESS_YEARLY`                                                  | Razorpay plan ID                                                         |
-| `RAZORPAY_OFFER_*`                                                                   | e.g. `RAZORPAY_OFFER_UPGRADE` — single offer for prorated upgrade credit |
 
 ### Email
 
@@ -248,7 +246,8 @@ Copy `.env.example` to `.env`. `APP_MODE` gates SaaS vs selfhosted.
 | `FROM_EMAIL`                                                          | Sender — e.g. `StorageApp <support@example.com>`           |
 | `ADMIN_EMAIL`                                                         | Feedback/admin alerts inbox — e.g. `support@example.com`   |
 | `SUPPORT_EMAIL`                                                       | Shown in templates as contact — e.g. `support@example.com` |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_SECURE` | Required if `smtp` (`true` for 465)                        |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` | Required if `smtp`                                                  |
+| `SMTP_PASS` / `SMTP_SECURE`            | Optional — `SMTP_PASS` falls back to `SMTP_PASSWORD`; `SMTP_SECURE` auto-`true` for port 465 |
 
 > **Email by mode** — OTP and password-reset are sent in **all** modes. Share/ban/recover/bulk, feedback alerts, invoice, abandoned-cart, subscription changes are SaaS-only except `sendSharingNotificationEmail` and `sendBulkShareEmails` and ban/recover now also work selfhosted if `FROM_EMAIL` is set. Access revocation uses a dedicated `accessRevokedEmailTemplate` via `sendBulkRevokedEmails`.
 
@@ -258,7 +257,7 @@ Copy `.env.example` to `.env`. `APP_MODE` gates SaaS vs selfhosted.
 | ----------- | ------------------------------------------------ |
 | `MAX_DEPTH` | Max recursion for ZIP `serveZipS3` (default `5`) |
 
-`misc/constants.js:requiredEnvVars` (19 core) + `requiredSaaSVars` (4 plans) are checked on boot via `utils/helper.js checkEnv()` — missing throws.
+`misc/constants.js:requiredEnvVars` (24 entries / 23 unique — `CLIENT_URL` is listed twice) + `requiredSaaSVars` (7 vars: 3 Razorpay secrets + 4 plan IDs) are exported for boot-time validation via `utils/helper.js checkEnv()`. However, `checkEnv()` is exported only and **never called** (it is not wired into `app.js`), so missing vars currently fail at runtime instead of exiting at boot.
 
 ---
 
@@ -298,11 +297,11 @@ npm run dev              # hot reload via --watch
 npm start                # production
 
 # 4. Background jobs (production — run scheduler once + N workers)
-npm run worker:scheduler # registers 12 repeatables
+npm run worker:scheduler # registers 13 repeatables
 npm run worker           # consumes — scale horizontally
 
 # 5. Health
-curl http://localhost:4000/api/user/info # 401 without session, 404 billing if selfhosted
+curl http://localhost:4000/api/user/info # 401 without session; no SaaS gate here (selfhosted 404s are on /api/subscriptions/*)
 ```
 
 Server listens on `PORT` (default `4000`). `trust proxy 1` expects reverse proxy. Generate Postman collection via `node generate_postman.js` and import `postman_collection.json`.
@@ -344,8 +343,8 @@ Full request/response for each endpoint is in [`docs/`](./docs/).
 2a. If 2FA disabled:
    POST /api/auth/request-otp → reads authToken, sends 6-digit OTP (5 min Redis)
    POST /api/auth/verify-otp → verifies OTP, checks maxDevices, creates
-      storageApp:user:{id}:userdata (60s) + storageApp:user:{id}:session:{token} (7d, sliding to 6d if <1d)
-      → sets sessionId (lax, signed) + csrf (double-submit, httpOnly false) → user payload
+      storageApp:user:{id}:userdata (120s at creation, then 60s refreshed per request) + storageApp:user:{id}:session:{token} (7d, sliding to 6d if <1d)
+      → sets sessionId (lax, signed) → user payload (no csrf cookie — `setCsrfCookie` is commented out)
 
 2b. If 2FA enabled: POST /api/auth/verify-totp → same session creation after TOTP
 
@@ -354,7 +353,7 @@ Full request/response for each endpoint is in [`docs/`](./docs/).
       creates session or returns twoFactor/sessionLimit redirect to CLIENT_AUTH_CALLBACK_URL
 ```
 
-`validateSession.js` sliding TTL, `zAdd storageApp:active_users` (60s window), `restrictOperations`.
+`validateSession.js` sliding TTL, `zAdd storageApp:active_users` (300s liveness throttle), `restrictOperations`.
 
 ---
 
@@ -365,12 +364,12 @@ S3 never proxies through Node — pre-signed PUTs:
 ```
 1. POST /api/uploads/initiate { file:{name,size,mime}, targetId }
    → quota vs getUserLimits, maxFileSize, key files/{userId}/{now}.{ext}
-   → ≤5 MB: 1 PutObject URL (standard) | >5 MB: CreateMultipartUpload → N UploadPart URLs (chunkSize = min(size, limits.chunkSize))
+   → CreateMultipartUpload → N UploadPart URLs (chunkSize = min(size, limits.chunkSize)); the ≤5 MB standard-PUT branch is commented out, so all sizes go multipart
 
 2. Client PUTs each chunk → collects ETag
 
 3. PUT /api/uploads/complete/:id { parts:[{partNumber,ETag}], thumbnailBase64? }
-   → CompleteMultipartUpload (multipart only), HeadObject size verify, thumbnail ≤1 MB → PutObject thumbnails/{userId}/{name}.webp (CacheControl 2hr, public bucket)
+   → CompleteMultipartUpload (multipart only), HeadObject size verify, thumbnail ≤1 MB → PutObject thumbnails/{userId}/{Date.now()}-{name}.webp (CacheControl `public, max-age=7200000` ≈ 83 days as sent — the code meant 2h but multiplies by `t._ms`; public bucket)
    → UserFile.create + Directory.bulkWrite $inc size on path + del userdata + invalidateUser
 ```
 
@@ -380,24 +379,24 @@ S3 never proxies through Node — pre-signed PUTs:
 
 ## Subscription & Billing
 
-SaaS only (`APP_MODE=saas`, `requireSaasMode` → 404 selfhosted). Plans `FREE`, `PRO_MONTHLY/YEARLY`, `BUSINESS_MONTHLY/YEARLY` (yearly discount computed). Each plan snapshot stores `quotaBytes, maxFileSize, chunkSize, monthlyBandwidth, maxUploadConcurrency, maxDevices, trashRetentionDays, gracePeriod, canCreatePublicLinks, maxPublicShareBytes, maxPublicShareFileBytes`.
+SaaS only (`APP_MODE=saas`, `requireSaasMode` → 404 selfhosted). Plans `FREE`, `PRO_MONTHLY/YEARLY`, `BUSINESS_MONTHLY/YEARLY` (yearly discount computed). Each plan snapshot stores 9 fields: `quotaBytes, maxFileSize, chunkSize, monthlyBandwidthLimit, maxUploadConcurrency, maxDevices, canCreatePublicLinks, trashRetentionDays, gracePeriod` (public-share caps are not snapshotted — they are read from `PLAN_DETAILS`).
 
-* **Create:** `POST /api/subscriptions/create {plan}` → checks `active` status, dedup `created` <15m, Redis lock `lock:createSub:{id}` 30s → `razorpay.subscriptions.create total_count 120, notes {userId,plan}` → Subscription `created`.
+* **Create:** `POST /api/subscriptions/create {plan}` → checks `active` status, dedup returns any pending `created`/`abandoned` sub for the same plan (no time window), Redis lock `lock:createSub:{id}` 30s → `razorpay.subscriptions.create total_count 120, notes {userId,plan}` → Subscription `created`.
 * **Verify:** `POST /api/subscriptions/verify {razorpay_payment_id, subscription_id, signature}` → `validatePaymentVerification` + `fetch`, cancels `oldSubId` if `isUpgrade`, transaction `status active, currentPeriodStart/End`, `retireOldSubscriptions` sets others `upgraded`, updates `User plan/maxQuota/maxBandwidthQuota/subscription`.
 * **Update (upgrade immediate vs downgrade scheduled):** `PATCH /api/subscriptions/update {plan}` → if quota `> newQuota` blocked, upgrade = new subscription with `isUpgrade oldSubId`, downgrade = `subscriptions.update schedule_change_at cycle_end`. UPI fallback catches `payment mode is upi` → fallback subscription.
 * **Cancel:** `PATCH /api/subscriptions/cancel` → `subscriptions.cancel 0` → `cancelAtPeriodEnd true, endedAt`.
-* **Webhook:** `POST /api/subscriptions/webhook` `validateWebhookSignature` on `rawBody` → `activated` (activation email), `charged/resumed` (updates User plan from `PLAN_DETAILS` of `planKey`, retires old), `cancelled/completed/halted`, `invoice.paid` (stores `invoiceUrl` + email). Lazy `getRazorpayInstance()` via `RAZORPAY_*` vs `TEST_RAZORPAY_*`.
+* **Webhook:** `POST /api/subscriptions/webhook` `validateWebhookSignature` on `rawBody` → `activated` (activation email), `charged/resumed` (updates User plan from `PLAN_DETAILS` of `planKey`, retires old), `cancelled/completed/halted`, `invoice.paid` (stores `invoiceUrl` + email). Lazy `getRazorpayInstance()` built only from `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET`.
 
 ---
 
 ## Google Drive Import
 
-`GET /api/oauth/google-drive/connect` scope `drive.readonly prompt consent` → refresh_token.
+`GET /api/oauth/google-drive/connect` scope `https://www.googleapis.com/auth/drive.file` + `prompt consent` → refresh_token.
 
 ```
 1. GET  /api/import/google/picker-token → decrypt refreshToken, refresh if expiry-60s, bust userdata, return accessToken
-2. POST /api/import/google/initiate { file:{id,name,mimeType,sizeBytes}, targetId } → Redis storageApp:user:{id}:import:{uploadId} 6hr
-3. PUT  /api/import/google/start-import/:id → 202 fire-and-forget: googleapis drive.files.get/export (EXPORT_MAP for Docs → Office), stream via @aws-sdk/lib-storage Upload to S3, progress throttle 1s → bytesRead, thumbnailLink → public bucket, notify, status can_complete
+2. POST /api/import/google/initiate { file:{id,name,mimeType,sizeBytes}, targetId } → Redis storageApp:user:{id}:import:{uploadId} 1 day
+3. PUT  /api/import/google/start-import/:id → 202 fire-and-forget: googleapis drive.files.get/export (EXPORT_MAP: Docs → PDF, Sheets → xlsx, Slides → pptx), stream via @aws-sdk/lib-storage Upload to S3, progress throttle 1s → bytesRead, thumbnailLink → public bucket, notify, status can_complete
 4. GET  /api/import/google/progress/:id → poll
 5. PUT  /api/import/google/complete/:id → verify size, create UserFile, notify
 ```
@@ -421,8 +420,9 @@ BullMQ `Queue("StorageApp-Cron-Queue")` uses the Redis connection resolved by `p
 | `active-users-sweeper`       | `0 3 * * *` daily 03:00  | `ZREMRANGEBYSCORE storageApp:active_users 0 (now-30d)`                                                  |
 | `halted-subscription-reaper` | `0 4 * * *` daily 04:00  | `status halted` older than `sub.limits.gracePeriod` → FREE + previous-plan grace, notify                |
 | `session-reaper`             | `*/30 * * * *` every 30m | Reclaims expired upload/import Redis sessions; orphaned S3 objects version-deleted                      |
-| `abandoned-cart-tracker`     | `*/15 * * * *` every 15m | `status created` + 30m ago → email `CLIENT_URL/pricing?resume=plan`                                     |
-| `abandoned-subscription-reaper` | `0 4 * * 0` weekly   | Expires `created`/`abandoned` subs older than 7 days: cancels on Razorpay + deletes the Mongo row       |
+| `abandoned-cart-tracker`     | `*/15 * * * *` every 15m | `status created` + 30m ago → one resume email per cart (`MAX_ABANDONED_CART_EMAILS=1`) to `{base}/pricing?resume=plan` — base hard-coded `https://ownstorage.space` in SaaS, `CLIENT_URL` only self-hosted |
+| `abandoned-subscription-reaper` | `7 * * * *` hourly :07 | Expires `created`/`abandoned` subs older than **24 hours**: cancels on Razorpay + deletes the Mongo row       |
+| `subscription-reconciler`    | `0 * * * *` hourly :00   | Fetches `active`/`created`/`abandoned` subs from Razorpay → syncs status/periods/paidCount, re-credits missed activations, backfills invoice receipts + emails, and never resurrects `abandoned` to `created` (prevents the cart tracker re-mailing) |
 
 `JOB_OPTS removeOnComplete 7d/100`, `recalculateTrashExpiry` helper.
 
@@ -434,7 +434,7 @@ BullMQ `Queue("StorageApp-Cron-Queue")` uses the Redis connection resolved by `p
 
 * **Tier1 per-user (60s except plan 30s):** `info`, `usage`, `stats` (self only, admin `?id` bypass), `plan` (`current-plan`). Busted via `invalidateUser(userId)` in all mutating paths: `updateName/avatar`, upload complete, file/dir delete, `create/verify/update/cancel` subscription, admin quota, `razorpayWebhook`, `bandwidthWebhook`, `queueJobs`.
 * **Tier2 global (900s):** `plans` (`getPlanOptions` static).
-* `getUserPayload` still caches `storageApp:user:{id}:userdata` 60s via `validateSession.js`.
+* `getUserPayload` still caches `storageApp:user:{id}:userdata` — 120s TTL at creation, then re-applied at 60s per request — via `validateSession.js`.
 
 ---
 
@@ -452,8 +452,8 @@ BullMQ `Queue("StorageApp-Cron-Queue")` uses the Redis connection resolved by `p
 
 `POST /api/user/feedback` **SaaS only** (`requireSaasMode`). Zod `feedbackSchema`, tiered Redis fixed 7-day window `storageApp:feedback:{userId}:count`:
 
-* `FREE 2/week → 429` message directs to `https://github.com/Subham0813/Storage-App-Backend/issues`
-* `PRO 5/week`, `BUSINESS 10/week → 429` directs to `mailto:support@example.com`
+* `FREE 2/week → 429` — message states the limit and reset countdown (contains no link)
+* `PRO 5/week`, `BUSINESS 10/week → 429` — message states the limit and asks the user to email (contains no mailto)
 
 Screenshot `≤1 MB` → `feedback/{userId}/{now}.webp` in public bucket, `Feedback.create`, `processFeedbackEmails` sends user confirmation + admin alert to `ADMIN_EMAIL`. Admin `GET /feedback/:userId`, `PATCH /feedback/:feedbackId`, `POST /feedback/:feedbackId/reply` also email reply.
 
@@ -463,7 +463,7 @@ Frontend `TopBar.jsx` shows `Send Feedback` (mail) only if `isSaaS`, otherwise `
 
 ## Security
 
-* **Cookies** `httpOnly` signed, `secure` in production, `sameSite lax`, `csrf` double-submit (`x-csrf-token` vs `csrf` cookie) + `verifyCsrfOrigin` vs `ALLOWED_ORIGINS` for `MUTATING_METHODS`.
+* **Cookies** `httpOnly` signed, `secure` in production, `sameSite lax`. CSRF is `verifyCsrfOrigin` only — Origin/Referer must match `ALLOWED_ORIGINS` for `MUTATING_METHODS`; the double-submit check (`x-csrf-token` vs `csrf` cookie) is commented out and `setCsrfCookie` is not called at session creation.
 * **Rate limiting** Redis 4 tiers: `global 1000/15m`, `auth 20/15m`, `upload 100/15m`, `public-link 200/15m` — keyed by `userId` or `ipKeyGenerator`.
 * **Helmet** `frame-ancestors none`, `CSP default-src` disabled per design, `HSTS` etc.
 * **HMAC** Razorpay rawBody + Cloudflare payload|sig `timingSafeEqual`.
@@ -476,18 +476,20 @@ Frontend `TopBar.jsx` shows `Send Feedback` (mail) only if `isSaaS`, otherwise `
 
 ## Deployment
 
-`trust proxy 1` for `X-Forwarded-*`. Graceful `SIGTERM/SIGINT` closes `redisClient` + BullMQ `worker.close()` + `mongoose.disconnect()`.
+`trust proxy 1` for `X-Forwarded-*`. Graceful `SIGTERM/SIGINT` closes the HTTP server + `redisClient` (app.js). `worker.close()` runs only in the standalone BullMQ worker process; Mongoose disconnect happens via a separate `SIGINT`-only handler in `configs/connect.js` (not on `SIGTERM`).
 
 ```bash
 # Production on EC2 (example.com)
 NODE_ENV=production PORT=4000 node --env-file=.env app.js
-# or PM2
-pm2 start ecosystem.config.js --env production --update-env
+# or PM2 — three processes (no ecosystem.config.js in this repo)
+pm2 start npm --name storage-app -- start           # API server
+pm2 start npm --name storage-worker -- run worker   # BullMQ worker (scale ×N)
+pm2 start npm --name storage-scheduler -- run worker:scheduler # registers the repeatables (run once)
 pm2 save && pm2 startup
 # nginx server_name api.example.com → proxy_pass http://127.0.0.1:4000; + certbot --nginx -d example.com -d api.example.com
 ```
 
-Run separate units for jobs: `node --env-file=.env jobs/queueJobs.js scheduler` once, `node --env-file=.env jobs/queueJobs.js worker` × N. `checkEnv()` in `utils/helper.js` fails fast if `requiredEnvVars` / `requiredSaaSVars` missing.
+Run separate units for jobs: `node --env-file=.env jobs/queueJobs.js scheduler` once, `node --env-file=.env jobs/queueJobs.js worker` × N. `checkEnv()` in `utils/helper.js` can validate `requiredEnvVars` / `requiredSaaSVars`, but it is exported only — nothing calls it (not wired into `app.js`), so missing vars currently fail at runtime instead of at boot.
 
 Scaling: add workers horizontally (BullMQ), cache static `plans`, use `isSaaS` to avoid Razorpay instantiation selfhosted.
 
