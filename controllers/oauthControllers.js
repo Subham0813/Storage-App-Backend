@@ -683,9 +683,6 @@ export const googleDriveCallbackHandler = async (req, res, next) => {
           // "integrations.googleDrive.tokenType": tokens.token_type,
           "integrations.googleDrive.idToken": tokens.id_token,
           "integrations.googleDrive.expiryDate": new Date(tokens.expiry_date),
-          "integrations.googleDrive.tokenExpiry": new Date(
-            Date.now() + tokens.refresh_token_expires_in * 1000,
-          ),
         },
       },
       { upsert: true, returnDocument: "after" },
