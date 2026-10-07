@@ -62,6 +62,19 @@ export const markAllRead = async (req, res, next) => {
   }
 };
 
+export const clearRead = async (req, res, next) => {
+  try {
+    await Notification.deleteMany({ userId: req.user._id, read: true });
+
+    return res.status(200).json({
+      success: true,
+      message: "Read notifications cleared.",
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const getUnreadCount = async (req, res, next) => {
   try {
     const count = await Notification.countDocuments({
