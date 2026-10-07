@@ -392,7 +392,7 @@ export const getRecentItems = (model) => {
       let items = await Model.find(query)
         .populate("userId", "_id name")
         .populate("path", "_id name")
-        .sort({ _id: -1 })
+        .sort({ updatedAt: -1 })
         .limit(limit)
         .lean();
       const nextCursor =
