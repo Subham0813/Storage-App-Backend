@@ -258,7 +258,7 @@ export const startGoogleImport = async (req, res, next) => {
         type: "system",
         title: "Import failed",
         message: `"${record.name}" could not be imported. Please try again.`,
-        link: "/drive",
+        link: `/myfiles/folders/${record.targetId}`,
       });
     };
 
@@ -441,7 +441,7 @@ export const completeGoogleImport = async (req, res, next) => {
       type: "system",
       title: "Import completed",
       message: `"${record.name}" was imported successfully.`,
-      link: `/drive/folders/${record.targetId}`,
+      link: `/myfiles/folders/${record.targetId}?highlight=${file._id}`,
     });
 
     return res.status(201).json({

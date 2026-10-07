@@ -720,7 +720,7 @@ export const shareAccess = (model) => {
         type: "share",
         title: "New file shared with you",
         message: `${req.user.name} shared "${item.name}" with you`,
-        link: "/shared",
+        link: `/shared?highlight=${item._id}`,
       });
 
       return res.status(200).json({
