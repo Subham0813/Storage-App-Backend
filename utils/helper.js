@@ -142,6 +142,7 @@ export const getFileDoc = (file) => {
     deletedBy,
     userId,
     path,
+    thumbId,versionId,
     ...safeFile
   } = fileDoc;
 

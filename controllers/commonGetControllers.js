@@ -19,7 +19,20 @@ export const getItemInfo = (req, res, next) => {
   try {
     if (!req.Item) return next(getErrorObject("Item not found.", 404));
     const file = getFileDoc(req.Item);
-    if (req.tokenAuth) delete file.owner;
+    if (
+      file.owner.id?.toString() !== req.user?._id?.toString() &&
+      !req.user.role.includes(["admin", "super_admin"])
+    ) {
+      console.log(file.owner)
+      delete file.isStarred;
+      delete file.isDeleted;
+      delete file.shareDisabled;
+      delete file.accessCount;
+      delete file.lastModifiedBy;
+      delete file.lastAccessedAt;
+      delete file.publicBy;
+    }
+    // if (req.tokenAuth) delete file.owner;
     return res.status(200).json({ success: true, data: { item: file } });
   } catch (err) {
     next(err);
@@ -279,7 +292,18 @@ export const getSharedWith = (model) => {
       const nextCursor =
         items.length < limit ? null : items[items.length - 1]._id;
 
-      const itemDocs = items.map((f) => getFileDoc(f));
+      const itemDocs = items.map((f) => {
+        const i = getFileDoc(f);
+        delete i.isStarred;
+        delete i.isDeleted;
+        delete i.shareDisabled;
+        delete i.accessCount;
+        delete i.lastModifiedBy;
+        delete i.lastAccessedAt;
+        delete i.publicBy;
+        return i;
+      });
+
       return res.status(200).json({
         success: true,
         data: { items: itemDocs, nextCursor },
