@@ -21,9 +21,8 @@ export const getItemInfo = (req, res, next) => {
     const file = getFileDoc(req.Item);
     if (
       file.owner.id?.toString() !== req.user?._id?.toString() &&
-      !req.user.role.includes(["admin", "super_admin"])
+      !["admin", "super_admin"].includes(req.user.role)
     ) {
-      console.log(file.owner)
       delete file.isStarred;
       delete file.isDeleted;
       delete file.shareDisabled;
