@@ -21,12 +21,10 @@ export const getItemInfo = (req, res, next) => {
     if (!req.Item) return next(getErrorObject("Item not found.", 404));
     const file = getFileDoc(req.Item);
     if (
-      file.owner.id?.toString() !== req.user?._id?.toString() &&
-      !["admin", "super_admin"].includes(req.user.role)
+      file.owner.id?.toString() !== req.user?._id?.toString()
     ) {
       delete file.isStarred;
       delete file.isDeleted;
-      delete file.shareDisabled;
       delete file.accessCount;
       delete file.lastModifiedBy;
       delete file.lastAccessedAt;
@@ -295,20 +293,25 @@ export const getSharedWith = (model) => {
       const nextCursor =
         items.length < limit ? null : items[items.length - 1]._id;
 
-      const itemDocs = items.map((f) => {
-        const i = getFileDoc(f);
-        delete i.isStarred;
-        delete i.isDeleted;
-        delete i.shareDisabled;
-        delete i.accessCount;
-        delete i.lastModifiedBy;
-        delete i.lastAccessedAt;
-        delete i.publicBy;
-        // The shared item itself IS the recipient's visible root, so its
-        // owner-side ancestor chain must never be exposed ("path" trace leak).
-        i.path = [];
-        return i;
-      });
+      const itemDocs = await Promise.all(
+        items.map(async (f) => {
+          const i = getFileDoc(f);
+          if (model === "dir") {
+            i.filesCount = await UserFile.countDocuments({parentId: f._id,isDeleted: false });
+            i.dirsCount = await Directory.countDocuments({parentId: f._id,isDeleted: false });
+          }
+          delete i.isStarred;
+          delete i.isDeleted;
+          delete i.accessCount;
+          delete i.lastModifiedBy;
+          delete i.lastAccessedAt;
+          delete i.publicBy;
+          // The shared item itself IS the recipient's visible root, so its
+          // owner-side ancestor chain must never be exposed ("path" trace leak).
+          i.path = [];
+          return i;
+        }),
+      );
 
       return res.status(200).json({
         success: true,
@@ -370,7 +373,16 @@ export const getSharedBy = (model) => {
       const nextCursor =
         items.length < limit ? null : items[items.length - 1]._id;
 
-      const itemDocs = items.map((f) => getFileDoc(f));
+      const itemDocs = await Promise.all(
+        items.map(async (f) => {
+          const i = getFileDoc(f);
+          if (model === "dir") {
+            i.filesCount = await UserFile.countDocuments({ parentId: f._id, isDeleted: false });
+            i.dirsCount = await Directory.countDocuments({ parentId: f._id, isDeleted: false });
+          }
+          return i;
+        }),
+      );
 
       return res
         .status(200)
