@@ -46,14 +46,20 @@ export const checkAccess = (modelType, action = "view") => {
       const isTimeExpired = item.shareTokenExpiresAt ?
         (new Date()).toISOString() >
         (new Date(item.shareTokenExpiresAt)).toISOString() : false;
-      req.tokenAuth = item.shareToken === itemToken && !isTimeExpired;
+      // A token must actually be present: an unshared item has no shareToken,
+      // so `undefined === undefined` must NOT pass for a tokenless request.
+      // Failing this here means any authenticated user could view any item.
+      req.tokenAuth = !!itemToken && item.shareToken === itemToken && !isTimeExpired;
 
       // Token holders can also browse descendants of a shared directory. Nested
       // items don't carry the share token themselves, so resolve the shared
-      // directory once and match it against this item's ancestry.
+      // directory once and match it against this item's ancestry. Only an item
+      // that is still exposed via a live public link (`publicRole: "view"`)
+      // may be browsed this way.
       if (!req.tokenAuth && itemToken) {
         const sharedDir = await Directory.findOne({
           shareToken: itemToken,
+          publicRole: "view",
           isDeleted: false,
           $or: [
             { shareTokenExpiresAt: null },
@@ -68,6 +74,7 @@ export const checkAccess = (modelType, action = "view") => {
           req.tokenAuth =
             item._id.toString() === sharedDirId ||
             (item.path || []).some((p) => p?._id?.toString() === sharedDirId);
+          req.pathBoundary = sharedDirId;
         }
       }
 
@@ -77,6 +84,7 @@ export const checkAccess = (modelType, action = "view") => {
         // req.user remains the (possibly undefined) authenticated caller.
         req.itemOwner = await User.findById(item.userId._id);
         req.Item = item;
+        req.pathBoundary = req.pathBoundary || item._id.toString();
         return next();
       }
 
@@ -96,13 +104,30 @@ export const checkAccess = (modelType, action = "view") => {
       const validPermissions = action === "view" ? ["view", "edit"] : ["edit"];
       const allItemsToCheck = [...(item.path || []), item._id];
 
-      const hasAccess = await Permission.exists({
+      const grants = await Permission.find({
         userId: req.user._id,
         itemId: { $in: allItemsToCheck },
         permission: { $in: validPermissions },
-      });
+      })
+        .select("itemId")
+        .lean();
 
-      if (!hasAccess) return next(getErrorObject("Unauthorized access.", 403));
+      if (grants.length === 0) {
+        return next(getErrorObject("Unauthorized access.", 403));
+      }
+
+      // Resolve the shallowest granted ancestor as the visible boundary so
+      // descendant paths are truncated at the shared folder rather than the
+      // owner's root (prevents the recipient from tracing the owner's tree).
+      const grantedIds = new Set(grants.map((g) => g.itemId.toString()));
+      let boundaryId = null;
+      for (const p of item.path || []) {
+        if (p?._id && grantedIds.has(p._id.toString())) {
+          boundaryId = p._id.toString();
+          break;
+        }
+      }
+      req.pathBoundary = boundaryId || item._id.toString();
 
       // Access Granted! Attach to req so controllers don't query the DB again
       req.Item = item;

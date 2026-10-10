@@ -9,6 +9,7 @@ import {
   attachPermissionsCount,
   getFileDoc,
   getUserLimits,
+  scopePathTo,
 } from "../utils/helper.js";
 
 import { Directory } from "../models/directory.model.js";
@@ -66,7 +67,9 @@ export const getDirectoriesHandler = async (req, res, next) => {
     const nextCursor =
       items.length < limit ? null : items[items.length - 1]._id;
 
-    const itemDocs = items.map((i) => getFileDoc(i));
+    const itemDocs = items.map((i) =>
+      scopePathTo(getFileDoc(i), req.pathBoundary),
+    );
 
     return res
       .status(200)
@@ -104,7 +107,9 @@ export const getAllFilesHandler = async (req, res, next) => {
     const nextCursor =
       items.length < limit ? null : items[items.length - 1]._id;
 
-    const itemDocs = items.map((f) => getFileDoc(f));
+    const itemDocs = items.map((f) =>
+      scopePathTo(getFileDoc(f), req.pathBoundary),
+    );
 
     return res
       .status(200)

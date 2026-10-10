@@ -175,6 +175,23 @@ export const getFileDoc = (file) => {
 };
 
 /**
+ * Truncate an item's populated `path` to the viewer's visible boundary so that
+ * shared/public viewers only ever see the shared folder's subtree, never the
+ * owner's full ancestor chain. `boundaryId` is one of the path entries (or the
+ * item itself). A boundary that is not present in the path means the item IS
+ * the boundary for this viewer (e.g. a shared root or public-token item), so no
+ * ancestor names are exposed.
+ */
+export const scopePathTo = (fileDoc, boundaryId) => {
+  if (!fileDoc || !Array.isArray(fileDoc.path)) return fileDoc;
+  if (!boundaryId) return fileDoc;
+
+  const idx = fileDoc.path.findIndex((p) => p?.id === boundaryId);
+  fileDoc.path = idx === -1 ? [] : fileDoc.path.slice(idx);
+  return fileDoc;
+};
+
+/**
  * set cookie options based on environment and age
  */
 export const cookieOptions = ({

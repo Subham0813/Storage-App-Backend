@@ -7,6 +7,7 @@ import {
   getErrorObject,
   attachPermissionsCount,
   getFileDoc,
+  scopePathTo,
 } from "../utils/helper.js";
 import { base64URLEncode } from "./oauthControllers.js";
 import { Permission } from "../models/permission.model.js";
@@ -30,6 +31,9 @@ export const getItemInfo = (req, res, next) => {
       delete file.lastModifiedBy;
       delete file.lastAccessedAt;
       delete file.publicBy;
+      // Non-owners must not see the full ancestor chain; cap it at the shared
+      // boundary set by checkAccess (or, for public-token access, the item).
+      scopePathTo(file, req.pathBoundary || (req.tokenAuth ? file.id : undefined));
     }
     // if (req.tokenAuth) delete file.owner;
     return res.status(200).json({ success: true, data: { item: file } });
@@ -300,6 +304,9 @@ export const getSharedWith = (model) => {
         delete i.lastModifiedBy;
         delete i.lastAccessedAt;
         delete i.publicBy;
+        // The shared item itself IS the recipient's visible root, so its
+        // owner-side ancestor chain must never be exposed ("path" trace leak).
+        i.path = [];
         return i;
       });
 
