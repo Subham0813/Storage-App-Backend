@@ -296,6 +296,13 @@ export const getSharedWith = (model) => {
       const itemDocs = await Promise.all(
         items.map(async (f) => {
           const i = getFileDoc(f);
+          if (typeof f.userId === "object" && f.userId?._id) {
+            i.owner = {
+              id: f.userId._id.toString(),
+              name: f.userId.name,
+              email: f.userId.email || "",
+            };
+          }
           if (model === "dir") {
             i.filesCount = await UserFile.countDocuments({parentId: f._id,isDeleted: false });
             i.dirsCount = await Directory.countDocuments({parentId: f._id,isDeleted: false });
@@ -376,6 +383,13 @@ export const getSharedBy = (model) => {
       const itemDocs = await Promise.all(
         items.map(async (f) => {
           const i = getFileDoc(f);
+          if (typeof f.userId === "object" && f.userId?._id) {
+            i.owner = {
+              id: f.userId._id.toString(),
+              name: f.userId.name,
+              email: f.userId.email || "",
+            };
+          }
           if (model === "dir") {
             i.filesCount = await UserFile.countDocuments({ parentId: f._id, isDeleted: false });
             i.dirsCount = await Directory.countDocuments({ parentId: f._id, isDeleted: false });
