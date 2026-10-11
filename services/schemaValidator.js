@@ -334,7 +334,7 @@ await db.command({
           description: "Public access role.",
         },
         publicBy: {
-          bsonType: "objectId",
+          bsonType: ["objectId", "null"],
           description: "User who made the item public.",
         },
         sharedAt: {
@@ -459,7 +459,7 @@ await db.command({
           description: "Public access role.",
         },
         publicBy: {
-          bsonType: "objectId",
+          bsonType: ["objectId", "null"],
           description: "User who made the item public.",
         },
         sharedAt: {
