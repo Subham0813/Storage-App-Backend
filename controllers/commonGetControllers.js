@@ -275,10 +275,13 @@ export const getSharedWith = (model) => {
         userId: req.user._id,
         onModel: onModelType,
       })
-        .select("itemId")
+        .select("itemId permission")
         .lean();
 
       const sharedItemIds = permissions.map((p) => p.itemId);
+      const permissionByItem = new Map(
+        permissions.map((p) => [p.itemId.toString(), p.permission]),
+      );
 
       const projectionStr =
         "userId parentId name mime size createdAt updatedAt";
@@ -298,11 +301,11 @@ export const getSharedWith = (model) => {
           const i = getFileDoc(f);
           if (typeof f.userId === "object" && f.userId?._id) {
             i.owner = {
-              id: f.userId._id.toString(),
               name: f.userId.name,
               email: f.userId.email || "",
             };
           }
+          i.permission = permissionByItem.get(f._id.toString()) || "view";
           if (model === "dir") {
             i.filesCount = await UserFile.countDocuments({parentId: f._id,isDeleted: false });
             i.dirsCount = await Directory.countDocuments({parentId: f._id,isDeleted: false });
