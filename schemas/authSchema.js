@@ -24,8 +24,8 @@ export const passwordSchema = z
     },
   );
 
-export const purposeSchema = z.enum(["login", "register", "forgot-password"], {
-  message: "Purpose must be either login/register/forgot-password",
+export const purposeSchema = z.enum(["login", "register", "forgot-password", "oauth_limit"], { 
+  message: "Purpose must be either login/register/forgot-password/oauth_limit",
 });
 
 export const loginSchema = z.object({

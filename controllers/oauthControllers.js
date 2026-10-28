@@ -323,18 +323,22 @@ export const googleOAuthCallbackHandler = async (req, res, next) => {
       const sessionKeys = await redisClient.sMembers(indexKey);
       const maxDevices = getMaxDevices(user);
 
-      if (user.isTwoFactorEnabled || sessionKeys.length >= maxDevices) {
+      if (user.isTwoFactorEnabled) {
         res.cookie(
           "authToken",
           { purpose: "login", id: user._id },
           cookieOptions({ maxAge: fiveMinMs, sameSite: "strict" }),
         );
+        return res.redirect(`${AUTH_CALLBACK}/google?success=true&twoFactor=required`);
+      }
 
-        const flag = user.isTwoFactorEnabled
-          ? "twoFactor=required"
-          : "sessionLimit=true";
-
-        return res.redirect(`${AUTH_CALLBACK}/google?success=true&${flag}`);
+      if (sessionKeys.length >= maxDevices) {
+        res.cookie(
+          "authToken",
+          { purpose: "oauth_limit", id: user._id },
+          cookieOptions({ maxAge: fiveMinMs, sameSite: "strict" }),
+        );
+        return res.redirect(`${AUTH_CALLBACK}/google?success=true&sessionLimit=true`);
       }
 
       token = crypto.randomBytes(32).toString("hex");
@@ -547,18 +551,22 @@ export const githubOAuthCallbackHandler = async (req, res, next) => {
       const sessionKeys = await redisClient.sMembers(indexKey);
       const maxDevices = getMaxDevices(user);
 
-      if (user.isTwoFactorEnabled || sessionKeys.length >= maxDevices) {
+      if (user.isTwoFactorEnabled) {
         res.cookie(
           "authToken",
           { purpose: "login", id: user._id },
           cookieOptions({ maxAge: fiveMinMs, sameSite: "strict" }),
         );
+        return res.redirect(`${AUTH_CALLBACK}/github?success=true&twoFactor=required`);
+      }
 
-        const flag = user.isTwoFactorEnabled
-          ? "twoFactor=required"
-          : "sessionLimit=true";
-
-        return res.redirect(`${AUTH_CALLBACK}/github?success=true&${flag}`);
+      if (sessionKeys.length >= maxDevices) {
+        res.cookie(
+          "authToken",
+          { purpose: "oauth_limit", id: user._id },
+          cookieOptions({ maxAge: fiveMinMs, sameSite: "strict" }),
+        );
+        return res.redirect(`${AUTH_CALLBACK}/github?success=true&sessionLimit=true`);
       }
 
       token = crypto.randomBytes(32).toString("hex");
@@ -723,7 +731,7 @@ export const completeOauthLoginHandler = async (req, res, next) => {
     if (!authToken) return next(getErrorObject("Invalid cookies."));
 
     const { success, data } = await authTokenSchema.safeParseAsync(authToken);
-    if (!success || data.purpose !== "login")
+    if (!success || data.purpose !== "oauth_limit")
       return next(getErrorObject("Invalid session state."));
 
     const { logoutLastSession } = req.body;
@@ -739,6 +747,9 @@ export const completeOauthLoginHandler = async (req, res, next) => {
         "Your account has been banned. Contact support.",
         403,
       );
+
+    if (user.isTwoFactorEnabled)
+      throw getErrorObject("2FA users must verify via TOTP.", 403);
 
     const indexKey = `storageApp:user:${data.id}:session_index`;
     const sessionKeys = await redisClient.sMembers(indexKey);

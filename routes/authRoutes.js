@@ -2,7 +2,6 @@ import { Router } from "express";
 import {
   loginHandler,
   registerHandler,
-  requestOtpHandler,
   verifyOtpHandler,
   forgotPasswordHandler,
   forgotPasswordInitHandler,
@@ -25,7 +24,6 @@ const router = Router();
 router.post("/forgot-password-init", forgotPasswordInitHandler);
 router.post("/forgot-password", forgotPasswordHandler);
 
-router.post("/request-otp", requestOtpHandler);
 router.post("/verify-otp", verifyOtpHandler);
 
 router.post("/login", loginHandler);

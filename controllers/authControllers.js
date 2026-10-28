@@ -23,100 +23,12 @@ import {
   authTokenSchema,
   loginSchema,
   registerSchema,
-  requestOtpSchema,
   verifyOtpSchema,
 } from "../schemas/authSchema.js";
 import { redisClient } from "../configs/redis.js";
 
 const fiveMins = 5 * t._min;
 const sevenDays = 7 * t._day;
-
-/**
- * path: /api/auth/request-otp
- * what it do: Validate an auth token and send a one-time-password (OTP) for the given purpose (login/register/forgotPassword).
- * requirements:
- *   - req.body: { email: string, purpose: string }
- *   - req.signedCookies.authToken: signed cookie present with { id, purpose }
- *   - user with matching email and id must exist
- */
-export const requestOtpHandler = async (req, res, next) => {
-  try {
-    const { authToken } = req.signedCookies;
-    if (!authToken) return next(getErrorObject("Invalid cookies."));
-    const { success, data, error } = await requestOtpSchema.safeParseAsync(
-      req.body,
-    );
-    const {
-      success: authSuccess,
-      data: authData,
-      error: authError,
-    } = await authTokenSchema.safeParseAsync(authToken);
-    let errorMessage = !success
-      ? error.issues.map((err) => err.message).join(", ")
-      : !authSuccess
-        ? authError.issues.map((err) => err.message).join(", ")
-        : "";
-
-    if (errorMessage.length > 0) return next(getErrorObject(errorMessage));
-
-    const { id: userId, purpose: authPurpose } = authData;
-    const { email, purpose } = data;
-    if (purpose !== authPurpose) {
-      return next(getErrorObject("Purpose not matched with cookie."));
-    }
-
-    const session = await mongoose.startSession();
-    let otpExpiresAt, activeSessions;
-    otpExpiresAt = activeSessions = null;
-
-    let otp = "";
-    let username = "";
-    try {
-      await session.withTransaction(async () => {
-        const user = await User.findOne({ _id: userId, email })
-          .session(session)
-          .lean();
-        if (!user) throw getErrorObject("Invalid email address or token.", 404);
-        if (user.isDeleted)
-          throw getErrorObject(
-            "Your account has been banned. Contact support.",
-            403,
-          );
-
-        if (purpose === "login" && user.isTwoFactorEnabled)
-          throw getErrorObject("Two-factor authentication required.", 403);
-
-        otp = crypto.randomInt(100000, 1000000).toString();
-
-        const otpKey = `storageApp:user:${user._id}:otp:${purpose}`;
-        await redisClient.json.set(otpKey, "$", { otp, email });
-        await redisClient.expire(otpKey, fiveMins);
-
-        const indexKey = `storageApp:user:${userId}:session_index`;
-        const sessionKeys = await redisClient.sMembers(indexKey);
-
-        otpExpiresAt = new Date(Date.now() + fiveMins * 1000);
-        activeSessions = sessionKeys.length;
-        username = user.name;
-      });
-    } finally {
-      session.endSession();
-    }
-
-    // Send OTP email
-    sendOtpEmail(username, email, otp, purpose).catch((err) =>
-      console.error("Email sending failed:", err),
-    );
-
-    return res.status(201).json({
-      success: true,
-      message: "An One Time Password has been sent to your Email address.",
-      data: { otpExpiresAt, activeSessions },
-    });
-  } catch (err) {
-    next(err);
-  }
-};
 
 /**
  * path: /api/auth/verify-otp
@@ -184,7 +96,10 @@ export const verifyOtpHandler = async (req, res, next) => {
     if (!user) throw getErrorObject("User not found.", 404);
 
     if (user.isDeleted)
-      throw getErrorObject("Your account has been banned. Contact support.", 403);
+      throw getErrorObject(
+        "Your account has been banned. Contact support.",
+        403,
+      );
 
     if (authPurpose === "login" && user.isTwoFactorEnabled)
       throw getErrorObject("Two-factor authentication required.", 403);
@@ -270,10 +185,9 @@ export const verifyOtpHandler = async (req, res, next) => {
 
 /**
  * path: /api/auth/login
- * what it do: Validate credentials and set a short-lived `authToken` cookie to allow OTP request/verification for session creation.
+ * what it do: Validate credentials, compute device-cap state, send OTP email (non-2FA) or mark 2FA-required, set a short-lived `authToken` cookie.
  * requirements:
- *   - req.body: { password: string, email?: string, username?: string }
- *   - either `email` or `username` must be provided along with `password`
+ *   - req.body: { email: string, password: string }
  *   - user must exist and password must match
  */
 export const loginHandler = async (req, res, next) => {
@@ -285,7 +199,6 @@ export const loginHandler = async (req, res, next) => {
     }
 
     const { email, password } = data;
-    // $or: [{ email: userEmail }, { username: username }],
     const user = await User.findOne({ email }).select(
       "+password isTwoFactorEnabled isDeleted",
     );
@@ -299,18 +212,46 @@ export const loginHandler = async (req, res, next) => {
         getErrorObject("Your account has been banned. Contact support.", 403),
       );
 
-    return res
-      .cookie(
+    const indexKey = `storageApp:user:${user._id}:session_index`;
+    const sessionKeys = await redisClient.sMembers(indexKey);
+    const activeSessions = sessionKeys.length;
+    const maxDevices = getMaxDevices(user);
+    const sessionRemains = maxDevices - activeSessions;
+    const sessionLimit = activeSessions >= maxDevices;
+
+    if (user.isTwoFactorEnabled) {
+      res.cookie(
         "authToken",
         { purpose: "login", id: user._id },
         cookieOptions({ maxAge: fiveMins * 1000, sameSite: "strict" }),
-      )
-      .status(200)
-      .json({
+      );
+      return res.status(200).json({
         success: true,
-        message: "Login token created.",
-        data: { isTwoFactorEnabled: user.isTwoFactorEnabled },
+        data: { twoFactorRequired: true, sessionRemains, sessionLimit },
       });
+    }
+
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const otpKey = `storageApp:user:${user._id}:otp:login`;
+    await redisClient.json.set(otpKey, "$", { otp, email });
+    await redisClient.expire(otpKey, fiveMins);
+
+    res.cookie(
+      "authToken",
+      { purpose: "login", id: user._id },
+      cookieOptions({ maxAge: fiveMins * 1000, sameSite: "strict" }),
+    );
+
+    const otpExpiresAt = new Date(Date.now() + fiveMins * 1000);
+    sendOtpEmail(user.name, email, otp, "login").catch((err) =>
+      console.error("Email sending failed:", err),
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "OTP sent.",
+      data: { otpExpiresAt, sessionRemains, sessionLimit },
+    });
   } catch (err) {
     next(err);
   }
@@ -378,14 +319,28 @@ export const registerHandler = async (req, res, next) => {
       await session.endSession();
     }
 
-    return res
-      .cookie(
-        "authToken",
-        { purpose: "register", id: user._id },
-        cookieOptions({ maxAge: fiveMins * 1000, sameSite: "strict" }),
-      )
-      .status(200)
-      .json({ success: true, message: "Register token created." });
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const otpKey = `storageApp:user:${user._id}:otp:register`;
+    await redisClient.json.set(otpKey, "$", { otp, email });
+    await redisClient.expire(otpKey, fiveMins);
+
+    const maxDevices = getMaxDevices(user);
+    const otpExpiresAt = new Date(Date.now() + fiveMins * 1000);
+
+    res.cookie(
+      "authToken",
+      { purpose: "register", id: user._id },
+      cookieOptions({ maxAge: fiveMins * 1000, sameSite: "strict" }),
+    );
+    sendOtpEmail(user.name, email, otp, "register").catch((err) =>
+      console.error("Email sending failed:", err),
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Activation OTP sent.",
+      data: { otpExpiresAt, sessionRemains: maxDevices, sessionLimit: false },
+    });
   } catch (err) {
     next(err);
   }
@@ -409,8 +364,9 @@ export const forgotPasswordInitHandler = async (req, res, next) => {
       return next(getErrorObject(errorMessage));
     }
 
-    const user = await User.findOne({ email: data.email })
-      .select("_id isDeleted")
+    const { email } = data;
+    const user = await User.findOne({ email })
+      .select("_id name email isDeleted")
       .lean();
     if (!user) return next(getErrorObject("User not found.", 404));
     if (user.isDeleted)
@@ -418,17 +374,26 @@ export const forgotPasswordInitHandler = async (req, res, next) => {
         getErrorObject("Your account has been banned. Contact support.", 403),
       );
 
-    return res
-      .cookie(
-        "authToken",
-        { purpose: "forgot-password", id: user._id },
-        cookieOptions({ maxAge: fiveMins * 1000, sameSite: "strict" }),
-      )
-      .status(200)
-      .json({
-        success: true,
-        message: "Reset token created. Proceed to create otp.",
-      });
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const otpKey = `storageApp:user:${user._id}:otp:forgot-password`;
+    await redisClient.json.set(otpKey, "$", { otp, email });
+    await redisClient.expire(otpKey, fiveMins);
+
+    res.cookie(
+      "authToken",
+      { purpose: "forgot-password", id: user._id },
+      cookieOptions({ maxAge: fiveMins * 1000, sameSite: "strict" }),
+    );
+    const otpExpiresAt = new Date(Date.now() + fiveMins * 1000);
+    sendOtpEmail(user.name, email, otp, "forgot-password").catch((err) =>
+      console.error("Email sending failed:", err),
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Reset code sent.",
+      data: { otpExpiresAt },
+    });
   } catch (err) {
     next(err);
   }
