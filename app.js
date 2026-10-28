@@ -53,7 +53,18 @@ try {
     .split(",")
     .map((o) => o.trim());
 
-  app.use(cors({ origin: origins, credentials: true }));
+  app.use(
+    cors({
+      origin: origins,
+      credentials: true,
+      exposedHeaders: [
+        "Retry-After",
+        "RateLimit-Reset",
+        "RateLimit-Limit",
+        "RateLimit-Remaining",
+      ],
+    }),
+  );
   app.use(cookieParser(process.env.COOKIE_SECRET));
 
   app.use(
