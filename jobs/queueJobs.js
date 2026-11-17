@@ -117,8 +117,15 @@ const recalculateTrashExpiry = async (userId, trashRetentionDays) => {
   ]);
 };
 
+// Old completed/failed job records are dropped after 7 days, capped by count.
+const JOB_OPTS = {
+  removeOnComplete: { age: 7 * 24 * 3600, count: 100 },
+  removeOnFail: { age: 7 * 24 * 3600, count: 200 },
+};
+
 export const backgroundQueue = new Queue("StorageApp-Cron-Queue", {
   connection: redisConnection,
+  defaultJobOptions: JOB_OPTS,
 });
 
 let worker = null;
@@ -1053,13 +1060,6 @@ export const startBullMQWorker = () => {
 };
 
 let started = false;
-
-// Trim finished jobs so BullMQ lists don't grow unbounded (Redis key buildup).
-// Old completed/failed job records are dropped after 7 days, capped by count.
-const JOB_OPTS = {
-  removeOnComplete: { age: 7 * 24 * 3600, count: 100 },
-  removeOnFail: { age: 7 * 24 * 3600, count: 200 },
-};
 
 export const startBullMQJobs = async () => {
   if (started) return;

@@ -44,87 +44,98 @@ import requireSaasMode from "./middlewares/requireSaasMode.js";
 import { bandwidthWebhook } from "./services/bandwidthWebhook.js";
 import { razorpayWebhook } from "./services/razorpayWebhook.js";
 
-try {
-  await connectMongoose();
-  const app = express();
-  app.set("trust proxy", 1);
-  const port = process.env.PORT || 4000;
-  const origins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
-    .split(",")
-    .map((o) => o.trim());
+const app = express();
+app.set("trust proxy", 1);
+const port = process.env.PORT || 4000;
+const origins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
+  .split(",")
+  .map((o) => o.trim());
 
-  app.use(
-    cors({
-      origin: origins,
-      credentials: true,
-      exposedHeaders: [
-        "Retry-After",
-        "RateLimit-Reset",
-        "RateLimit-Limit",
-        "RateLimit-Remaining",
-      ],
-    }),
-  );
-  app.use(cookieParser(process.env.COOKIE_SECRET));
+app.use(
+  cors({
+    origin: origins,
+    credentials: true,
+    exposedHeaders: [
+      "Retry-After",
+      "RateLimit-Reset",
+      "RateLimit-Limit",
+      "RateLimit-Remaining",
+    ],
+  }),
+);
+app.use(cookieParser(process.env.COOKIE_SECRET));
 
-  app.use(
-    helmet({
-      contentSecurityPolicy: {
-        useDefaults: false,
-        directives: {
-          "default-src": contentSecurityPolicy.dangerouslyDisableDefaultSrc,
-          "frame-ancestors": ["'none'"],
-        },
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        "default-src": contentSecurityPolicy.dangerouslyDisableDefaultSrc,
+        "frame-ancestors": ["'none'"],
       },
-      xFrameOptions: { action: "deny" },
-    }),
-  );
-  
-  app.post("/api/subscriptions/webhook", globalLimiter, express.raw({ type: "application/json" }), razorpayWebhook);
-  app.use(express.json({ limit: "1mb" }));
-  app.post("/api/files/webhook", globalLimiter, requireSaasMode, bandwidthWebhook);
+    },
+    xFrameOptions: { action: "deny" },
+  }),
+);
 
-  app.use("/api/auth", authLimiter, authRoutes);
-  app.use("/api/oauth", authLimiter, oauthRoutes);
-  app.use("/api/public/shared", publicLinkLimiter, shareRoutes);
+// Health check endpoint
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
 
-  app.use(verifyCsrfOrigin, validateSession);
-  app.use("/api/uploads", uploadLimiter, uploadRoutes);
-  app.use("/api/subscriptions", globalLimiter, subscriptionRoutes);
-  app.use("/api/import", globalLimiter, importDriveRoutes);
-  app.use("/api/user", globalLimiter, userRoutes);
-  app.use("/api/notifications", globalLimiter, notificationRoutes);
-  app.use("/api/files", globalLimiter, fileRoutes);
-  app.use("/api/directories", globalLimiter, directoryRoutes);
-  app.use("/api/admin", globalLimiter, adminRoutes);
+app.post("/api/subscriptions/webhook", globalLimiter, express.raw({ type: "application/json" }), razorpayWebhook);
+app.use(express.json({ limit: "1mb" }));
+app.post("/api/files/webhook", globalLimiter, requireSaasMode, bandwidthWebhook);
 
-  // 404 handler
-  app.use((req, res, next) => {
-    return next(getErrorObject("Route not available.", 404));
-  });
+app.use("/api/auth", authLimiter, authRoutes);
+app.use("/api/oauth", authLimiter, oauthRoutes);
+app.use("/api/public/shared", publicLinkLimiter, shareRoutes);
 
-  app.use(errorHandler);
+app.use(verifyCsrfOrigin, validateSession);
+app.use("/api/uploads", uploadLimiter, uploadRoutes);
+app.use("/api/subscriptions", globalLimiter, subscriptionRoutes);
+app.use("/api/import", globalLimiter, importDriveRoutes);
+app.use("/api/user", globalLimiter, userRoutes);
+app.use("/api/notifications", globalLimiter, notificationRoutes);
+app.use("/api/files", globalLimiter, fileRoutes);
+app.use("/api/directories", globalLimiter, directoryRoutes);
+app.use("/api/admin", globalLimiter, adminRoutes);
 
-  const server = app.listen(port, async () => {
-    console.info("Server Started at PORT :", port);
-  });
+// 404 handler
+app.use((req, res, next) => {
+  return next(getErrorObject("Route not available.", 404));
+});
 
-  // Graceful shutdown
-  const gracefulShutdown = async () => {
-    server.close(async () => {
-      try {
-        await redisClient.quit();
-        console.info("Redis disconnected.");
-      } catch (err) {
-        console.error("Error closing Redis:", err);
-      }
-      process.exit(0);
+app.use(errorHandler);
+
+let server;
+if (process.env.NODE_ENV !== "test") {
+  try {
+    await connectMongoose();
+    server = app.listen(port, async () => {
+      console.info("Server Started at PORT :", port);
     });
-  };
 
-  process.on("SIGTERM", gracefulShutdown);
-  process.on("SIGINT", gracefulShutdown);
-} catch (err) {
-  console.error({ [err.name]: err.message });
-  process.exit(1);
+    // Graceful shutdown
+    const gracefulShutdown = async () => {
+      server.close(async () => {
+        try {
+          await redisClient.quit();
+          console.info("Redis disconnected.");
+        } catch (err) {
+          console.error("Error closing Redis:", err);
+        }
+        process.exit(0);
+      });
+    };
+
+    process.on("SIGTERM", gracefulShutdown);
+    process.on("SIGINT", gracefulShutdown);
+  } catch (err) {
+    console.error({ [err.name]: err.message });
+    process.exit(1);
+  }
 }
+
+export { app };
+export default app;
