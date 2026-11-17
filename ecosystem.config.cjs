@@ -21,9 +21,11 @@ module.exports = {
       time: true,
       env: {
         NODE_ENV: "production",
+        PORT: 4000,
       },
       env_production: {
         NODE_ENV: "production",
+        PORT: 4000,
       },
     },
     {
@@ -39,9 +41,11 @@ module.exports = {
       time: true,
       env: {
         NODE_ENV: "production",
+        PORT: 4000,
       },
       env_production: {
         NODE_ENV: "production",
+        PORT: 4000,
       },
     },
     {
@@ -57,9 +61,11 @@ module.exports = {
       time: true,
       env: {
         NODE_ENV: "production",
+        PORT: 4000,
       },
       env_production: {
         NODE_ENV: "production",
+        PORT: 4000,
       },
     },
   ],
